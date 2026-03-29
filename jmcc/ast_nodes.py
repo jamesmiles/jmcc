@@ -232,6 +232,19 @@ class CommaExpr(Expr):
     exprs: List[Expr] = field(default_factory=list)
 
 
+@dataclass
+class InitList(Expr):
+    """Initializer list: { expr, expr, ... } or { .field = expr, ... }"""
+    items: List['InitItem'] = field(default_factory=list)
+
+
+@dataclass
+class InitItem:
+    designator: Optional[str] = None  # field name for designated init, or None
+    designator_index: Optional[int] = None  # array index for [n] = expr
+    value: Optional[Expr] = None
+
+
 # Statements
 
 @dataclass

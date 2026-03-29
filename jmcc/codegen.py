@@ -96,10 +96,7 @@ class CodeGen:
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
-                    if size == 8:
-                        self.emit(f"    .align 8")
-                    else:
-                        self.emit(f"    .align 4")
+                    self.emit(f"    .align {min(max(size, 4), 8)}")
                     self.label(name)
                     if size == 1:
                         self.emit(f"    .byte {decl.init.value}")
@@ -109,6 +106,25 @@ class CodeGen:
                         self.emit(f"    .long {decl.init.value}")
                     else:
                         self.emit(f"    .quad {decl.init.value}")
+                elif decl.init and isinstance(decl.init, InitList):
+                    self.emit("    .data")
+                    self.emit(f"    .globl {name}")
+                    self.emit(f"    .align 8")
+                    self.label(name)
+                    sdef = decl.type_spec.struct_def
+                    if sdef:
+                        self._emit_struct_init_data(sdef, decl.init)
+                    else:
+                        # Array initializer
+                        elem_size = decl.type_spec.size_bytes()
+                        for item in decl.init.items:
+                            if isinstance(item.value, IntLiteral):
+                                if elem_size <= 4:
+                                    self.emit(f"    .long {item.value.value}")
+                                else:
+                                    self.emit(f"    .quad {item.value.value}")
+                            else:
+                                self.emit(f"    .long 0")
                 else:
                     self.emit("    .bss")
                     self.emit(f"    .globl {name}")
@@ -117,7 +133,6 @@ class CodeGen:
                         first = decl.type_spec.array_sizes[0]
                         if isinstance(first, IntLiteral):
                             size *= first.value
-                    # Alignment must be a power of 2, based on element type
                     align = min(decl.type_spec.size_bytes(), 8)
                     if align < 4:
                         align = 4
@@ -126,6 +141,49 @@ class CodeGen:
                     self.emit(f"    .zero {size}")
 
         return "\n".join(self.output) + "\n"
+
+    def _emit_struct_init_data(self, sdef, init_list):
+        """Emit data section entries for a struct initializer."""
+        # Build a map of member values
+        values = {}
+        for i, item in enumerate(init_list.items):
+            if item.designator:
+                values[item.designator] = item.value
+            elif i < len(sdef.members):
+                values[sdef.members[i].name] = item.value
+
+        offset = 0
+        for mem in sdef.members:
+            size = mem.type_spec.size_bytes()
+            # Alignment padding
+            align = min(size, 8)
+            if align > 0:
+                aligned = (offset + align - 1) & ~(align - 1)
+                if aligned > offset:
+                    self.emit(f"    .zero {aligned - offset}")
+                offset = aligned
+
+            val = values.get(mem.name)
+            if val and isinstance(val, IntLiteral):
+                if size <= 4:
+                    self.emit(f"    .long {val.value}")
+                else:
+                    self.emit(f"    .quad {val.value}")
+            elif val and isinstance(val, StringLiteral):
+                lbl = self.new_label("str")
+                self.string_literals.append((lbl, val.value))
+                self.emit(f"    .quad {lbl}")
+            else:
+                if size <= 4:
+                    self.emit(f"    .long 0")
+                else:
+                    self.emit(f"    .quad 0")
+            offset += size
+
+        # Pad to total struct size
+        total = sdef.size_bytes()
+        if offset < total:
+            self.emit(f"    .zero {total - offset}")
 
     def gen_function(self, func: FuncDecl):
         self.current_func = func
@@ -265,12 +323,62 @@ class CodeGen:
             self.locals[decl.name] = (self.stack_offset, decl.type_spec)
 
         if decl.init:
-            self.gen_expr(decl.init)
-            offset = self.locals[decl.name][0]
-            if size <= 4 and not decl.type_spec.is_pointer():
-                self.emit(f"    movl %eax, {offset}(%rbp)")
+            if isinstance(decl.init, InitList) and decl.type_spec.struct_def:
+                self.gen_struct_init(decl.name, decl.type_spec, decl.init)
+            elif isinstance(decl.init, InitList) and decl.type_spec.is_array():
+                self.gen_array_init(decl.name, decl.type_spec, decl.init)
             else:
+                self.gen_expr(decl.init)
+                offset = self.locals[decl.name][0]
+                if size <= 4 and not decl.type_spec.is_pointer():
+                    self.emit(f"    movl %eax, {offset}(%rbp)")
+                else:
+                    self.emit(f"    movq %rax, {offset}(%rbp)")
+
+    def gen_struct_init(self, var_name: str, type_spec: TypeSpec, init: 'InitList'):
+        """Generate code for struct initialization from { ... }."""
+        sdef = type_spec.struct_def
+        base_offset = self.locals[var_name][0]
+
+        for i, item in enumerate(init.items):
+            if item.designator:
+                # .field = value
+                mem_offset = sdef.member_offset(item.designator)
+                mem_type = sdef.member_type(item.designator)
+            elif i < len(sdef.members):
+                # Positional init
+                mem_offset = sdef.member_offset(sdef.members[i].name)
+                mem_type = sdef.members[i].type_spec
+            else:
+                continue
+
+            if mem_offset is None:
+                continue
+
+            self.gen_expr(item.value)
+            abs_offset = base_offset + mem_offset
+            if mem_type and (mem_type.is_pointer() or mem_type.size_bytes() == 8):
+                self.emit(f"    movq %rax, {abs_offset}(%rbp)")
+            elif mem_type and mem_type.base == "char" and not mem_type.is_pointer():
+                self.emit(f"    movb %al, {abs_offset}(%rbp)")
+            else:
+                self.emit(f"    movl %eax, {abs_offset}(%rbp)")
+
+    def gen_array_init(self, var_name: str, type_spec: TypeSpec, init: 'InitList'):
+        """Generate code for array initialization from { ... }."""
+        base_offset = self.locals[var_name][0]
+        elem_size = type_spec.size_bytes()
+
+        for i, item in enumerate(init.items):
+            idx = item.designator_index if item.designator_index is not None else i
+            self.gen_expr(item.value)
+            offset = base_offset + idx * elem_size
+            if elem_size == 1:
+                self.emit(f"    movb %al, {offset}(%rbp)")
+            elif elem_size == 8:
                 self.emit(f"    movq %rax, {offset}(%rbp)")
+            else:
+                self.emit(f"    movl %eax, {offset}(%rbp)")
 
     def gen_if(self, stmt: IfStmt):
         else_label = self.new_label("else")

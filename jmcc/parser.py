@@ -781,7 +781,10 @@ class Parser:
 
         init = None
         if self.match(TokenType.ASSIGN):
-            init = self.parse_assignment()
+            if self.at(TokenType.LBRACE):
+                init = self.parse_init_list()
+            else:
+                init = self.parse_assignment()
 
         return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
 
@@ -852,7 +855,10 @@ class Parser:
 
             init = None
             if self.match(TokenType.ASSIGN):
-                init = self.parse_expr()
+                if self.at(TokenType.LBRACE):
+                    init = self.parse_init_list()
+                else:
+                    init = self.parse_expr()
             self.expect(TokenType.SEMICOLON, "';'")
             return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
@@ -880,9 +886,48 @@ class Parser:
         # Global variable
         init = None
         if self.match(TokenType.ASSIGN):
-            init = self.parse_expr()
+            if self.at(TokenType.LBRACE):
+                init = self.parse_init_list()
+            else:
+                init = self.parse_expr()
         self.expect(TokenType.SEMICOLON, "';'")
         return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+
+    def parse_init_list(self) -> InitList:
+        """Parse { expr, expr, ... } or { .field = expr, ... }"""
+        t = self.expect(TokenType.LBRACE, "'{'")
+        items = []
+
+        while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
+            designator = None
+            designator_index = None
+
+            # Designated initializer: .field = expr or [idx] = expr
+            if self.at(TokenType.DOT):
+                self.advance()
+                designator = self.expect(TokenType.IDENTIFIER, "field name").value
+                self.expect(TokenType.ASSIGN, "'='")
+            elif self.at(TokenType.LBRACKET):
+                self.advance()
+                idx_expr = self.parse_expr()
+                if isinstance(idx_expr, IntLiteral):
+                    designator_index = idx_expr.value
+                self.expect(TokenType.RBRACKET, "']'")
+                self.expect(TokenType.ASSIGN, "'='")
+
+            # Value (could be a nested init list)
+            if self.at(TokenType.LBRACE):
+                value = self.parse_init_list()
+            else:
+                value = self.parse_assignment()
+
+            items.append(InitItem(designator=designator, designator_index=designator_index, value=value))
+
+            if not self.match(TokenType.COMMA):
+                break
+
+        self.expect(TokenType.RBRACE, "'}'")
+        return InitList(items=items, line=t.line, col=t.col)
 
     def parse_typedef(self) -> TypedefDecl:
         t = self.advance()  # typedef
