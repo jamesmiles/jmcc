@@ -857,6 +857,10 @@ class CodeGen:
         """Generate code that puts the address of an lvalue into %rax."""
         if isinstance(expr, Identifier):
             loc, ts = self.get_var_location(expr.name)
+            if loc is None and expr.name in self.known_functions:
+                # Address of function
+                self.emit(f"    leaq {expr.name}(%rip), %rax")
+                return
             if loc is None:
                 self.error(f"undeclared variable '{expr.name}'", expr.line, expr.col)
             if expr.name in self.static_locals:
