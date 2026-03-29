@@ -250,21 +250,52 @@ class CodeGen:
                 offset = aligned
 
             val = values.get(mem.name)
-            if val and isinstance(val, IntLiteral):
-                if size <= 4:
-                    self.emit(f"    .long {val.value}")
-                else:
-                    self.emit(f"    .quad {val.value}")
-            elif val and isinstance(val, StringLiteral):
-                lbl = self.new_label("str")
-                self.string_literals.append((lbl, val.value))
-                self.emit(f"    .quad {lbl}")
+            # Calculate actual member size (including array)
+            actual_size = size
+            if mem.type_spec.is_array() and mem.type_spec.array_sizes:
+                first = mem.type_spec.array_sizes[0]
+                if isinstance(first, IntLiteral):
+                    actual_size = size * first.value
+
+            if val and isinstance(val, InitList) and mem.type_spec.is_array():
+                # Array member initialized with {val1, val2, ...}
+                arr_count = 0
+                if mem.type_spec.array_sizes and mem.type_spec.array_sizes[0]:
+                    first = mem.type_spec.array_sizes[0]
+                    if isinstance(first, IntLiteral):
+                        arr_count = first.value
+                elems = [0] * arr_count
+                for j, item in enumerate(val.items):
+                    cv = self._try_eval_const(item.value)
+                    if cv is not None and j < arr_count:
+                        elems[j] = cv
+                for ev in elems:
+                    if size <= 4:
+                        self.emit(f"    .long {ev}")
+                    else:
+                        self.emit(f"    .quad {ev}")
+            elif val and isinstance(val, InitList) and mem.type_spec.struct_def:
+                # Nested struct member
+                self._emit_struct_init_data(mem.type_spec.struct_def, val)
             else:
-                if size <= 4:
-                    self.emit(f"    .long 0")
+                cv = self._try_eval_const(val) if val else None
+                if cv is not None:
+                    if size <= 4:
+                        self.emit(f"    .long {cv}")
+                    else:
+                        self.emit(f"    .quad {cv}")
+                elif val and isinstance(val, StringLiteral):
+                    lbl = self.new_label("str")
+                    self.string_literals.append((lbl, val.value))
+                    self.emit(f"    .quad {lbl}")
                 else:
-                    self.emit(f"    .quad 0")
-            offset += size
+                    if actual_size <= 4:
+                        self.emit(f"    .long 0")
+                    elif actual_size <= 8:
+                        self.emit(f"    .quad 0")
+                    else:
+                        self.emit(f"    .zero {actual_size}")
+            offset += actual_size
 
         # Pad to total struct size
         total = sdef.size_bytes()
