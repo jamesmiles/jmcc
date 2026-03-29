@@ -2,10 +2,12 @@
 """JMCC - A C11 compiler targeting x86-64 Linux."""
 
 import sys
+import os
 import argparse
 from jmcc.lexer import Lexer
 from jmcc.parser import Parser
 from jmcc.codegen import CodeGen
+from jmcc.preprocessor import Preprocessor
 from jmcc.errors import JMCCError
 
 
@@ -19,6 +21,11 @@ def compile_file(source_path: str, output_path: str) -> bool:
         return False
 
     try:
+        # Preprocessing
+        include_paths = [os.path.dirname(os.path.abspath(source_path))]
+        pp = Preprocessor(filename=source_path, include_paths=include_paths)
+        source = pp.preprocess(source, filename=source_path)
+
         # Lexing
         lexer = Lexer(source, filename=source_path)
         tokens = lexer.tokenize()
