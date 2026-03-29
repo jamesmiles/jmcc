@@ -54,11 +54,14 @@ class CodeGen:
                 ts = decl.type_spec
                 if ts.is_array() and ts.array_sizes and ts.array_sizes[0] is None:
                     if isinstance(decl.init, InitList):
-                        # Find max index (accounting for designated initializers)
-                        max_idx = len(decl.init.items)
+                        # Simulate sequential index progression with designated jumps
+                        idx = 0
+                        max_idx = 0
                         for item in decl.init.items:
                             if item.designator_index is not None:
-                                max_idx = max(max_idx, item.designator_index + 1)
+                                idx = item.designator_index
+                            max_idx = max(max_idx, idx + 1)
+                            idx += 1
                         ts.array_sizes[0] = IntLiteral(value=max_idx)
                     elif isinstance(decl.init, StringLiteral):
                         ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
@@ -140,18 +143,39 @@ class CodeGen:
                     self.emit(f"    .align 8")
                     self.label(name)
                     sdef = decl.type_spec.struct_def
-                    if sdef:
+                    if sdef and not decl.type_spec.is_array():
+                        # Single struct init
                         self._emit_struct_init_data(sdef, decl.init)
-                    else:
-                        # Array initializer (with designated initializer support)
-                        elem_size = decl.type_spec.size_bytes()
-                        # Determine total array size
+                    elif decl.type_spec.is_array() and sdef:
+                        # Array of structs initializer
+                        sdef = decl.type_spec.struct_def
                         total_elems = 0
                         if decl.type_spec.array_sizes and decl.type_spec.array_sizes[0]:
                             first = decl.type_spec.array_sizes[0]
                             if isinstance(first, IntLiteral):
                                 total_elems = first.value
-                        # Build element map
+                        # Build element map: idx -> InitList
+                        elem_inits = [None] * total_elems
+                        idx = 0
+                        for item in decl.init.items:
+                            if item.designator_index is not None:
+                                idx = item.designator_index
+                            if isinstance(item.value, InitList) and idx < total_elems:
+                                elem_inits[idx] = item.value
+                            idx += 1
+                        for einit in elem_inits:
+                            if einit:
+                                self._emit_struct_init_data(sdef, einit)
+                            else:
+                                self.emit(f"    .zero {sdef.size_bytes()}")
+                    else:
+                        # Plain array initializer (with designated initializer support)
+                        elem_size = decl.type_spec.size_bytes()
+                        total_elems = 0
+                        if decl.type_spec.array_sizes and decl.type_spec.array_sizes[0]:
+                            first = decl.type_spec.array_sizes[0]
+                            if isinstance(first, IntLiteral):
+                                total_elems = first.value
                         elems = [0] * total_elems
                         idx = 0
                         for item in decl.init.items:
