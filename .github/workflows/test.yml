@@ -6,9 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  JMCC_TIMEOUT: "120"
+
 jobs:
   test:
     runs-on: self-hosted
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4

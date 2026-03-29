@@ -18,7 +18,7 @@ HARNESS_DIR = Path(__file__).parent
 PROJECT_DIR = HARNESS_DIR.parent
 DOCKER_IMAGE = "jmcc-test"
 CONTAINER_NAME = "jmcc-test-runner"
-TIMEOUT_SECONDS = 30
+TIMEOUT_SECONDS = int(os.environ.get("JMCC_TIMEOUT", "60"))
 
 
 def ensure_docker_image():
@@ -49,13 +49,21 @@ def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
         "timeout", str(timeout),
     ] + cmd
 
-    result = subprocess.run(
-        full_cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout + 10  # grace period
-    )
-    return result
+    try:
+        result = subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 30  # grace period for emulated environments
+        )
+        return result
+    except subprocess.TimeoutExpired:
+        # Return a fake result indicating timeout
+        class TimeoutResult:
+            returncode = -1
+            stdout = ""
+            stderr = "TIMEOUT"
+        return TimeoutResult()
 
 
 def compile_with_reference(source_path, compiler, output_path, std="c11"):
