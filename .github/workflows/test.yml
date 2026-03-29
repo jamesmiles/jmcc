@@ -21,10 +21,17 @@ jobs:
       - name: Build Docker test image
         run: docker build -t jmcc-test harness/
 
-      - name: Run test suite
+      - name: Run core tests (must pass)
         run: |
           mkdir -p output
-          python3 test_runner.py --compiler jmcc
+          python3 test_runner.py --compiler jmcc --positive-only
+
+      - name: Run negative tests (must pass)
+        run: python3 test_runner.py --compiler jmcc --negative-only
+
+      - name: Run external tests (informational)
+        if: always()
+        run: python3 test_runner.py --compiler jmcc --phase 4 || true
 
       - name: Upload test results
         if: always()
