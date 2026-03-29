@@ -17,6 +17,7 @@ class CodeGen:
         self.output: List[str] = []
         self.string_literals: List[Tuple[str, str]] = []  # (label, value)
         self.global_vars: Dict[str, GlobalVarDecl] = {}
+        self.known_functions: set = set()  # function names
         self.label_count = 0
         self.break_labels: List[str] = []  # stack of break target labels
         self.continue_labels: List[str] = []  # stack of continue target labels
@@ -66,8 +67,8 @@ class CodeGen:
                     elif isinstance(decl.init, StringLiteral):
                         ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
                 self.global_vars[decl.name] = decl
-            elif isinstance(decl, FuncDecl) and decl.body is None:
-                pass  # forward declaration
+            elif isinstance(decl, FuncDecl):
+                self.known_functions.add(decl.name)
 
         # Generate functions
         for decl in program.declarations:
@@ -103,12 +104,32 @@ class CodeGen:
                         asm_str += ch
                 self.emit(f'    .string "{asm_str}"')
 
+        # Generate float constants
+        if hasattr(self, 'float_constants') and self.float_constants:
+            if not self.string_literals:
+                self.emit("")
+                self.emit("    .section .rodata")
+            for lbl, val_int in self.float_constants:
+                self.emit(f"    .align 8")
+                self.label(lbl)
+                self.emit(f"    .quad {val_int}")
+
         # Generate global variables
         if self.global_vars:
             for name, decl in self.global_vars.items():
                 self.emit("")
                 const_val = self._try_eval_const(decl.init) if decl.init else None
-                if const_val is not None:
+                is_float_init = decl.init and isinstance(decl.init, FloatLiteral)
+                if is_float_init:
+                    import struct
+                    self.emit("    .data")
+                    self.emit(f"    .globl {name}")
+                    self.emit(f"    .align 8")
+                    self.label(name)
+                    packed = struct.pack('<d', decl.init.value)
+                    val_int = int.from_bytes(packed, 'little')
+                    self.emit(f"    .quad {val_int}")
+                elif const_val is not None:
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
@@ -663,6 +684,17 @@ class CodeGen:
             else:
                 self.emit(f"    movabsq ${expr.value}, %rax")
 
+        elif isinstance(expr, FloatLiteral):
+            # Store double constant in rodata and load via SSE
+            import struct
+            lbl = self.new_label("flt")
+            packed = struct.pack('<d', expr.value)
+            val_as_int = int.from_bytes(packed, 'little')
+            if not hasattr(self, 'float_constants'):
+                self.float_constants = []
+            self.float_constants.append((lbl, val_as_int))
+            self.emit(f"    movsd {lbl}(%rip), %xmm0")
+
         elif isinstance(expr, CharLiteral):
             self.emit(f"    movl ${ord(expr.value)}, %eax")
 
@@ -672,7 +704,16 @@ class CodeGen:
             self.emit(f"    leaq {lbl}(%rip), %rax")
 
         elif isinstance(expr, Identifier):
-            self.gen_load_var(expr.name, expr.line, expr.col)
+            # Function name used as value (address of function)
+            if expr.name in self.known_functions:
+                loc, _ = self.get_var_location(expr.name)
+                if loc is None:
+                    # It's a function name, not a variable — load its address
+                    self.emit(f"    leaq {expr.name}(%rip), %rax")
+                else:
+                    self.gen_load_var(expr.name, expr.line, expr.col)
+            else:
+                self.gen_load_var(expr.name, expr.line, expr.col)
 
         elif isinstance(expr, BinaryOp):
             self.gen_binary_op(expr)
@@ -1230,20 +1271,31 @@ class CodeGen:
                 self.emit("    movl %eax, (%rcx)")
 
     def gen_func_call(self, expr: FuncCall):
-        if not isinstance(expr.name, Identifier):
-            self.error("indirect function calls not yet supported", expr.line, expr.col)
+        is_indirect = not isinstance(expr.name, Identifier)
+        # Also check if the name is a variable (function pointer) vs a function
+        is_fptr = False
+        if isinstance(expr.name, Identifier):
+            loc, ts = self.get_var_location(expr.name.name)
+            if loc is not None and ts and ts.is_pointer():
+                is_fptr = True
 
-        func_name = expr.name.name
+        func_name = expr.name.name if isinstance(expr.name, Identifier) else None
         num_args = len(expr.args)
 
         # Align stack to 16 bytes before call if needed
-        # Push args in reverse order for stack args
         stack_args = max(0, num_args - 6)
         if stack_args % 2 != 0:
             self.emit("    subq $8, %rsp")  # align
 
-        # Evaluate args and push (we need to handle register args)
-        # First push all args, then pop into registers
+        # For indirect calls, evaluate the function expression first and save it
+        if is_indirect or is_fptr:
+            if is_indirect:
+                self.gen_expr(expr.name)
+            else:
+                self.gen_load_var(func_name, expr.line, expr.col)
+            self.emit("    pushq %rax")  # save function pointer
+
+        # Evaluate args and push
         for arg in reversed(expr.args):
             self.gen_expr(arg)
             self.emit("    pushq %rax")
@@ -1252,10 +1304,13 @@ class CodeGen:
         for i in range(min(num_args, 6)):
             self.emit(f"    popq {self.ARG_REGS_64[i]}")
 
-        # Stack args are already in order on the stack
-
         self.emit("    xorl %eax, %eax")  # clear AL for variadic functions
-        self.emit(f"    call {func_name}")
+
+        if is_indirect or is_fptr:
+            self.emit("    popq %r11")  # restore function pointer
+            self.emit("    call *%r11")  # indirect call
+        else:
+            self.emit(f"    call {func_name}")
 
         # Clean up stack args
         if stack_args > 0:

@@ -201,8 +201,24 @@ class Parser:
             while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
                 mem_type = self.parse_type_spec()
                 mem_name = ""
-                if self.at(TokenType.IDENTIFIER):
+
+                # Function pointer member: type (*name)(params);
+                if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+                    self.advance()  # (
+                    self.advance()  # *
+                    mem_name = self.expect(TokenType.IDENTIFIER, "member name").value
+                    self.expect(TokenType.RPAREN, "')'")
+                    # Skip param list
+                    if self.match(TokenType.LPAREN):
+                        depth = 1
+                        while depth > 0 and not self.at(TokenType.EOF):
+                            if self.match(TokenType.LPAREN): depth += 1
+                            elif self.match(TokenType.RPAREN): depth -= 1
+                            else: self.advance()
+                    mem_type = TypeSpec(base="void", pointer_depth=1)
+                elif self.at(TokenType.IDENTIFIER):
                     mem_name = self.advance().value
+
                 # Array member
                 if self.match(TokenType.LBRACKET):
                     if self.at(TokenType.RBRACKET):
@@ -906,6 +922,28 @@ class Parser:
             self.error(f"expected declaration, got '{t.value}'")
 
         type_spec = self.parse_type_spec()
+
+        # Global function pointer: int (*name)(params) = init;
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+            self.advance()  # (
+            self.advance()  # *
+            name = self.expect(TokenType.IDENTIFIER, "variable name").value
+            self.expect(TokenType.RPAREN, "')'")
+            # Skip param list
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            # Treat as void* variable
+            fptr_type = TypeSpec(base="void", pointer_depth=1)
+            init = None
+            if self.match(TokenType.ASSIGN):
+                init = self.parse_expr()
+            self.expect(TokenType.SEMICOLON, "';'")
+            return GlobalVarDecl(type_spec=fptr_type, name=name, init=init, line=t.line, col=t.col)
+
         name = self.expect(TokenType.IDENTIFIER, "identifier").value
 
         # Function declaration/definition
