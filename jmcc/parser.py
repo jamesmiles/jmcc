@@ -11,6 +11,10 @@ class Parser:
         self.tokens = tokens
         self.pos = 0
         self.filename = filename
+        self.struct_defs: dict = {}  # name -> StructDef
+        self.enum_defs: dict = {}   # name -> EnumDef
+        self.enum_values: dict = {} # enumerator name -> int value
+        self.typedefs: dict = {}    # typedef name -> TypeSpec
 
     def error(self, msg, token=None):
         t = token or self.current()
@@ -57,10 +61,15 @@ class Parser:
     }
 
     def is_type_start(self) -> bool:
-        return self.current().type in self.TYPE_SPECIFIERS
+        if self.current().type in self.TYPE_SPECIFIERS:
+            return True
+        # Typedef names are also type specifiers
+        if self.current().type == TokenType.IDENTIFIER and self.current().value in self.typedefs:
+            return True
+        return False
 
     def parse_type_spec(self) -> TypeSpec:
-        """Parse a type specifier (e.g., 'unsigned long int')."""
+        """Parse a type specifier (e.g., 'unsigned long int', 'struct Foo', 'enum Bar')."""
         is_unsigned = False
         is_signed = False
         is_const = False
@@ -68,6 +77,8 @@ class Parser:
         is_static = False
         is_extern = False
         base_parts = []
+        struct_def = None
+        enum_def = None
 
         # Parse qualifiers and specifiers
         while True:
@@ -94,6 +105,32 @@ class Parser:
                 self.advance()  # ignore for now
             elif t.type == TokenType.REGISTER:
                 self.advance()  # ignore for now
+            elif t.type in (TokenType.STRUCT, TokenType.UNION):
+                is_union = t.type == TokenType.UNION
+                self.advance()
+                struct_def = self.parse_struct_spec(is_union)
+                break
+            elif t.type == TokenType.ENUM:
+                self.advance()
+                enum_def = self.parse_enum_spec()
+                break
+            elif t.type == TokenType.IDENTIFIER and t.value in self.typedefs:
+                # Typedef name - resolve to underlying type
+                td = self.typedefs[t.value]
+                self.advance()
+                # Parse pointer levels on top of typedef
+                pointer_depth = td.pointer_depth
+                while self.match(TokenType.STAR):
+                    pointer_depth += 1
+                    while self.match(TokenType.CONST, TokenType.VOLATILE):
+                        pass
+                return TypeSpec(
+                    base=td.base, pointer_depth=pointer_depth,
+                    is_unsigned=td.is_unsigned, is_const=is_const,
+                    is_volatile=is_volatile, is_static=is_static,
+                    is_extern=is_extern, struct_def=td.struct_def,
+                    enum_def=td.enum_def,
+                )
             elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
                             TokenType.INT, TokenType.LONG, TokenType.FLOAT,
                             TokenType.DOUBLE, TokenType.BOOL):
@@ -102,8 +139,11 @@ class Parser:
             else:
                 break
 
-        # Determine base type
-        if not base_parts:
+        if struct_def is not None:
+            base = f"struct {struct_def.name}" if struct_def.name else "struct"
+        elif enum_def is not None:
+            base = f"enum {enum_def.name}" if enum_def.name else "enum"
+        elif not base_parts:
             if is_unsigned or is_signed:
                 base = "int"
             else:
@@ -115,9 +155,8 @@ class Parser:
         elif len(base_parts) == 1:
             base = base_parts[0]
             if base == "_Bool":
-                base = "int"  # treat as int for codegen
+                base = "int"
         else:
-            # e.g., "long int", "short int" - take the most specific
             if "long" in base_parts:
                 base = "long"
             elif "short" in base_parts:
@@ -141,7 +180,78 @@ class Parser:
             is_volatile=is_volatile,
             is_static=is_static,
             is_extern=is_extern,
+            struct_def=struct_def,
+            enum_def=enum_def,
         )
+
+    def parse_struct_spec(self, is_union=False) -> StructDef:
+        """Parse struct/union specifier: struct Name { members }"""
+        name = None
+        if self.at(TokenType.IDENTIFIER):
+            name = self.advance().value
+
+        members = []
+        if self.match(TokenType.LBRACE):
+            while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
+                mem_type = self.parse_type_spec()
+                mem_name = self.expect(TokenType.IDENTIFIER, "member name").value
+                # Array member
+                if self.match(TokenType.LBRACKET):
+                    if self.at(TokenType.RBRACKET):
+                        mem_type.array_sizes = [None]
+                    else:
+                        mem_type.array_sizes = [self.parse_expr()]
+                    self.expect(TokenType.RBRACKET, "']'")
+                self.expect(TokenType.SEMICOLON, "';'")
+                members.append(StructMember(type_spec=mem_type, name=mem_name))
+
+            self.expect(TokenType.RBRACE, "'}'")
+            sdef = StructDef(name=name, members=members, is_union=is_union)
+            if name:
+                self.struct_defs[name] = sdef
+            return sdef
+        elif name and name in self.struct_defs:
+            return self.struct_defs[name]
+        elif name:
+            # Forward-declared struct, create placeholder
+            sdef = StructDef(name=name, members=[], is_union=is_union)
+            self.struct_defs[name] = sdef
+            return sdef
+        else:
+            self.error("expected struct name or '{'")
+
+    def parse_enum_spec(self) -> EnumDef:
+        """Parse enum specifier: enum Name { A, B = 5, C }"""
+        name = None
+        if self.at(TokenType.IDENTIFIER):
+            name = self.advance().value
+
+        members = []
+        if self.match(TokenType.LBRACE):
+            value = 0
+            while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
+                mem_name = self.expect(TokenType.IDENTIFIER, "enumerator name").value
+                if self.match(TokenType.ASSIGN):
+                    val_expr = self.parse_expr()
+                    if isinstance(val_expr, IntLiteral):
+                        value = val_expr.value
+                    else:
+                        self.error("enum value must be a constant integer")
+                members.append(EnumMember(name=mem_name, value=value))
+                self.enum_values[mem_name] = value
+                value += 1
+                if not self.match(TokenType.COMMA):
+                    break
+
+            self.expect(TokenType.RBRACE, "'}'")
+            edef = EnumDef(name=name, members=members)
+            if name:
+                self.enum_defs[name] = edef
+            return edef
+        elif name and name in self.enum_defs:
+            return self.enum_defs[name]
+        else:
+            self.error("expected enum name or '{'")
 
     # ---- Expression parsing (precedence climbing) ----
 
@@ -416,6 +526,9 @@ class Parser:
             return StringLiteral(value=value, line=t.line, col=t.col)
 
         if self.match(TokenType.IDENTIFIER):
+            # Check if this is an enum constant
+            if t.value in self.enum_values:
+                return IntLiteral(value=self.enum_values[t.value], line=t.line, col=t.col)
             return Identifier(name=t.value, line=t.line, col=t.col)
 
         if self.match(TokenType.LPAREN):
@@ -485,7 +598,20 @@ class Parser:
         if self.match(TokenType.SEMICOLON):
             return NullStmt(line=t.line, col=t.col)
 
-        # Variable declaration
+        # Typedef in local scope
+        if self.at(TokenType.TYPEDEF):
+            td = self.parse_typedef()
+            return NullStmt(line=t.line, col=t.col)
+
+        # Struct/enum definition or variable declaration
+        if self.at(TokenType.STRUCT, TokenType.UNION, TokenType.ENUM):
+            type_spec = self.parse_type_spec()
+            if self.match(TokenType.SEMICOLON):
+                return NullStmt(line=t.line, col=t.col)
+            # It's a variable declaration with struct/enum type
+            return self.parse_var_decl_with_type(type_spec)
+
+        # Variable declaration (including struct/enum types)
         if self.is_type_start():
             return self.parse_var_decl()
 
@@ -603,6 +729,10 @@ class Parser:
     def parse_var_decl(self) -> VarDecl:
         t = self.current()
         type_spec = self.parse_type_spec()
+        return self.parse_var_decl_with_type(type_spec)
+
+    def parse_var_decl_with_type(self, type_spec) -> VarDecl:
+        t = self.current()
         name = self.expect(TokenType.IDENTIFIER, "variable name").value
 
         # Array declaration
@@ -632,8 +762,50 @@ class Parser:
                 decls.append(decl)
         return Program(declarations=decls)
 
-    def parse_top_level(self) -> Union[FuncDecl, GlobalVarDecl, None]:
+    def parse_top_level(self) -> Union[FuncDecl, GlobalVarDecl, StructDecl, EnumDecl, TypedefDecl, None]:
         t = self.current()
+
+        # Typedef
+        if self.at(TokenType.TYPEDEF):
+            return self.parse_typedef()
+
+        # Struct/union/enum definition without variable (just `struct Foo { ... };`)
+        if self.at(TokenType.STRUCT, TokenType.UNION, TokenType.ENUM):
+            # Peek ahead to see if this is just a type definition
+            saved = self.pos
+            type_spec = self.parse_type_spec()
+
+            # Just a struct/enum definition followed by ;
+            if self.match(TokenType.SEMICOLON):
+                if type_spec.struct_def:
+                    return StructDecl(struct_def=type_spec.struct_def, line=t.line, col=t.col)
+                elif type_spec.enum_def:
+                    return EnumDecl(enum_def=type_spec.enum_def, line=t.line, col=t.col)
+
+            # Otherwise it's a variable or function with struct/enum type
+            if not self.at(TokenType.IDENTIFIER):
+                self.error("expected identifier after type specifier")
+            name = self.advance().value
+
+            if self.at(TokenType.LPAREN):
+                return self.parse_func_decl(type_spec, name, t)
+
+            # Array global
+            array_sizes = []
+            while self.match(TokenType.LBRACKET):
+                if self.at(TokenType.RBRACKET):
+                    array_sizes.append(None)
+                else:
+                    array_sizes.append(self.parse_expr())
+                self.expect(TokenType.RBRACKET, "']'")
+            if array_sizes:
+                type_spec.array_sizes = array_sizes
+
+            init = None
+            if self.match(TokenType.ASSIGN):
+                init = self.parse_expr()
+            self.expect(TokenType.SEMICOLON, "';'")
+            return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
         if not self.is_type_start():
             self.error(f"expected declaration, got '{t.value}'")
@@ -662,6 +834,14 @@ class Parser:
             init = self.parse_expr()
         self.expect(TokenType.SEMICOLON, "';'")
         return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+
+    def parse_typedef(self) -> TypedefDecl:
+        t = self.advance()  # typedef
+        type_spec = self.parse_type_spec()
+        name = self.expect(TokenType.IDENTIFIER, "typedef name").value
+        self.expect(TokenType.SEMICOLON, "';'")
+        self.typedefs[name] = type_spec
+        return TypedefDecl(type_spec=type_spec, name=name, line=t.line, col=t.col)
 
     def parse_func_decl(self, return_type: TypeSpec, name: str, start_token: Token) -> FuncDecl:
         self.expect(TokenType.LPAREN, "'('")

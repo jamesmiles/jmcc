@@ -7,9 +7,72 @@ from typing import List, Optional, Union
 # Types
 
 @dataclass
+class StructDef:
+    """Definition of a struct/union type."""
+    name: Optional[str] = None  # None for anonymous structs
+    members: List['StructMember'] = field(default_factory=list)
+    is_union: bool = False
+
+    def size_bytes(self):
+        if self.is_union:
+            return max((m.type_spec.size_bytes() for m in self.members), default=0)
+        total = 0
+        for m in self.members:
+            size = m.type_spec.size_bytes()
+            # Align to member size
+            align = min(size, 8)
+            if align > 0:
+                total = (total + align - 1) & ~(align - 1)
+            total += size
+        # Align total to 8
+        if total > 0:
+            total = (total + 7) & ~7
+        return total
+
+    def member_offset(self, name):
+        if self.is_union:
+            return 0
+        offset = 0
+        for m in self.members:
+            size = m.type_spec.size_bytes()
+            align = min(size, 8)
+            if align > 0:
+                offset = (offset + align - 1) & ~(align - 1)
+            if m.name == name:
+                return offset
+            offset += size
+        return None
+
+    def member_type(self, name):
+        for m in self.members:
+            if m.name == name:
+                return m.type_spec
+        return None
+
+
+@dataclass
+class StructMember:
+    type_spec: 'TypeSpec' = None
+    name: str = ""
+
+
+@dataclass
+class EnumDef:
+    """Definition of an enum type."""
+    name: Optional[str] = None
+    members: List['EnumMember'] = field(default_factory=list)
+
+
+@dataclass
+class EnumMember:
+    name: str = ""
+    value: Optional[int] = None
+
+
+@dataclass
 class TypeSpec:
     """Represents a C type."""
-    base: str  # "int", "char", "void", "long", "short", "unsigned", etc.
+    base: str  # "int", "char", "void", "long", "short", "unsigned", "struct X", "enum X"
     pointer_depth: int = 0  # number of * levels
     is_unsigned: bool = False
     is_const: bool = False
@@ -17,6 +80,8 @@ class TypeSpec:
     is_static: bool = False
     is_extern: bool = False
     array_sizes: Optional[List[Optional['Expr']]] = None  # None = unsized, e.g. int[]
+    struct_def: Optional[StructDef] = None  # populated for struct types
+    enum_def: Optional[EnumDef] = None  # populated for enum types
 
     def is_pointer(self):
         return self.pointer_depth > 0
@@ -27,10 +92,20 @@ class TypeSpec:
     def is_void(self):
         return self.base == "void" and self.pointer_depth == 0
 
+    def is_struct(self):
+        return self.struct_def is not None
+
+    def is_enum(self):
+        return self.enum_def is not None
+
     def size_bytes(self):
         """Return size in bytes for basic types (x86-64)."""
         if self.pointer_depth > 0:
             return 8
+        if self.struct_def:
+            return self.struct_def.size_bytes()
+        if self.enum_def:
+            return 4  # enums are int-sized
         sizes = {
             "char": 1,
             "short": 2,
@@ -283,5 +358,30 @@ class GlobalVarDecl:
 
 
 @dataclass
+class StructDecl:
+    """Top-level struct/union definition (also used as statement)."""
+    struct_def: Optional[StructDef] = None
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
+class EnumDecl:
+    """Top-level enum definition."""
+    enum_def: Optional[EnumDef] = None
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
+class TypedefDecl:
+    """Typedef declaration."""
+    type_spec: Optional[TypeSpec] = None
+    name: str = ""
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
 class Program:
-    declarations: List[Union[FuncDecl, GlobalVarDecl]] = field(default_factory=list)
+    declarations: List[Union[FuncDecl, GlobalVarDecl, StructDecl, EnumDecl, TypedefDecl]] = field(default_factory=list)

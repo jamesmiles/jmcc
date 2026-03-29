@@ -230,13 +230,21 @@ class CodeGen:
         if decl.type_spec.is_array() and decl.type_spec.array_sizes:
             first = decl.type_spec.array_sizes[0]
             if isinstance(first, IntLiteral):
-                total = size * first.value
+                elem_size = size
+                if decl.type_spec.is_struct():
+                    elem_size = decl.type_spec.struct_def.size_bytes()
+                total = elem_size * first.value
             else:
                 self.error("variable-length arrays not yet supported", decl.line, decl.col)
                 return
             # Align to 8
             total = (total + 7) & ~7
             self.stack_offset -= total
+            self.locals[decl.name] = (self.stack_offset, decl.type_spec)
+        elif decl.type_spec.is_struct() and not decl.type_spec.is_pointer():
+            # Struct: allocate full struct size on stack
+            alloc = (size + 7) & ~7
+            self.stack_offset -= alloc
             self.locals[decl.name] = (self.stack_offset, decl.type_spec)
         else:
             self.stack_offset -= 8  # always 8-byte aligned slots
@@ -418,6 +426,9 @@ class CodeGen:
         elif isinstance(expr, ArrayAccess):
             self.gen_array_access(expr)
 
+        elif isinstance(expr, MemberAccess):
+            self.gen_member_access(expr)
+
         elif isinstance(expr, TernaryOp):
             self.gen_ternary(expr)
 
@@ -487,8 +498,7 @@ class CodeGen:
         elif isinstance(expr, ArrayAccess):
             self.gen_array_addr(expr)
         elif isinstance(expr, MemberAccess):
-            # TODO: struct member access
-            self.error("struct member lvalue not yet implemented", expr.line, expr.col)
+            self.gen_member_addr(expr)
         else:
             self.error("expression is not an lvalue", expr.line, expr.col)
 
@@ -521,13 +531,17 @@ class CodeGen:
         if isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
-                # For array of T, element size is sizeof(T)
-                elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
-                                   is_unsigned=ts.is_unsigned)
-                if ts.is_array():
+                if ts.is_array() and ts.struct_def:
+                    # Array of structs
+                    elem_size = ts.struct_def.size_bytes()
+                elif ts.is_array():
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth,
                                        is_unsigned=ts.is_unsigned)
-                elem_size = elem_ts.size_bytes()
+                    elem_size = elem_ts.size_bytes()
+                else:
+                    elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
+                                       is_unsigned=ts.is_unsigned)
+                    elem_size = elem_ts.size_bytes()
 
         if elem_size != 1:
             self.emit(f"    imulq ${elem_size}, %rax")
@@ -553,6 +567,77 @@ class CodeGen:
             self.emit("    movsbl (%rax), %eax")
         elif elem_size == 8:
             self.emit("    movq (%rax), %rax")
+        else:
+            self.emit("    movl (%rax), %eax")
+
+    def get_expr_type(self, expr: Expr) -> Optional[TypeSpec]:
+        """Try to determine the type of an expression."""
+        if isinstance(expr, Identifier):
+            _, ts = self.get_var_location(expr.name)
+            return ts
+        if isinstance(expr, UnaryOp) and expr.op == "*":
+            inner = self.get_expr_type(expr.operand)
+            if inner and inner.is_pointer():
+                return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
+                                struct_def=inner.struct_def, enum_def=inner.enum_def)
+        if isinstance(expr, MemberAccess):
+            obj_type = self.get_expr_type(expr.obj)
+            if obj_type and expr.arrow:
+                # obj is a pointer to struct
+                if obj_type.struct_def:
+                    return obj_type.struct_def.member_type(expr.member)
+            elif obj_type and obj_type.struct_def:
+                return obj_type.struct_def.member_type(expr.member)
+        if isinstance(expr, ArrayAccess):
+            arr_type = self.get_expr_type(expr.array)
+            if arr_type:
+                if arr_type.is_array() or arr_type.is_pointer():
+                    return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
+                                    struct_def=arr_type.struct_def)
+        return None
+
+    def gen_member_addr(self, expr: MemberAccess):
+        """Generate address of a struct member into %rax."""
+        if expr.arrow:
+            # expr->member: obj is a pointer, load it
+            self.gen_expr(expr.obj)
+        else:
+            # expr.member: obj is a struct, get its address
+            self.gen_lvalue_addr(expr.obj)
+
+        # Find the struct definition
+        obj_type = self.get_expr_type(expr.obj)
+        if obj_type is None:
+            self.error(f"cannot determine type for member access", expr.line, expr.col)
+
+        sdef = obj_type.struct_def
+        if expr.arrow and obj_type.is_pointer():
+            sdef = obj_type.struct_def
+        if sdef is None:
+            self.error(f"member access on non-struct type", expr.line, expr.col)
+
+        offset = sdef.member_offset(expr.member)
+        if offset is None:
+            self.error(f"struct has no member '{expr.member}'", expr.line, expr.col)
+
+        if offset != 0:
+            self.emit(f"    addq ${offset}, %rax")
+
+    def gen_member_access(self, expr: MemberAccess):
+        """Generate code to load a struct member value into %rax/%eax."""
+        self.gen_member_addr(expr)
+
+        # Determine member type for load size
+        obj_type = self.get_expr_type(expr.obj)
+        sdef = obj_type.struct_def if obj_type else None
+        mem_type = sdef.member_type(expr.member) if sdef else None
+
+        if mem_type is None:
+            self.emit("    movl (%rax), %eax")
+        elif mem_type.is_pointer() or mem_type.size_bytes() == 8:
+            self.emit("    movq (%rax), %rax")
+        elif mem_type.base == "char" and not mem_type.is_pointer():
+            self.emit("    movsbl (%rax), %eax")
         else:
             self.emit("    movl (%rax), %eax")
 
@@ -696,7 +781,13 @@ class CodeGen:
 
             # Determine store size
             store_size = 4
-            if isinstance(expr.target, Identifier):
+            target_type = self.get_expr_type(expr.target)
+            if target_type:
+                if target_type.is_pointer() or target_type.size_bytes() == 8:
+                    store_size = 8
+                elif target_type.base == "char" and not target_type.is_pointer():
+                    store_size = 1
+            elif isinstance(expr.target, Identifier):
                 _, ts = self.get_var_location(expr.target.name)
                 if ts and (ts.is_pointer() or ts.size_bytes() == 8):
                     store_size = 8
