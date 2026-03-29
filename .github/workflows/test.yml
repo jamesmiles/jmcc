@@ -10,7 +10,7 @@ env:
   JMCC_TIMEOUT: "120"
 
 jobs:
-  test:
+  test-self-hosted:
     runs-on: self-hosted
     timeout-minutes: 30
 
@@ -47,5 +47,45 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-self-hosted
+          path: output/
+
+  test-hosted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build Docker test image
+        run: docker build -t jmcc-test harness/
+
+      - name: Run Phase 1 tests (must pass)
+        run: |
+          mkdir -p output
+          python3 test_runner.py --compiler jmcc --phase 1
+
+      - name: Run Phase 2 tests (must pass)
+        run: python3 test_runner.py --compiler jmcc --phase 2
+
+      - name: Run Phase 3 tests (must pass)
+        run: python3 test_runner.py --compiler jmcc --phase 3
+
+      - name: Run negative tests (must pass)
+        run: python3 test_runner.py --compiler jmcc --negative-only
+
+      - name: Run external tests (informational)
+        if: always()
+        run: python3 test_runner.py --compiler jmcc --phase 4 || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-hosted
           path: output/

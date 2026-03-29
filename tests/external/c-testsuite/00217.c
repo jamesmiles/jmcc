@@ -1,0 +1,22 @@
+// TEST: ctest_00217
+// DESCRIPTION: c-testsuite test 00217
+// EXPECTED_EXIT: 0
+// ENVIRONMENT: hosted
+// PHASE: 4
+// STDOUT: data = "0123-5678"
+
+int printf(const char *, ...);
+char t[] = "012345678";
+
+int main(void)
+{
+    char *data = t;
+    unsigned long long r = 4;
+    unsigned a = 5;
+    unsigned long long b = 12;
+
+    *(unsigned*)(data + r) += a - b;
+
+    printf("data = \"%s\"\n", data);
+    return 0;
+}

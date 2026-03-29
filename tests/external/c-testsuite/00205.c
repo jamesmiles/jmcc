@@ -1,0 +1,110 @@
+// TEST: ctest_00205
+// DESCRIPTION: c-testsuite test 00205
+// EXPECTED_EXIT: 0
+// ENVIRONMENT: hosted
+// PHASE: 4
+// STDOUT: cases[0].c[0]=73400320
+// STDOUT: cases[0].c[1]=262144
+// STDOUT: cases[0].c[2]=805567999
+// STDOUT: cases[0].c[3]=-1
+// STDOUT: cases[0].b=1
+// STDOUT: cases[0].e=2
+// STDOUT: cases[0].k=1
+// STDOUT: 
+// STDOUT: cases[1].c[0]=879754751
+// STDOUT: cases[1].c[1]=262144
+// STDOUT: cases[1].c[2]=262144
+// STDOUT: cases[1].c[3]=805567999
+// STDOUT: cases[1].b=2
+// STDOUT: cases[1].e=3
+// STDOUT: cases[1].k=2
+// STDOUT: 
+// STDOUT: cases[2].c[0]=879754751
+// STDOUT: cases[2].c[1]=805567999
+// STDOUT: cases[2].c[2]=262144
+// STDOUT: cases[2].c[3]=805567999
+// STDOUT: cases[2].b=1
+// STDOUT: cases[2].e=3
+// STDOUT: cases[2].k=2
+// STDOUT: 
+// STDOUT: cases[3].c[0]=879754751
+// STDOUT: cases[3].c[1]=805830143
+// STDOUT: cases[3].c[2]=524288
+// STDOUT: cases[3].c[3]=-1
+// STDOUT: cases[3].b=1
+// STDOUT: cases[3].e=2
+// STDOUT: cases[3].k=1
+// STDOUT: 
+// STDOUT: cases[4].c[0]=879754751
+// STDOUT: cases[4].c[1]=805830143
+// STDOUT: cases[4].c[2]=1048576
+// STDOUT: cases[4].c[3]=805830143
+// STDOUT: cases[4].b=1
+// STDOUT: cases[4].e=3
+// STDOUT: cases[4].k=1
+// STDOUT: 
+// STDOUT: cases[5].c[0]=879754751
+// STDOUT: cases[5].c[1]=805830143
+// STDOUT: cases[5].c[2]=262144
+// STDOUT: cases[5].c[3]=262144
+// STDOUT: cases[5].b=1
+// STDOUT: cases[5].e=3
+// STDOUT: cases[5].k=1
+// STDOUT: 
+// STDOUT: cases[6].c[0]=73400320
+// STDOUT: cases[6].c[1]=807403007
+// STDOUT: cases[6].c[2]=807403007
+// STDOUT: cases[6].c[3]=-1
+// STDOUT: cases[6].b=1
+// STDOUT: cases[6].e=2
+// STDOUT: cases[6].k=1
+// STDOUT: 
+// STDOUT: cases[7].c[0]=839122431
+// STDOUT: cases[7].c[1]=2097152
+// STDOUT: cases[7].c[2]=807403007
+// STDOUT: cases[7].c[3]=-1
+// STDOUT: cases[7].b=0
+// STDOUT: cases[7].e=2
+// STDOUT: cases[7].k=1
+// STDOUT: 
+// STDOUT: cases[8].c[0]=67108864
+// STDOUT: cases[8].c[1]=807403007
+// STDOUT: cases[8].c[2]=134217728
+// STDOUT: cases[8].c[3]=-1
+// STDOUT: cases[8].b=0
+// STDOUT: cases[8].e=2
+// STDOUT: cases[8].k=0
+
+#include <stdio.h>
+
+/* This test is a snippet from the J interpreter */
+
+typedef long I;
+typedef struct{I c[4];I b,e,k;} PT;
+
+PT cases[] = {
+ ((I)4194304L +(I)2097152L +(I)67108864L), (I)262144L, (((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), -1L, 1,2,1,
+ ((I)+4194304L +(I)2097152L +(I)67108864L)+( (I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), (I)262144L, (I)262144L, (((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), 2,3,2,
+ ((I)4194304L +(I)2097152L +(I)67108864L)+( (I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), (((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), (I)262144L, (((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), 1,3,2,
+ ((I)4194304L +(I)2097152L +(I)67108864L)+( (I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), (I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), (I)524288L, -1L, 1,2,1,
+ ((I)4194304L +(I)2097152L +(I)67108864L)+( (I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), (I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), (I)1048576L, (I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), 1,3,1,
+ ((I)4194304L +(I)2097152L +(I)67108864L)+( (I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), (I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), (I)262144L, (I)262144L, 1,3,1,
+ ((I)4194304L +(I)2097152L +(I)67108864L), ((I)1048576L +(I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), ((I)1048576L +(I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), -1L, 1,2,1,
+ (I)33554432L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L), (I)2097152L, ((I)1048576L +(I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), -1L, 0,2,1,
+ (I)67108864L, ((I)1048576L +(I)524288L +(I)262144L +(((I)1L +(I)256L +(I)4L +(I)8L +(I)16L +(I)64L +(I)128L +(I)268435456L +(I)536870912L +(I)1024L +(I)4096L +(I)8192L +(I)16384L)+((I)2L +(I)131072L +(I)2048L)+(I)32L +(I)32768L +(I)65536L)), (I)134217728L, -1L, 0,2,0,
+};
+
+int main() {
+    int i, j;
+
+    for(j=0; j < sizeof(cases)/sizeof(cases[0]); j++) {
+	for(i=0; i < sizeof(cases->c)/sizeof(cases->c[0]); i++)
+	    printf("cases[%d].c[%d]=%ld\n", j, i, cases[j].c[i]);
+
+	printf("cases[%d].b=%ld\n", j, cases[j].b);
+	printf("cases[%d].e=%ld\n", j, cases[j].e);
+	printf("cases[%d].k=%ld\n", j, cases[j].k);
+	printf("\n");
+    }
+    return 0;
+}
