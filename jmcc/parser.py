@@ -292,6 +292,11 @@ class Parser:
             return edef
         elif name and name in self.enum_defs:
             return self.enum_defs[name]
+        elif name:
+            # Forward reference to unknown enum — treat as int
+            edef = EnumDef(name=name, members=[])
+            self.enum_defs[name] = edef
+            return edef
         else:
             self.error("expected enum name or '{'")
 
