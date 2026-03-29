@@ -752,7 +752,44 @@ class Parser:
         while self.match(TokenType.STAR):
             extra_ptrs += 1
 
+        # Function pointer: (*name)(args) or just name
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+            # Function pointer declaration: type (*name)(params)
+            self.advance()  # (
+            self.advance()  # *
+            name = self.expect(TokenType.IDENTIFIER, "variable name").value
+            self.expect(TokenType.RPAREN, "')'")
+            # Skip param list
+            self.expect(TokenType.LPAREN, "'('")
+            depth = 1
+            while depth > 0 and not self.at(TokenType.EOF):
+                if self.match(TokenType.LPAREN):
+                    depth += 1
+                elif self.match(TokenType.RPAREN):
+                    depth -= 1
+                else:
+                    self.advance()
+            ts = TypeSpec(base="void", pointer_depth=1)  # treat as void pointer for now
+            init = None
+            if self.match(TokenType.ASSIGN):
+                init = self.parse_assignment()
+            return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
+
         name = self.expect(TokenType.IDENTIFIER, "variable name").value
+
+        # Local function declaration: int f(char *);
+        if self.at(TokenType.LPAREN):
+            self.advance()  # (
+            depth = 1
+            while depth > 0 and not self.at(TokenType.EOF):
+                if self.match(TokenType.LPAREN):
+                    depth += 1
+                elif self.match(TokenType.RPAREN):
+                    depth -= 1
+                else:
+                    self.advance()
+            # Return a no-op VarDecl
+            return VarDecl(type_spec=TypeSpec(base="void"), name="__skip__", line=t.line, col=t.col)
 
         # Create type for this specific declarator
         import copy

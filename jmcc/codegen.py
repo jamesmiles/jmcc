@@ -289,6 +289,9 @@ class CodeGen:
         self.emit("    ret")
 
     def gen_var_decl(self, decl: VarDecl):
+        if decl.name in ("__skip__", ""):
+            return  # Skip no-op declarations
+
         size = decl.type_spec.size_bytes()
 
         # Static local variable: store as a global with mangled name
