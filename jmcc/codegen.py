@@ -47,9 +47,21 @@ class CodeGen:
     def generate(self, program: Program) -> str:
         self.emit("    .text")
 
-        # First pass: collect globals and string literals
+        # First pass: collect globals, infer array sizes from initializers
         for decl in program.declarations:
             if isinstance(decl, GlobalVarDecl):
+                # Infer array size from initializer if unsized (e.g., int a[] = {1,2,3})
+                ts = decl.type_spec
+                if ts.is_array() and ts.array_sizes and ts.array_sizes[0] is None:
+                    if isinstance(decl.init, InitList):
+                        # Find max index (accounting for designated initializers)
+                        max_idx = len(decl.init.items)
+                        for item in decl.init.items:
+                            if item.designator_index is not None:
+                                max_idx = max(max_idx, item.designator_index + 1)
+                        ts.array_sizes[0] = IntLiteral(value=max_idx)
+                    elif isinstance(decl.init, StringLiteral):
+                        ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
                 self.global_vars[decl.name] = decl
             elif isinstance(decl, FuncDecl) and decl.body is None:
                 pass  # forward declaration
@@ -92,20 +104,36 @@ class CodeGen:
         if self.global_vars:
             for name, decl in self.global_vars.items():
                 self.emit("")
-                if decl.init and isinstance(decl.init, IntLiteral):
+                const_val = self._try_eval_const(decl.init) if decl.init else None
+                if const_val is not None:
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
                     self.emit(f"    .align {min(max(size, 4), 8)}")
                     self.label(name)
                     if size == 1:
-                        self.emit(f"    .byte {decl.init.value}")
+                        self.emit(f"    .byte {const_val}")
                     elif size == 2:
-                        self.emit(f"    .word {decl.init.value}")
+                        self.emit(f"    .word {const_val}")
                     elif size == 4:
-                        self.emit(f"    .long {decl.init.value}")
+                        self.emit(f"    .long {const_val}")
                     else:
-                        self.emit(f"    .quad {decl.init.value}")
+                        self.emit(f"    .quad {const_val}")
+                elif decl.init and isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
+                    # char s[] = "hello";
+                    self.emit("    .data")
+                    self.emit(f"    .globl {name}")
+                    self.emit(f"    .align 1")
+                    self.label(name)
+                    asm_str = ""
+                    for ch in decl.init.value:
+                        if ch == '\n': asm_str += "\\n"
+                        elif ch == '\t': asm_str += "\\t"
+                        elif ch == '\\': asm_str += "\\\\"
+                        elif ch == '"': asm_str += '\\"'
+                        elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
+                        else: asm_str += ch
+                    self.emit(f'    .string "{asm_str}"')
                 elif decl.init and isinstance(decl.init, InitList):
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
@@ -115,16 +143,29 @@ class CodeGen:
                     if sdef:
                         self._emit_struct_init_data(sdef, decl.init)
                     else:
-                        # Array initializer
+                        # Array initializer (with designated initializer support)
                         elem_size = decl.type_spec.size_bytes()
+                        # Determine total array size
+                        total_elems = 0
+                        if decl.type_spec.array_sizes and decl.type_spec.array_sizes[0]:
+                            first = decl.type_spec.array_sizes[0]
+                            if isinstance(first, IntLiteral):
+                                total_elems = first.value
+                        # Build element map
+                        elems = [0] * total_elems
+                        idx = 0
                         for item in decl.init.items:
-                            if isinstance(item.value, IntLiteral):
-                                if elem_size <= 4:
-                                    self.emit(f"    .long {item.value.value}")
-                                else:
-                                    self.emit(f"    .quad {item.value.value}")
+                            if item.designator_index is not None:
+                                idx = item.designator_index
+                            cv = self._try_eval_const(item.value)
+                            if cv is not None and idx < total_elems:
+                                elems[idx] = cv
+                            idx += 1
+                        for val in elems:
+                            if elem_size <= 4:
+                                self.emit(f"    .long {val}")
                             else:
-                                self.emit(f"    .long 0")
+                                self.emit(f"    .quad {val}")
                 else:
                     self.emit("    .bss")
                     self.emit(f"    .globl {name}")
@@ -184,6 +225,69 @@ class CodeGen:
         total = sdef.size_bytes()
         if offset < total:
             self.emit(f"    .zero {total - offset}")
+
+    def _try_eval_const(self, expr) -> Optional[int]:
+        """Try to evaluate an expression as a compile-time integer constant."""
+        if isinstance(expr, IntLiteral):
+            return expr.value
+        if isinstance(expr, CastExpr):
+            return self._try_eval_const(expr.operand)
+        if isinstance(expr, UnaryOp):
+            val = self._try_eval_const(expr.operand)
+            if val is None:
+                return None
+            if expr.op == "-":
+                return -val
+            if expr.op == "~":
+                return ~val
+            if expr.op == "!":
+                return 0 if val else 1
+        if isinstance(expr, BinaryOp):
+            left = self._try_eval_const(expr.left)
+            right = self._try_eval_const(expr.right)
+            if left is None or right is None:
+                return None
+            ops = {
+                "+": lambda a, b: a + b, "-": lambda a, b: a - b,
+                "*": lambda a, b: a * b, "/": lambda a, b: a // b if b else 0,
+                "%": lambda a, b: a % b if b else 0,
+                "<<": lambda a, b: a << b, ">>": lambda a, b: a >> b,
+                "&": lambda a, b: a & b, "|": lambda a, b: a | b,
+                "^": lambda a, b: a ^ b,
+                "==": lambda a, b: int(a == b), "!=": lambda a, b: int(a != b),
+                "<": lambda a, b: int(a < b), ">": lambda a, b: int(a > b),
+                "<=": lambda a, b: int(a <= b), ">=": lambda a, b: int(a >= b),
+                "&&": lambda a, b: int(bool(a) and bool(b)),
+                "||": lambda a, b: int(bool(a) or bool(b)),
+            }
+            if expr.op in ops:
+                return ops[expr.op](left, right)
+        if isinstance(expr, TernaryOp):
+            cond = self._try_eval_const(expr.condition)
+            if cond is None:
+                return None
+            return self._try_eval_const(expr.true_expr if cond else expr.false_expr)
+        if isinstance(expr, SizeofExpr):
+            if expr.is_type:
+                ts = expr.operand
+                size = ts.size_bytes()
+                if ts.is_array() and ts.array_sizes:
+                    first = ts.array_sizes[0]
+                    if isinstance(first, IntLiteral):
+                        size *= first.value
+                return size
+            # sizeof on expression
+            if isinstance(expr.operand, Identifier):
+                _, ts = self.get_var_location(expr.operand.name)
+                if ts:
+                    size = ts.size_bytes()
+                    if ts.is_array() and ts.array_sizes:
+                        first = ts.array_sizes[0]
+                        if isinstance(first, IntLiteral):
+                            size *= first.value
+                    return size
+            return 4
+        return None
 
     def gen_function(self, func: FuncDecl):
         self.current_func = func
@@ -573,10 +677,23 @@ class CodeGen:
 
         elif isinstance(expr, SizeofExpr):
             if expr.is_type:
-                size = expr.operand.size_bytes()
+                ts = expr.operand
+                size = ts.size_bytes()
+                if ts.is_array() and ts.array_sizes:
+                    first = ts.array_sizes[0]
+                    if isinstance(first, IntLiteral):
+                        size *= first.value
             else:
-                # For expressions, we'd need type inference
-                size = 4  # default to int
+                # sizeof on an expression — infer type
+                et = self.get_expr_type(expr.operand)
+                if et:
+                    size = et.size_bytes()
+                    if et.is_array() and et.array_sizes:
+                        first = et.array_sizes[0]
+                        if isinstance(first, IntLiteral):
+                            size *= first.value
+                else:
+                    size = 4
             self.emit(f"    movl ${size}, %eax")
 
         elif isinstance(expr, CommaExpr):
