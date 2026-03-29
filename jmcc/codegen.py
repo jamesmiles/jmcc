@@ -472,9 +472,11 @@ class CodeGen:
             # handled by gen_switch
             pass
         elif isinstance(stmt, GotoStmt):
-            self.emit(f"    jmp .Luser_{stmt.label}")
+            fname = self.current_func.name if self.current_func else ""
+            self.emit(f"    jmp .Luser_{fname}_{stmt.label}")
         elif isinstance(stmt, LabelStmt):
-            self.label(f".Luser_{stmt.label}")
+            fname = self.current_func.name if self.current_func else ""
+            self.label(f".Luser_{fname}_{stmt.label}")
             self.gen_stmt(stmt.stmt)
         elif isinstance(stmt, NullStmt):
             pass
