@@ -374,6 +374,9 @@ typedef __builtin_va_list va_list;
                             k += 1
                         if k < len(line) and line[k] == '(':
                             args, end = self._parse_macro_args(line, k)
+                            # Pre-expand args (unless used with ## in the body)
+                            if '##' not in macro.body:
+                                args = [self._expand_macros(a) for a in args]
                             expanded = macro.expand(args)
                             expanded = self._expand_macros(expanded)  # recursive
                             result.append(expanded)
@@ -467,17 +470,36 @@ class Macro:
         args = args or []
         result = self.body
 
-        # Replace parameters with arguments
+        # Build param->arg mapping
+        param_map = {}
         for i, param in enumerate(self.params):
             if i < len(args):
-                # Handle # (stringify)
-                result = re.sub(r'#\s*' + re.escape(param),
-                                '"' + args[i].replace('\\', '\\\\').replace('"', '\\"') + '"',
-                                result)
-                # Handle ## (token paste)
-                result = result.replace(param + '##', args[i])
-                result = result.replace('##' + param, args[i])
-                # Regular replacement (whole word)
-                result = re.sub(r'\b' + re.escape(param) + r'\b', args[i], result)
+                param_map[param] = args[i]
 
-        return result
+        # First: replace all params with placeholders to avoid partial matches
+        # Use markers that can't appear in C code
+        markers = {}
+        for i, param in enumerate(self.params):
+            markers[param] = f"\x01PARAM{i}\x02"
+
+        # Replace params with markers (whole word)
+        temp = result
+        for param, marker in markers.items():
+            temp = re.sub(r'\b' + re.escape(param) + r'\b', marker, temp)
+
+        # Handle ## (token paste): remove ## and join adjacent markers
+        temp = re.sub(r'\s*##\s*', '', temp)
+
+        # Handle # (stringify): #MARKER -> "arg"
+        for param, marker in markers.items():
+            if param in param_map:
+                arg = param_map[param]
+                temp = temp.replace('#' + marker,
+                    '"' + arg.replace('\\', '\\\\').replace('"', '\\"') + '"')
+
+        # Replace remaining markers with args
+        for param, marker in markers.items():
+            if param in param_map:
+                temp = temp.replace(marker, param_map[param])
+
+        return temp
