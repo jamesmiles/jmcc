@@ -374,6 +374,10 @@ class Lexer:
             start_col = self.col
             ch = self.advance()
 
+            # Wide string/char prefix: L"..." or L'...'
+            if ch == 'L' and self.pos < len(self.source) and self.source[self.pos] in '"\'':
+                ch = self.advance()  # skip L, consume the quote
+
             # String literal
             if ch == '"':
                 val = self.read_string()

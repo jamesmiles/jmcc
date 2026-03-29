@@ -226,9 +226,28 @@ class Parser:
                     else:
                         mem_type.array_sizes = [self.parse_expr()]
                     self.expect(TokenType.RBRACKET, "']'")
-                self.expect(TokenType.SEMICOLON, "';'")
+
                 if mem_name:
                     members.append(StructMember(type_spec=mem_type, name=mem_name))
+
+                # Handle comma-separated members: int i, j, k;
+                while self.match(TokenType.COMMA):
+                    extra_ptrs = 0
+                    while self.match(TokenType.STAR):
+                        extra_ptrs += 1
+                    ename = self.expect(TokenType.IDENTIFIER, "member name").value
+                    ets = TypeSpec(base=mem_type.base, pointer_depth=mem_type.pointer_depth + extra_ptrs,
+                                   is_unsigned=mem_type.is_unsigned, struct_def=mem_type.struct_def)
+                    # Array
+                    if self.match(TokenType.LBRACKET):
+                        if self.at(TokenType.RBRACKET):
+                            ets.array_sizes = [None]
+                        else:
+                            ets.array_sizes = [self.parse_expr()]
+                        self.expect(TokenType.RBRACKET, "']'")
+                    members.append(StructMember(type_spec=ets, name=ename))
+
+                self.expect(TokenType.SEMICOLON, "';'")
 
             self.expect(TokenType.RBRACE, "'}'")
             sdef.members = members
