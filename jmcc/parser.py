@@ -929,8 +929,10 @@ class Parser:
         name = ""
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
-        # Array parameter: int a[]
+        # Array parameter: int a[] or int a[100] — decays to pointer
         if self.match(TokenType.LBRACKET):
+            if not self.at(TokenType.RBRACKET):
+                self.parse_expr()  # skip the size expression
             self.expect(TokenType.RBRACKET, "']'")
             type_spec.pointer_depth += 1  # arrays decay to pointers in params
         return Param(type_spec=type_spec, name=name)

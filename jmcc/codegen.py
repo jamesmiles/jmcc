@@ -364,9 +364,19 @@ class CodeGen:
         self.gen_expr(stmt.expr)
         self.emit("    movl %eax, %r10d")  # save switch value
 
-        # Collect cases from the body block
-        if not isinstance(stmt.body, Block):
-            self.error("switch body must be a block")
+        # Collect cases from the body
+        body = stmt.body
+        if not isinstance(body, Block):
+            # Wrap single statement in a block
+            if isinstance(body, CaseStmt):
+                body = Block(stmts=[body], line=body.line, col=body.col)
+            else:
+                self.emit(f"    jmp {end_label}")
+                self.gen_stmt(body)
+                self.label(end_label)
+                self.break_labels.pop()
+                return
+        stmt.body = body
 
         cases = []
         default_label = None
