@@ -1030,15 +1030,32 @@ class CodeGen:
         else:
             # Compound assignment: +=, -=, etc.
             op = expr.op[:-1]  # strip '='
+            target_type = self.get_expr_type(expr.target)
+            is_ptr = target_type and target_type.is_pointer()
+
             self.gen_lvalue_addr(expr.target)
             self.emit("    pushq %rax")
-            self.emit("    movl (%rax), %eax")
+            if is_ptr:
+                self.emit("    movq (%rax), %rax")
+            else:
+                self.emit("    movl (%rax), %eax")
             self.emit("    pushq %rax")
             self.gen_expr(expr.value)
             self.emit("    movl %eax, %ecx")
             self.emit("    popq %rax")
 
-            if op == "+":
+            if is_ptr and op in ("+", "-"):
+                elem_size = TypeSpec(base=target_type.base,
+                                      pointer_depth=target_type.pointer_depth - 1,
+                                      struct_def=target_type.struct_def).size_bytes()
+                if elem_size > 1:
+                    self.emit(f"    imull ${elem_size}, %ecx")
+                self.emit("    movslq %ecx, %rcx")
+                if op == "+":
+                    self.emit("    addq %rcx, %rax")
+                else:
+                    self.emit("    subq %rcx, %rax")
+            elif op == "+":
                 self.emit("    addl %ecx, %eax")
             elif op == "-":
                 self.emit("    subl %ecx, %eax")
@@ -1063,7 +1080,10 @@ class CodeGen:
                 self.emit("    sarl %cl, %eax")
 
             self.emit("    popq %rcx")
-            self.emit("    movl %eax, (%rcx)")
+            if is_ptr:
+                self.emit("    movq %rax, (%rcx)")
+            else:
+                self.emit("    movl %eax, (%rcx)")
 
     def gen_func_call(self, expr: FuncCall):
         if not isinstance(expr.name, Identifier):
