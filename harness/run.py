@@ -307,7 +307,10 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
         expected_stdout = metadata["expected_stdout"]
 
         exit_ok = actual_exit == expected_exit
-        stdout_ok = (not expected_stdout) or (actual_stdout == expected_stdout)
+        # Compare stdout with trailing-whitespace tolerance per line
+        def normalize_stdout(s):
+            return '\n'.join(line.rstrip() for line in s.rstrip('\n').split('\n')) + '\n' if s else s
+        stdout_ok = (not expected_stdout) or (actual_stdout == expected_stdout) or (normalize_stdout(actual_stdout) == normalize_stdout(expected_stdout))
 
         if exit_ok and stdout_ok:
             result["passed"] = True

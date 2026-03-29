@@ -484,11 +484,19 @@ class Parser:
         if self.at(TokenType.SIZEOF):
             return self.parse_sizeof()
 
-        # Cast: (type) expr - tricky to distinguish from (expr)
+        # Cast or compound literal: (type) expr  OR  (type){ init }
         if self.at(TokenType.LPAREN) and self.is_cast():
             self.advance()  # (
             target_type = self.parse_type_spec()
             self.expect(TokenType.RPAREN, "')'")
+            # Compound literal: (type){ ... }
+            if self.at(TokenType.LBRACE):
+                init = self.parse_init_list()
+                # For scalar compound literals, extract the value
+                if isinstance(init, InitList) and init.items and not target_type.struct_def:
+                    return init.items[0].value if init.items[0].value else IntLiteral(value=0, line=t.line, col=t.col)
+                # For struct compound literals, return as InitList (codegen needs to handle)
+                return init
             operand = self.parse_unary()
             return CastExpr(target_type=target_type, operand=operand, line=t.line, col=t.col)
 
@@ -1006,9 +1014,21 @@ class Parser:
                 ename = self.expect(TokenType.IDENTIFIER, "identifier").value
                 ets = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth + extra_ptrs,
                                is_unsigned=type_spec.is_unsigned, struct_def=type_spec.struct_def)
+                # Array declarator
+                if self.match(TokenType.LBRACKET):
+                    arr_sizes = []
+                    if self.at(TokenType.RBRACKET):
+                        arr_sizes.append(None)
+                    else:
+                        arr_sizes.append(self.parse_expr())
+                    self.expect(TokenType.RBRACKET, "']'")
+                    ets.array_sizes = arr_sizes
                 einit = None
                 if self.match(TokenType.ASSIGN):
-                    einit = self.parse_expr()
+                    if self.at(TokenType.LBRACE):
+                        einit = self.parse_init_list()
+                    else:
+                        einit = self.parse_expr()
                 extra.append(GlobalVarDecl(type_spec=ets, name=ename, init=einit, line=t.line, col=t.col))
                 if not self.match(TokenType.COMMA):
                     break
