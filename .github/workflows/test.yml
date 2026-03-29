@@ -23,7 +23,7 @@ jobs:
           python-version: "3.13"
 
       - name: Build Docker test image
-        run: docker build -t jmcc-test harness/
+        run: docker build --no-cache -t jmcc-test harness/
 
       - name: Run Phase 1 tests (must pass)
         run: |
