@@ -193,9 +193,16 @@ class Parser:
 
         members = []
         if self.match(TokenType.LBRACE):
+            # Pre-register struct for self-referential types (e.g., struct S { struct S *next; })
+            sdef = StructDef(name=name, members=[], is_union=is_union)
+            if name:
+                self.struct_defs[name] = sdef
+
             while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
                 mem_type = self.parse_type_spec()
-                mem_name = self.expect(TokenType.IDENTIFIER, "member name").value
+                mem_name = ""
+                if self.at(TokenType.IDENTIFIER):
+                    mem_name = self.advance().value
                 # Array member
                 if self.match(TokenType.LBRACKET):
                     if self.at(TokenType.RBRACKET):
@@ -204,12 +211,11 @@ class Parser:
                         mem_type.array_sizes = [self.parse_expr()]
                     self.expect(TokenType.RBRACKET, "']'")
                 self.expect(TokenType.SEMICOLON, "';'")
-                members.append(StructMember(type_spec=mem_type, name=mem_name))
+                if mem_name:
+                    members.append(StructMember(type_spec=mem_type, name=mem_name))
 
             self.expect(TokenType.RBRACE, "'}'")
-            sdef = StructDef(name=name, members=members, is_union=is_union)
-            if name:
-                self.struct_defs[name] = sdef
+            sdef.members = members
             return sdef
         elif name and name in self.struct_defs:
             return self.struct_defs[name]
