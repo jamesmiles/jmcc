@@ -1057,7 +1057,33 @@ class Parser:
     def parse_typedef(self) -> TypedefDecl:
         t = self.advance()  # typedef
         type_spec = self.parse_type_spec()
+
+        # Function pointer typedef: typedef int (*name)(params);
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+            self.advance()  # (
+            self.advance()  # *
+            name = self.expect(TokenType.IDENTIFIER, "typedef name").value
+            self.expect(TokenType.RPAREN, "')'")
+            # Skip param list
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            self.expect(TokenType.SEMICOLON, "';'")
+            fptr_type = TypeSpec(base="void", pointer_depth=1)
+            self.typedefs[name] = fptr_type
+            return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
+
         name = self.expect(TokenType.IDENTIFIER, "typedef name").value
+        # Handle typedef for arrays: typedef int arr_t[10];
+        if self.match(TokenType.LBRACKET):
+            if self.at(TokenType.RBRACKET):
+                type_spec.array_sizes = [None]
+            else:
+                type_spec.array_sizes = [self.parse_expr()]
+            self.expect(TokenType.RBRACKET, "']'")
         self.expect(TokenType.SEMICOLON, "';'")
         self.typedefs[name] = type_spec
         return TypedefDecl(type_spec=type_spec, name=name, line=t.line, col=t.col)
