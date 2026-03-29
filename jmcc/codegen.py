@@ -120,7 +120,27 @@ class CodeGen:
                 self.emit("")
                 const_val = self._try_eval_const(decl.init) if decl.init else None
                 is_float_init = decl.init and isinstance(decl.init, FloatLiteral)
-                if is_float_init:
+                # Global pointer init with &var or function name
+                is_addr_init = (decl.init and isinstance(decl.init, UnaryOp) and
+                                decl.init.op == "&" and isinstance(decl.init.operand, Identifier))
+                is_func_init = (decl.init and isinstance(decl.init, Identifier) and
+                                decl.init.name in self.known_functions)
+                is_cast_addr = (decl.init and isinstance(decl.init, CastExpr) and
+                                isinstance(decl.init.operand, UnaryOp) and
+                                decl.init.operand.op == "&" and
+                                isinstance(decl.init.operand.operand, Identifier))
+                if is_addr_init or is_func_init or is_cast_addr:
+                    self.emit("    .data")
+                    self.emit(f"    .globl {name}")
+                    self.emit(f"    .align 8")
+                    self.label(name)
+                    if is_addr_init:
+                        self.emit(f"    .quad {decl.init.operand.name}")
+                    elif is_cast_addr:
+                        self.emit(f"    .quad {decl.init.operand.operand.name}")
+                    else:
+                        self.emit(f"    .quad {decl.init.name}")
+                elif is_float_init:
                     import struct
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
@@ -980,6 +1000,8 @@ class CodeGen:
                 return lt
         if isinstance(expr, Assignment):
             return self.get_expr_type(expr.target)
+        if isinstance(expr, CastExpr):
+            return expr.target_type
         return None
 
     def gen_member_addr(self, expr: MemberAccess):
