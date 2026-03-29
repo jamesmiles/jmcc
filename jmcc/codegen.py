@@ -615,15 +615,21 @@ class CodeGen:
         if isinstance(expr, Identifier):
             _, ts = self.get_var_location(expr.name)
             return ts
+        if isinstance(expr, IntLiteral):
+            return TypeSpec(base="int")
         if isinstance(expr, UnaryOp) and expr.op == "*":
             inner = self.get_expr_type(expr.operand)
             if inner and inner.is_pointer():
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def)
+        if isinstance(expr, UnaryOp) and expr.op == "&":
+            inner = self.get_expr_type(expr.operand)
+            if inner:
+                return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth + 1,
+                                struct_def=inner.struct_def, enum_def=inner.enum_def)
         if isinstance(expr, MemberAccess):
             obj_type = self.get_expr_type(expr.obj)
             if obj_type and expr.arrow:
-                # obj is a pointer to struct
                 if obj_type.struct_def:
                     return obj_type.struct_def.member_type(expr.member)
             elif obj_type and obj_type.struct_def:
@@ -634,6 +640,12 @@ class CodeGen:
                 if arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def)
+        if isinstance(expr, BinaryOp) and expr.op in ("+", "-"):
+            lt = self.get_expr_type(expr.left)
+            if lt and lt.is_pointer():
+                return lt
+        if isinstance(expr, Assignment):
+            return self.get_expr_type(expr.target)
         return None
 
     def gen_member_addr(self, expr: MemberAccess):
@@ -719,11 +731,54 @@ class CodeGen:
         self.gen_expr(expr.left)
         self.emit("    pushq %rax")
         self.gen_expr(expr.right)
-        self.emit("    movl %eax, %ecx")  # right operand in ecx
-        self.emit("    popq %rax")        # left operand in eax
 
-        if expr.op == "+":
+        # Check for pointer arithmetic
+        left_type = self.get_expr_type(expr.left)
+        right_type = self.get_expr_type(expr.right)
+        is_ptr_op = ((left_type and left_type.is_pointer()) or
+                      (right_type and right_type.is_pointer()))
+
+        if is_ptr_op:
+            self.emit("    movq %rax, %rcx")   # right operand in rcx (64-bit for pointers)
+            self.emit("    popq %rax")          # left operand in rax
+        else:
+            self.emit("    movl %eax, %ecx")   # right operand in ecx (32-bit for ints)
+            self.emit("    popq %rax")          # left operand in eax
+
+        if expr.op == "+" and left_type and left_type.is_pointer():
+            # pointer + int: scale int by element size, result in rax
+            elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1,
+                                  struct_def=left_type.struct_def).size_bytes()
+            if elem_size > 1:
+                self.emit(f"    imulq ${elem_size}, %rcx")
+            self.emit("    addq %rcx, %rax")
+        elif expr.op == "+" and right_type and right_type.is_pointer():
+            # int + pointer: rcx has pointer, rax has int
+            elem_size = TypeSpec(base=right_type.base, pointer_depth=right_type.pointer_depth - 1,
+                                  struct_def=right_type.struct_def).size_bytes()
+            if elem_size > 1:
+                self.emit(f"    imulq ${elem_size}, %rax")
+            self.emit("    addq %rcx, %rax")
+        elif expr.op == "+":
             self.emit("    addl %ecx, %eax")
+        elif expr.op == "-" and left_type and left_type.is_pointer():
+            # pointer - int: scale int by element size
+            right_is_ptr = right_type and right_type.is_pointer()
+            if not right_is_ptr:
+                elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1,
+                                      struct_def=left_type.struct_def).size_bytes()
+                if elem_size > 1:
+                    self.emit(f"    imull ${elem_size}, %ecx")
+                self.emit("    movslq %ecx, %rcx")
+                self.emit("    subq %rcx, %rax")
+            else:
+                # pointer - pointer: result is element count
+                self.emit("    subq %rcx, %rax")
+                elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1).size_bytes()
+                if elem_size > 1:
+                    self.emit("    cqo")
+                    self.emit(f"    movq ${elem_size}, %rcx")
+                    self.emit("    idivq %rcx")
         elif expr.op == "-":
             self.emit("    subl %ecx, %eax")
         elif expr.op == "*":
@@ -775,39 +830,53 @@ class CodeGen:
         elif expr.op == "*":
             # Dereference
             self.gen_expr(expr.operand)
-            self.emit("    movl (%rax), %eax")
-        elif expr.op == "++" and expr.prefix:
+            # Determine pointed-to type for correct load size
+            inner_type = self.get_expr_type(expr.operand)
+            if inner_type and inner_type.pointer_depth > 1:
+                # Pointer to pointer: load a pointer (8 bytes)
+                self.emit("    movq (%rax), %rax")
+            elif inner_type and inner_type.base == "char" and inner_type.pointer_depth == 1:
+                self.emit("    movsbl (%rax), %eax")
+            elif inner_type and inner_type.pointer_depth == 1 and (inner_type.base in ("long", "long long") or inner_type.struct_def):
+                self.emit("    movq (%rax), %rax")
+            else:
+                self.emit("    movl (%rax), %eax")
+        elif expr.op in ("++", "--") and (expr.prefix or not expr.prefix):
+            is_inc = (expr.op == "++")
+            is_prefix = expr.prefix
+            operand_type = self.get_expr_type(expr.operand)
+            is_ptr = operand_type and operand_type.is_pointer()
+
+            if is_ptr:
+                elem_size = TypeSpec(base=operand_type.base,
+                                     pointer_depth=operand_type.pointer_depth - 1,
+                                     struct_def=operand_type.struct_def).size_bytes()
+            else:
+                elem_size = 1
+
             self.gen_lvalue_addr(expr.operand)
             self.emit("    pushq %rax")
-            self.emit("    movl (%rax), %eax")
-            self.emit("    addl $1, %eax")
-            self.emit("    popq %rcx")
-            self.emit("    movl %eax, (%rcx)")
-        elif expr.op == "--" and expr.prefix:
-            self.gen_lvalue_addr(expr.operand)
-            self.emit("    pushq %rax")
-            self.emit("    movl (%rax), %eax")
-            self.emit("    subl $1, %eax")
-            self.emit("    popq %rcx")
-            self.emit("    movl %eax, (%rcx)")
-        elif expr.op == "++" and not expr.prefix:
-            self.gen_lvalue_addr(expr.operand)
-            self.emit("    pushq %rax")
-            self.emit("    movl (%rax), %eax")
-            self.emit("    movl %eax, %edx")  # save old value
-            self.emit("    addl $1, %eax")
-            self.emit("    popq %rcx")
-            self.emit("    movl %eax, (%rcx)")
-            self.emit("    movl %edx, %eax")  # return old value
-        elif expr.op == "--" and not expr.prefix:
-            self.gen_lvalue_addr(expr.operand)
-            self.emit("    pushq %rax")
-            self.emit("    movl (%rax), %eax")
-            self.emit("    movl %eax, %edx")
-            self.emit("    subl $1, %eax")
-            self.emit("    popq %rcx")
-            self.emit("    movl %eax, (%rcx)")
-            self.emit("    movl %edx, %eax")
+
+            if is_ptr:
+                self.emit("    movq (%rax), %rax")
+                if not is_prefix:
+                    self.emit("    movq %rax, %rdx")  # save old value
+                op = "addq" if is_inc else "subq"
+                self.emit(f"    {op} ${elem_size}, %rax")
+                self.emit("    popq %rcx")
+                self.emit("    movq %rax, (%rcx)")
+                if not is_prefix:
+                    self.emit("    movq %rdx, %rax")
+            else:
+                self.emit("    movl (%rax), %eax")
+                if not is_prefix:
+                    self.emit("    movl %eax, %edx")
+                op = "addl" if is_inc else "subl"
+                self.emit(f"    {op} ${elem_size}, %eax")
+                self.emit("    popq %rcx")
+                self.emit("    movl %eax, (%rcx)")
+                if not is_prefix:
+                    self.emit("    movl %edx, %eax")
         else:
             self.error(f"unhandled unary operator '{expr.op}'", expr.line, expr.col)
 

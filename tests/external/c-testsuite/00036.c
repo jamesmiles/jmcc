@@ -1,0 +1,25 @@
+// TEST: ctest_00036
+// DESCRIPTION: c-testsuite test 00036
+// EXPECTED_EXIT: 0
+// ENVIRONMENT: hosted
+// PHASE: 4
+
+int
+main()
+{
+	int x;
+	
+	x = 0;
+	x += 2;
+	x += 2;
+	if (x != 4)
+		return 1;
+	x -= 1;
+	if (x != 3)
+		return 2;
+	x *= 2;
+	if (x != 6)
+		return 3;
+		
+	return 0;
+}

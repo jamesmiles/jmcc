@@ -733,14 +733,34 @@ class Parser:
         block = Block(stmts=stmts, line=t.line, col=t.col) if stmts else NullStmt(line=t.line, col=t.col)
         return CaseStmt(value=None, stmt=block, is_default=True, line=t.line, col=t.col)
 
-    def parse_var_decl(self) -> VarDecl:
+    def parse_var_decl(self) -> Stmt:
         t = self.current()
         type_spec = self.parse_type_spec()
         return self.parse_var_decl_with_type(type_spec)
 
-    def parse_var_decl_with_type(self, type_spec) -> VarDecl:
+    def _parse_single_declarator(self, base_type) -> VarDecl:
+        """Parse a single declarator (possibly with extra pointer levels)."""
         t = self.current()
+        # Extra pointer levels for this specific declarator
+        extra_ptrs = 0
+        while self.match(TokenType.STAR):
+            extra_ptrs += 1
+
         name = self.expect(TokenType.IDENTIFIER, "variable name").value
+
+        # Create type for this specific declarator
+        import copy
+        ts = TypeSpec(
+            base=base_type.base,
+            pointer_depth=base_type.pointer_depth + extra_ptrs,
+            is_unsigned=base_type.is_unsigned,
+            is_const=base_type.is_const,
+            is_volatile=base_type.is_volatile,
+            is_static=base_type.is_static,
+            is_extern=base_type.is_extern,
+            struct_def=base_type.struct_def,
+            enum_def=base_type.enum_def,
+        )
 
         # Array declaration
         array_sizes = []
@@ -751,13 +771,29 @@ class Parser:
                 array_sizes.append(self.parse_expr())
             self.expect(TokenType.RBRACKET, "']'")
         if array_sizes:
-            type_spec.array_sizes = array_sizes
+            ts.array_sizes = array_sizes
 
         init = None
         if self.match(TokenType.ASSIGN):
-            init = self.parse_expr()
-        self.expect(TokenType.SEMICOLON, "';'")
-        return VarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+            init = self.parse_assignment()
+
+        return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
+
+    def parse_var_decl_with_type(self, type_spec) -> Stmt:
+        first = self._parse_single_declarator(type_spec)
+
+        # Check for multiple declarators: int x, *p, **pp;
+        if self.match(TokenType.COMMA):
+            decls = [first]
+            while True:
+                decls.append(self._parse_single_declarator(type_spec))
+                if not self.match(TokenType.COMMA):
+                    break
+            self.expect(TokenType.SEMICOLON, "';'")
+            return Block(stmts=decls, line=first.line, col=first.col)
+        else:
+            self.expect(TokenType.SEMICOLON, "';'")
+            return first
 
     # ---- Top-level parsing ----
 
