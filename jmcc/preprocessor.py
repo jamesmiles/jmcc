@@ -128,6 +128,7 @@ typedef __builtin_va_list va_list;
         self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
         self.macros["__linux__"] = Macro("__linux__", body="1")
         self.macros["NULL"] = Macro("NULL", body="((void*)0)")
+        self.macros["EOF"] = Macro("EOF", body="(-1)")
         self.macros["__LP64__"] = Macro("__LP64__", body="1")
 
     def preprocess(self, source: str, filename: str = None) -> str:
