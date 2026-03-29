@@ -258,7 +258,16 @@ typedef void *va_list;
             name = match.group(1)
             params = [p.strip() for p in match.group(2).split(',') if p.strip()]
             body = match.group(3).strip()
-            self.macros[name] = Macro(name, params=params, body=body, is_func=True)
+            # Handle variadic macros: ... as last param
+            is_variadic = False
+            if params and params[-1] == '...':
+                params.pop()
+                is_variadic = True
+            elif params and params[-1].endswith('...'):
+                params[-1] = params[-1][:-3].strip()
+                is_variadic = True
+            self.macros[name] = Macro(name, params=params, body=body,
+                                       is_func=True, is_variadic=is_variadic)
             return
 
         # Object-like macro
@@ -458,11 +467,13 @@ typedef void *va_list;
 
 class Macro:
     def __init__(self, name: str, params: List[str] = None,
-                 body: str = "", is_func: bool = False):
+                 body: str = "", is_func: bool = False,
+                 is_variadic: bool = False):
         self.name = name
         self.params = params or []
         self.body = body
         self.is_func = is_func
+        self.is_variadic = is_variadic
 
     def expand(self, args: List[str] = None) -> str:
         if not self.is_func:
@@ -477,10 +488,17 @@ class Macro:
             if i < len(args):
                 param_map[param] = args[i]
 
+        # Handle __VA_ARGS__ for variadic macros
+        if self.is_variadic:
+            va_args = ', '.join(args[len(self.params):])
+            param_map['__VA_ARGS__'] = va_args
+
         # First: replace all params with placeholders to avoid partial matches
-        # Use markers that can't appear in C code
         markers = {}
-        for i, param in enumerate(self.params):
+        all_params = list(self.params)
+        if self.is_variadic:
+            all_params.append('__VA_ARGS__')
+        for i, param in enumerate(all_params):
             markers[param] = f"\x01PARAM{i}\x02"
 
         # Replace params with markers (whole word)
