@@ -35,11 +35,21 @@ def ensure_docker_image():
         )
 
 
+def _is_amd64():
+    """Check if host is already amd64 (no emulation needed)."""
+    import platform
+    return platform.machine() in ("x86_64", "AMD64")
+
+
 def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
     """Run a command inside the Docker container."""
     full_cmd = [
         "docker", "run", "--rm",
-        "--platform", "linux/amd64",
+    ]
+    # Only specify platform if not already on amd64
+    if not _is_amd64():
+        full_cmd += ["--platform", "linux/amd64"]
+    full_cmd += [
         "--memory=256m",
         "--cpus=1",
         "--network=none",
