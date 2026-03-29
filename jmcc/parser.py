@@ -1,0 +1,707 @@
+"""JMCC Parser - Recursive descent parser for C11."""
+
+from typing import List, Optional, Union
+from .lexer import Token, TokenType
+from .ast_nodes import *
+from .errors import ParseError
+
+
+class Parser:
+    def __init__(self, tokens: List[Token], filename: str = "<stdin>"):
+        self.tokens = tokens
+        self.pos = 0
+        self.filename = filename
+
+    def error(self, msg, token=None):
+        t = token or self.current()
+        raise ParseError(msg, self.filename, t.line, t.col)
+
+    def current(self) -> Token:
+        return self.tokens[self.pos]
+
+    def peek(self, offset=0) -> Token:
+        pos = self.pos + offset
+        if pos < len(self.tokens):
+            return self.tokens[pos]
+        return self.tokens[-1]  # EOF
+
+    def advance(self) -> Token:
+        t = self.tokens[self.pos]
+        if self.pos < len(self.tokens) - 1:
+            self.pos += 1
+        return t
+
+    def expect(self, tt: TokenType, msg: str = None) -> Token:
+        t = self.current()
+        if t.type != tt:
+            expected = msg or tt.name
+            self.error(f"expected {expected}, got '{t.value}' ({t.type.name})")
+        return self.advance()
+
+    def match(self, *types) -> Optional[Token]:
+        if self.current().type in types:
+            return self.advance()
+        return None
+
+    def at(self, *types) -> bool:
+        return self.current().type in types
+
+    # ---- Type parsing ----
+
+    TYPE_SPECIFIERS = {
+        TokenType.VOID, TokenType.CHAR, TokenType.SHORT, TokenType.INT,
+        TokenType.LONG, TokenType.FLOAT, TokenType.DOUBLE, TokenType.SIGNED,
+        TokenType.UNSIGNED, TokenType.BOOL, TokenType.STRUCT, TokenType.UNION,
+        TokenType.ENUM, TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC,
+        TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER,
+    }
+
+    def is_type_start(self) -> bool:
+        return self.current().type in self.TYPE_SPECIFIERS
+
+    def parse_type_spec(self) -> TypeSpec:
+        """Parse a type specifier (e.g., 'unsigned long int')."""
+        is_unsigned = False
+        is_signed = False
+        is_const = False
+        is_volatile = False
+        is_static = False
+        is_extern = False
+        base_parts = []
+
+        # Parse qualifiers and specifiers
+        while True:
+            t = self.current()
+            if t.type == TokenType.UNSIGNED:
+                is_unsigned = True
+                self.advance()
+            elif t.type == TokenType.SIGNED:
+                is_signed = True
+                self.advance()
+            elif t.type == TokenType.CONST:
+                is_const = True
+                self.advance()
+            elif t.type == TokenType.VOLATILE:
+                is_volatile = True
+                self.advance()
+            elif t.type == TokenType.STATIC:
+                is_static = True
+                self.advance()
+            elif t.type == TokenType.EXTERN:
+                is_extern = True
+                self.advance()
+            elif t.type == TokenType.INLINE:
+                self.advance()  # ignore for now
+            elif t.type == TokenType.REGISTER:
+                self.advance()  # ignore for now
+            elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
+                            TokenType.INT, TokenType.LONG, TokenType.FLOAT,
+                            TokenType.DOUBLE, TokenType.BOOL):
+                base_parts.append(t.value)
+                self.advance()
+            else:
+                break
+
+        # Determine base type
+        if not base_parts:
+            if is_unsigned or is_signed:
+                base = "int"
+            else:
+                self.error("expected type specifier")
+        elif base_parts == ["long", "long"]:
+            base = "long long"
+        elif "long" in base_parts and "double" in base_parts:
+            base = "long double"
+        elif len(base_parts) == 1:
+            base = base_parts[0]
+            if base == "_Bool":
+                base = "int"  # treat as int for codegen
+        else:
+            # e.g., "long int", "short int" - take the most specific
+            if "long" in base_parts:
+                base = "long"
+            elif "short" in base_parts:
+                base = "short"
+            else:
+                base = base_parts[-1]
+
+        # Parse pointer levels
+        pointer_depth = 0
+        while self.match(TokenType.STAR):
+            pointer_depth += 1
+            # Skip const/volatile after *
+            while self.match(TokenType.CONST, TokenType.VOLATILE):
+                pass
+
+        return TypeSpec(
+            base=base,
+            pointer_depth=pointer_depth,
+            is_unsigned=is_unsigned,
+            is_const=is_const,
+            is_volatile=is_volatile,
+            is_static=is_static,
+            is_extern=is_extern,
+        )
+
+    # ---- Expression parsing (precedence climbing) ----
+
+    def parse_expr(self) -> Expr:
+        """Parse a full expression (assignment level)."""
+        return self.parse_assignment()
+
+    def parse_assignment(self) -> Expr:
+        left = self.parse_ternary()
+
+        assign_ops = {
+            TokenType.ASSIGN: "=",
+            TokenType.PLUS_ASSIGN: "+=",
+            TokenType.MINUS_ASSIGN: "-=",
+            TokenType.STAR_ASSIGN: "*=",
+            TokenType.SLASH_ASSIGN: "/=",
+            TokenType.PERCENT_ASSIGN: "%=",
+            TokenType.AMP_ASSIGN: "&=",
+            TokenType.PIPE_ASSIGN: "|=",
+            TokenType.CARET_ASSIGN: "^=",
+            TokenType.LSHIFT_ASSIGN: "<<=",
+            TokenType.RSHIFT_ASSIGN: ">>=",
+        }
+
+        if self.current().type in assign_ops:
+            op = assign_ops[self.current().type]
+            self.advance()
+            right = self.parse_assignment()  # right-associative
+            return Assignment(op=op, target=left, value=right, line=left.line, col=left.col)
+
+        return left
+
+    def parse_ternary(self) -> Expr:
+        cond = self.parse_or()
+        if self.match(TokenType.QUESTION):
+            true_expr = self.parse_expr()
+            self.expect(TokenType.COLON, "':'")
+            false_expr = self.parse_ternary()
+            return TernaryOp(condition=cond, true_expr=true_expr, false_expr=false_expr,
+                             line=cond.line, col=cond.col)
+        return cond
+
+    def parse_or(self) -> Expr:
+        left = self.parse_and()
+        while self.match(TokenType.OR):
+            right = self.parse_and()
+            left = BinaryOp(op="||", left=left, right=right, line=left.line, col=left.col)
+        return left
+
+    def parse_and(self) -> Expr:
+        left = self.parse_bitwise_or()
+        while self.match(TokenType.AND):
+            right = self.parse_bitwise_or()
+            left = BinaryOp(op="&&", left=left, right=right, line=left.line, col=left.col)
+        return left
+
+    def parse_bitwise_or(self) -> Expr:
+        left = self.parse_bitwise_xor()
+        while self.match(TokenType.PIPE):
+            right = self.parse_bitwise_xor()
+            left = BinaryOp(op="|", left=left, right=right, line=left.line, col=left.col)
+        return left
+
+    def parse_bitwise_xor(self) -> Expr:
+        left = self.parse_bitwise_and()
+        while self.match(TokenType.CARET):
+            right = self.parse_bitwise_and()
+            left = BinaryOp(op="^", left=left, right=right, line=left.line, col=left.col)
+        return left
+
+    def parse_bitwise_and(self) -> Expr:
+        left = self.parse_equality()
+        while self.match(TokenType.AMP):
+            right = self.parse_equality()
+            left = BinaryOp(op="&", left=left, right=right, line=left.line, col=left.col)
+        return left
+
+    def parse_equality(self) -> Expr:
+        left = self.parse_relational()
+        while True:
+            if self.match(TokenType.EQ):
+                right = self.parse_relational()
+                left = BinaryOp(op="==", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.NE):
+                right = self.parse_relational()
+                left = BinaryOp(op="!=", left=left, right=right, line=left.line, col=left.col)
+            else:
+                break
+        return left
+
+    def parse_relational(self) -> Expr:
+        left = self.parse_shift()
+        while True:
+            if self.match(TokenType.LT):
+                right = self.parse_shift()
+                left = BinaryOp(op="<", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.GT):
+                right = self.parse_shift()
+                left = BinaryOp(op=">", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.LE):
+                right = self.parse_shift()
+                left = BinaryOp(op="<=", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.GE):
+                right = self.parse_shift()
+                left = BinaryOp(op=">=", left=left, right=right, line=left.line, col=left.col)
+            else:
+                break
+        return left
+
+    def parse_shift(self) -> Expr:
+        left = self.parse_additive()
+        while True:
+            if self.match(TokenType.LSHIFT):
+                right = self.parse_additive()
+                left = BinaryOp(op="<<", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.RSHIFT):
+                right = self.parse_additive()
+                left = BinaryOp(op=">>", left=left, right=right, line=left.line, col=left.col)
+            else:
+                break
+        return left
+
+    def parse_additive(self) -> Expr:
+        left = self.parse_multiplicative()
+        while True:
+            if self.match(TokenType.PLUS):
+                right = self.parse_multiplicative()
+                left = BinaryOp(op="+", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.MINUS):
+                right = self.parse_multiplicative()
+                left = BinaryOp(op="-", left=left, right=right, line=left.line, col=left.col)
+            else:
+                break
+        return left
+
+    def parse_multiplicative(self) -> Expr:
+        left = self.parse_unary()
+        while True:
+            if self.match(TokenType.STAR):
+                right = self.parse_unary()
+                left = BinaryOp(op="*", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.SLASH):
+                right = self.parse_unary()
+                left = BinaryOp(op="/", left=left, right=right, line=left.line, col=left.col)
+            elif self.match(TokenType.PERCENT):
+                right = self.parse_unary()
+                left = BinaryOp(op="%", left=left, right=right, line=left.line, col=left.col)
+            else:
+                break
+        return left
+
+    def parse_unary(self) -> Expr:
+        t = self.current()
+
+        # Prefix ++/--
+        if self.match(TokenType.INC):
+            operand = self.parse_unary()
+            return UnaryOp(op="++", operand=operand, prefix=True, line=t.line, col=t.col)
+        if self.match(TokenType.DEC):
+            operand = self.parse_unary()
+            return UnaryOp(op="--", operand=operand, prefix=True, line=t.line, col=t.col)
+
+        # Unary operators
+        if self.match(TokenType.MINUS):
+            operand = self.parse_unary()
+            return UnaryOp(op="-", operand=operand, line=t.line, col=t.col)
+        if self.match(TokenType.PLUS):
+            return self.parse_unary()  # unary + is a no-op
+        if self.match(TokenType.BANG):
+            operand = self.parse_unary()
+            return UnaryOp(op="!", operand=operand, line=t.line, col=t.col)
+        if self.match(TokenType.TILDE):
+            operand = self.parse_unary()
+            return UnaryOp(op="~", operand=operand, line=t.line, col=t.col)
+        if self.match(TokenType.AMP):
+            operand = self.parse_unary()
+            return UnaryOp(op="&", operand=operand, line=t.line, col=t.col)
+        if self.match(TokenType.STAR):
+            operand = self.parse_unary()
+            return UnaryOp(op="*", operand=operand, line=t.line, col=t.col)
+
+        # sizeof
+        if self.at(TokenType.SIZEOF):
+            return self.parse_sizeof()
+
+        # Cast: (type) expr - tricky to distinguish from (expr)
+        if self.at(TokenType.LPAREN) and self.is_cast():
+            self.advance()  # (
+            target_type = self.parse_type_spec()
+            self.expect(TokenType.RPAREN, "')'")
+            operand = self.parse_unary()
+            return CastExpr(target_type=target_type, operand=operand, line=t.line, col=t.col)
+
+        return self.parse_postfix()
+
+    def is_cast(self) -> bool:
+        """Look ahead to determine if (... is a cast or grouping."""
+        # Save position
+        saved = self.pos
+        self.advance()  # skip (
+        result = self.is_type_start()
+        self.pos = saved
+        return result
+
+    def parse_sizeof(self) -> Expr:
+        t = self.advance()  # sizeof
+        if self.at(TokenType.LPAREN) and self.is_cast():
+            self.advance()  # (
+            type_spec = self.parse_type_spec()
+            self.expect(TokenType.RPAREN, "')'")
+            return SizeofExpr(operand=type_spec, is_type=True, line=t.line, col=t.col)
+        else:
+            operand = self.parse_unary()
+            return SizeofExpr(operand=operand, is_type=False, line=t.line, col=t.col)
+
+    def parse_postfix(self) -> Expr:
+        expr = self.parse_primary()
+
+        while True:
+            if self.match(TokenType.LBRACKET):
+                index = self.parse_expr()
+                self.expect(TokenType.RBRACKET, "']'")
+                expr = ArrayAccess(array=expr, index=index, line=expr.line, col=expr.col)
+            elif self.match(TokenType.LPAREN):
+                # Function call
+                args = []
+                if not self.at(TokenType.RPAREN):
+                    args.append(self.parse_assignment())
+                    while self.match(TokenType.COMMA):
+                        args.append(self.parse_assignment())
+                self.expect(TokenType.RPAREN, "')'")
+                expr = FuncCall(name=expr, args=args, line=expr.line, col=expr.col)
+            elif self.match(TokenType.DOT):
+                member = self.expect(TokenType.IDENTIFIER, "member name").value
+                expr = MemberAccess(obj=expr, member=member, arrow=False, line=expr.line, col=expr.col)
+            elif self.match(TokenType.ARROW):
+                member = self.expect(TokenType.IDENTIFIER, "member name").value
+                expr = MemberAccess(obj=expr, member=member, arrow=True, line=expr.line, col=expr.col)
+            elif self.match(TokenType.INC):
+                expr = UnaryOp(op="++", operand=expr, prefix=False, line=expr.line, col=expr.col)
+            elif self.match(TokenType.DEC):
+                expr = UnaryOp(op="--", operand=expr, prefix=False, line=expr.line, col=expr.col)
+            else:
+                break
+
+        return expr
+
+    def parse_primary(self) -> Expr:
+        t = self.current()
+
+        if self.match(TokenType.INT_LITERAL):
+            val_str = t.value.rstrip('uUlL')
+            if val_str.startswith('0x') or val_str.startswith('0X'):
+                val = int(val_str, 16)
+            elif val_str.startswith('0') and len(val_str) > 1:
+                val = int(val_str, 8)
+            else:
+                val = int(val_str)
+            return IntLiteral(value=val, line=t.line, col=t.col)
+
+        if self.match(TokenType.FLOAT_LITERAL):
+            return FloatLiteral(value=float(t.value.rstrip('fFlL')), line=t.line, col=t.col)
+
+        if self.match(TokenType.CHAR_LITERAL):
+            return IntLiteral(value=ord(t.value), line=t.line, col=t.col)
+
+        if self.match(TokenType.STRING_LITERAL):
+            # Handle string concatenation
+            value = t.value
+            while self.at(TokenType.STRING_LITERAL):
+                value += self.advance().value
+            return StringLiteral(value=value, line=t.line, col=t.col)
+
+        if self.match(TokenType.IDENTIFIER):
+            return Identifier(name=t.value, line=t.line, col=t.col)
+
+        if self.match(TokenType.LPAREN):
+            expr = self.parse_expr()
+            self.expect(TokenType.RPAREN, "')'")
+            return expr
+
+        self.error(f"unexpected token '{t.value}'")
+
+    # ---- Statement parsing ----
+
+    def parse_stmt(self) -> Stmt:
+        t = self.current()
+
+        if self.at(TokenType.LBRACE):
+            return self.parse_block()
+
+        if self.at(TokenType.RETURN):
+            return self.parse_return()
+
+        if self.at(TokenType.IF):
+            return self.parse_if()
+
+        if self.at(TokenType.WHILE):
+            return self.parse_while()
+
+        if self.at(TokenType.DO):
+            return self.parse_do_while()
+
+        if self.at(TokenType.FOR):
+            return self.parse_for()
+
+        if self.at(TokenType.BREAK):
+            self.advance()
+            self.expect(TokenType.SEMICOLON, "';'")
+            return BreakStmt(line=t.line, col=t.col)
+
+        if self.at(TokenType.CONTINUE):
+            self.advance()
+            self.expect(TokenType.SEMICOLON, "';'")
+            return ContinueStmt(line=t.line, col=t.col)
+
+        if self.at(TokenType.GOTO):
+            self.advance()
+            label = self.expect(TokenType.IDENTIFIER, "label").value
+            self.expect(TokenType.SEMICOLON, "';'")
+            return GotoStmt(label=label, line=t.line, col=t.col)
+
+        if self.at(TokenType.SWITCH):
+            return self.parse_switch()
+
+        if self.at(TokenType.CASE):
+            return self.parse_case()
+
+        if self.at(TokenType.DEFAULT):
+            return self.parse_default()
+
+        # Label: identifier followed by ':'
+        if (self.at(TokenType.IDENTIFIER) and
+                self.peek(1).type == TokenType.COLON):
+            label = self.advance().value
+            self.advance()  # :
+            stmt = self.parse_stmt()
+            return LabelStmt(label=label, stmt=stmt, line=t.line, col=t.col)
+
+        # Empty statement
+        if self.match(TokenType.SEMICOLON):
+            return NullStmt(line=t.line, col=t.col)
+
+        # Variable declaration
+        if self.is_type_start():
+            return self.parse_var_decl()
+
+        # Expression statement
+        expr = self.parse_expr()
+        self.expect(TokenType.SEMICOLON, "';'")
+        return ExprStmt(expr=expr, line=t.line, col=t.col)
+
+    def parse_block(self) -> Block:
+        t = self.expect(TokenType.LBRACE, "'{'")
+        stmts = []
+        while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
+            stmts.append(self.parse_stmt())
+        self.expect(TokenType.RBRACE, "'}'")
+        return Block(stmts=stmts, line=t.line, col=t.col)
+
+    def parse_return(self) -> ReturnStmt:
+        t = self.advance()  # return
+        if self.match(TokenType.SEMICOLON):
+            return ReturnStmt(value=None, line=t.line, col=t.col)
+        value = self.parse_expr()
+        self.expect(TokenType.SEMICOLON, "';'")
+        return ReturnStmt(value=value, line=t.line, col=t.col)
+
+    def parse_if(self) -> IfStmt:
+        t = self.advance()  # if
+        self.expect(TokenType.LPAREN, "'('")
+        condition = self.parse_expr()
+        self.expect(TokenType.RPAREN, "')'")
+        then_body = self.parse_stmt()
+        else_body = None
+        if self.match(TokenType.ELSE):
+            else_body = self.parse_stmt()
+        return IfStmt(condition=condition, then_body=then_body, else_body=else_body,
+                       line=t.line, col=t.col)
+
+    def parse_while(self) -> WhileStmt:
+        t = self.advance()  # while
+        self.expect(TokenType.LPAREN, "'('")
+        condition = self.parse_expr()
+        self.expect(TokenType.RPAREN, "')'")
+        body = self.parse_stmt()
+        return WhileStmt(condition=condition, body=body, line=t.line, col=t.col)
+
+    def parse_do_while(self) -> DoWhileStmt:
+        t = self.advance()  # do
+        body = self.parse_stmt()
+        self.expect(TokenType.WHILE, "'while'")
+        self.expect(TokenType.LPAREN, "'('")
+        condition = self.parse_expr()
+        self.expect(TokenType.RPAREN, "')'")
+        self.expect(TokenType.SEMICOLON, "';'")
+        return DoWhileStmt(condition=condition, body=body, line=t.line, col=t.col)
+
+    def parse_for(self) -> ForStmt:
+        t = self.advance()  # for
+        self.expect(TokenType.LPAREN, "'('")
+
+        # Init
+        if self.match(TokenType.SEMICOLON):
+            init = None
+        elif self.is_type_start():
+            init = self.parse_var_decl()
+        else:
+            expr = self.parse_expr()
+            self.expect(TokenType.SEMICOLON, "';'")
+            init = ExprStmt(expr=expr, line=expr.line, col=expr.col)
+
+        # Condition
+        if self.at(TokenType.SEMICOLON):
+            condition = None
+        else:
+            condition = self.parse_expr()
+        self.expect(TokenType.SEMICOLON, "';'")
+
+        # Update
+        if self.at(TokenType.RPAREN):
+            update = None
+        else:
+            update = self.parse_expr()
+        self.expect(TokenType.RPAREN, "')'")
+
+        body = self.parse_stmt()
+        return ForStmt(init=init, condition=condition, update=update, body=body,
+                        line=t.line, col=t.col)
+
+    def parse_switch(self) -> SwitchStmt:
+        t = self.advance()  # switch
+        self.expect(TokenType.LPAREN, "'('")
+        expr = self.parse_expr()
+        self.expect(TokenType.RPAREN, "')'")
+        body = self.parse_stmt()
+        return SwitchStmt(expr=expr, body=body, line=t.line, col=t.col)
+
+    def parse_case(self) -> CaseStmt:
+        t = self.advance()  # case
+        value = self.parse_expr()
+        self.expect(TokenType.COLON, "':'")
+        # Parse following statements until next case/default/}
+        stmts = []
+        while not self.at(TokenType.CASE, TokenType.DEFAULT, TokenType.RBRACE, TokenType.EOF):
+            stmts.append(self.parse_stmt())
+        block = Block(stmts=stmts, line=t.line, col=t.col) if stmts else NullStmt(line=t.line, col=t.col)
+        return CaseStmt(value=value, stmt=block, line=t.line, col=t.col)
+
+    def parse_default(self) -> CaseStmt:
+        t = self.advance()  # default
+        self.expect(TokenType.COLON, "':'")
+        stmts = []
+        while not self.at(TokenType.CASE, TokenType.DEFAULT, TokenType.RBRACE, TokenType.EOF):
+            stmts.append(self.parse_stmt())
+        block = Block(stmts=stmts, line=t.line, col=t.col) if stmts else NullStmt(line=t.line, col=t.col)
+        return CaseStmt(value=None, stmt=block, is_default=True, line=t.line, col=t.col)
+
+    def parse_var_decl(self) -> VarDecl:
+        t = self.current()
+        type_spec = self.parse_type_spec()
+        name = self.expect(TokenType.IDENTIFIER, "variable name").value
+
+        # Array declaration
+        array_sizes = []
+        while self.match(TokenType.LBRACKET):
+            if self.at(TokenType.RBRACKET):
+                array_sizes.append(None)
+            else:
+                array_sizes.append(self.parse_expr())
+            self.expect(TokenType.RBRACKET, "']'")
+        if array_sizes:
+            type_spec.array_sizes = array_sizes
+
+        init = None
+        if self.match(TokenType.ASSIGN):
+            init = self.parse_expr()
+        self.expect(TokenType.SEMICOLON, "';'")
+        return VarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+
+    # ---- Top-level parsing ----
+
+    def parse_program(self) -> Program:
+        decls = []
+        while not self.at(TokenType.EOF):
+            decl = self.parse_top_level()
+            if decl:
+                decls.append(decl)
+        return Program(declarations=decls)
+
+    def parse_top_level(self) -> Union[FuncDecl, GlobalVarDecl, None]:
+        t = self.current()
+
+        if not self.is_type_start():
+            self.error(f"expected declaration, got '{t.value}'")
+
+        type_spec = self.parse_type_spec()
+        name = self.expect(TokenType.IDENTIFIER, "identifier").value
+
+        # Function declaration/definition
+        if self.at(TokenType.LPAREN):
+            return self.parse_func_decl(type_spec, name, t)
+
+        # Array global
+        array_sizes = []
+        while self.match(TokenType.LBRACKET):
+            if self.at(TokenType.RBRACKET):
+                array_sizes.append(None)
+            else:
+                array_sizes.append(self.parse_expr())
+            self.expect(TokenType.RBRACKET, "']'")
+        if array_sizes:
+            type_spec.array_sizes = array_sizes
+
+        # Global variable
+        init = None
+        if self.match(TokenType.ASSIGN):
+            init = self.parse_expr()
+        self.expect(TokenType.SEMICOLON, "';'")
+        return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+
+    def parse_func_decl(self, return_type: TypeSpec, name: str, start_token: Token) -> FuncDecl:
+        self.expect(TokenType.LPAREN, "'('")
+        params = []
+        is_variadic = False
+
+        if not self.at(TokenType.RPAREN):
+            # Check for (void) - no params
+            if self.at(TokenType.VOID) and self.peek(1).type == TokenType.RPAREN:
+                self.advance()  # skip void
+            else:
+                params.append(self.parse_param())
+                while self.match(TokenType.COMMA):
+                    if self.match(TokenType.ELLIPSIS):
+                        is_variadic = True
+                        break
+                    params.append(self.parse_param())
+
+        self.expect(TokenType.RPAREN, "')'")
+
+        # Function body or declaration
+        if self.at(TokenType.LBRACE):
+            body = self.parse_block()
+        else:
+            self.expect(TokenType.SEMICOLON, "';'")
+            body = None
+
+        return FuncDecl(
+            return_type=return_type, name=name, params=params,
+            body=body, is_variadic=is_variadic,
+            line=start_token.line, col=start_token.col,
+        )
+
+    def parse_param(self) -> Param:
+        type_spec = self.parse_type_spec()
+        name = ""
+        if self.at(TokenType.IDENTIFIER):
+            name = self.advance().value
+        # Array parameter: int a[]
+        if self.match(TokenType.LBRACKET):
+            self.expect(TokenType.RBRACKET, "']'")
+            type_spec.pointer_depth += 1  # arrays decay to pointers in params
+        return Param(type_spec=type_spec, name=name)
