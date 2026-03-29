@@ -116,7 +116,11 @@ class CodeGen:
                         first = decl.type_spec.array_sizes[0]
                         if isinstance(first, IntLiteral):
                             size *= first.value
-                    self.emit(f"    .align {max(size, 4)}")
+                    # Alignment must be a power of 2, based on element type
+                    align = min(decl.type_spec.size_bytes(), 8)
+                    if align < 4:
+                        align = 4
+                    self.emit(f"    .align {align}")
                     self.label(name)
                     self.emit(f"    .zero {size}")
 
