@@ -24,6 +24,7 @@ class CodeGen:
         # Current function state
         self.locals: Dict[str, Tuple[int, TypeSpec]] = {}  # name -> (stack_offset, type)
         self.params: Dict[str, Tuple[int, TypeSpec]] = {}
+        self.static_locals: Dict[str, str] = {}  # local_name -> mangled_global_name
         self.stack_offset = 0
         self.current_func: Optional[FuncDecl] = None
 
@@ -130,6 +131,7 @@ class CodeGen:
         self.current_func = func
         self.locals = {}
         self.params = {}
+        self.static_locals = {}
         self.stack_offset = 0
 
         self.emit("")
@@ -230,6 +232,14 @@ class CodeGen:
 
     def gen_var_decl(self, decl: VarDecl):
         size = decl.type_spec.size_bytes()
+
+        # Static local variable: store as a global with mangled name
+        if decl.type_spec.is_static and self.current_func:
+            mangled = f"__static_{self.current_func.name}_{decl.name}"
+            gdecl = GlobalVarDecl(type_spec=decl.type_spec, name=mangled, init=decl.init)
+            self.global_vars[mangled] = gdecl
+            self.static_locals[decl.name] = mangled
+            return
 
         if decl.type_spec.is_array() and decl.type_spec.array_sizes:
             first = decl.type_spec.array_sizes[0]
@@ -457,6 +467,10 @@ class CodeGen:
 
     def get_var_location(self, name: str) -> Tuple[str, TypeSpec]:
         """Return (asm_location, type) for a variable."""
+        if name in self.static_locals:
+            mangled = self.static_locals[name]
+            decl = self.global_vars[mangled]
+            return f"{mangled}(%rip)", decl.type_spec
         if name in self.locals:
             offset, ts = self.locals[name]
             return f"{offset}(%rbp)", ts
@@ -491,7 +505,10 @@ class CodeGen:
             loc, ts = self.get_var_location(expr.name)
             if loc is None:
                 self.error(f"undeclared variable '{expr.name}'", expr.line, expr.col)
-            if expr.name in self.locals or expr.name in self.params:
+            if expr.name in self.static_locals:
+                mangled = self.static_locals[expr.name]
+                self.emit(f"    leaq {mangled}(%rip), %rax")
+            elif expr.name in self.locals or expr.name in self.params:
                 offset = (self.locals.get(expr.name) or self.params.get(expr.name))[0]
                 self.emit(f"    leaq {offset}(%rbp), %rax")
             else:
@@ -557,15 +574,34 @@ class CodeGen:
         """Generate array access (load value)."""
         self.gen_array_addr(expr)
 
-        # Determine element size for load
+        # Determine element size for load (based on pointed-to/element type)
         elem_size = 4
         if isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
-                if ts.is_pointer() or (ts.is_array() and ts.pointer_depth > 0):
+                # For pointer or array, element type is one level of indirection less
+                if ts.is_pointer() and ts.pointer_depth == 1:
+                    # Pointer to base type: element is the base type
+                    if ts.base == "char":
+                        elem_size = 1
+                    elif ts.base in ("long", "long long") or ts.struct_def:
+                        elem_size = 8
+                    else:
+                        elem_size = 4
+                elif ts.is_pointer() and ts.pointer_depth > 1:
+                    # Pointer to pointer: element is a pointer (8 bytes)
                     elem_size = 8
-                elif ts.base == "char":
-                    elem_size = 1
+                elif ts.is_array():
+                    if ts.pointer_depth > 0:
+                        elem_size = 8
+                    elif ts.base == "char":
+                        elem_size = 1
+                    elif ts.struct_def:
+                        elem_size = ts.struct_def.size_bytes()
+                    elif ts.base in ("long", "long long"):
+                        elem_size = 8
+                    else:
+                        elem_size = 4
 
         if elem_size == 1:
             self.emit("    movsbl (%rax), %eax")

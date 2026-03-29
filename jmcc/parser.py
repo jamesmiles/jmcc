@@ -15,6 +15,7 @@ class Parser:
         self.enum_defs: dict = {}   # name -> EnumDef
         self.enum_values: dict = {} # enumerator name -> int value
         self.typedefs: dict = {}    # typedef name -> TypeSpec
+        self._in_func_args = False
 
     def error(self, msg, token=None):
         t = token or self.current()
@@ -256,7 +257,7 @@ class Parser:
     # ---- Expression parsing (precedence climbing) ----
 
     def parse_expr(self) -> Expr:
-        """Parse a full expression (assignment level)."""
+        """Parse a full expression (comma operator level)."""
         return self.parse_assignment()
 
     def parse_assignment(self) -> Expr:
@@ -533,6 +534,12 @@ class Parser:
 
         if self.match(TokenType.LPAREN):
             expr = self.parse_expr()
+            # Handle comma operator inside parentheses
+            if self.at(TokenType.COMMA):
+                exprs = [expr]
+                while self.match(TokenType.COMMA):
+                    exprs.append(self.parse_expr())
+                expr = CommaExpr(exprs=exprs, line=exprs[0].line, col=exprs[0].col)
             self.expect(TokenType.RPAREN, "')'")
             return expr
 
