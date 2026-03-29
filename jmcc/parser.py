@@ -848,7 +848,10 @@ class Parser:
         while not self.at(TokenType.EOF):
             decl = self.parse_top_level()
             if decl:
-                decls.append(decl)
+                if isinstance(decl, list):
+                    decls.extend(decl)
+                else:
+                    decls.append(decl)
         return Program(declarations=decls)
 
     def parse_top_level(self) -> Union[FuncDecl, GlobalVarDecl, StructDecl, EnumDecl, TypedefDecl, None]:
@@ -920,15 +923,38 @@ class Parser:
         if array_sizes:
             type_spec.array_sizes = array_sizes
 
-        # Global variable
+        # Global variable (with possible comma-separated additional declarations)
         init = None
         if self.match(TokenType.ASSIGN):
             if self.at(TokenType.LBRACE):
                 init = self.parse_init_list()
             else:
                 init = self.parse_expr()
-        self.expect(TokenType.SEMICOLON, "';'")
-        return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+
+        first = GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
+
+        # Handle comma-separated global declarations: int a, b = 3, c;
+        if self.match(TokenType.COMMA):
+            extra = [first]
+            while True:
+                # Parse additional declarators
+                extra_ptrs = 0
+                while self.match(TokenType.STAR):
+                    extra_ptrs += 1
+                ename = self.expect(TokenType.IDENTIFIER, "identifier").value
+                ets = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth + extra_ptrs,
+                               is_unsigned=type_spec.is_unsigned, struct_def=type_spec.struct_def)
+                einit = None
+                if self.match(TokenType.ASSIGN):
+                    einit = self.parse_expr()
+                extra.append(GlobalVarDecl(type_spec=ets, name=ename, init=einit, line=t.line, col=t.col))
+                if not self.match(TokenType.COMMA):
+                    break
+            self.expect(TokenType.SEMICOLON, "';'")
+            return extra  # return list
+        else:
+            self.expect(TokenType.SEMICOLON, "';'")
+            return first
 
     def parse_init_list(self) -> InitList:
         """Parse { expr, expr, ... } or { .field = expr, ... }"""
