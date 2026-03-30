@@ -1106,6 +1106,11 @@ class CodeGen:
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
                                        is_unsigned=ts.is_unsigned)
                     elem_size = elem_ts.size_bytes()
+                    # Pointer to array: (*p)[N] — element stride includes array size
+                    if ts.is_pointer() and ts.array_sizes:
+                        for dim in ts.array_sizes:
+                            if isinstance(dim, IntLiteral):
+                                elem_size *= dim.value
 
         # Fallback: use get_expr_type for element size
         if elem_size == 4 and not isinstance(expr.array, Identifier):
@@ -1221,6 +1226,11 @@ class CodeGen:
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
                                     array_sizes=arr_type.array_sizes[1:])
+                elif arr_type.is_pointer() and arr_type.array_sizes:
+                    # Pointer to array: (*p)[4] indexed gives char[4]
+                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
+                                    struct_def=arr_type.struct_def,
+                                    array_sizes=arr_type.array_sizes)
                 elif arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def)

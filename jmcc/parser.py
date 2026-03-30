@@ -887,13 +887,17 @@ class Parser:
 
             if self.at(TokenType.LBRACKET):
                 # Pointer to array: (*p)[4]
-                # Treat as a regular pointer for codegen
+                # Store array size so element stride is computed correctly
+                arr_sizes = []
                 while self.match(TokenType.LBRACKET):
                     if not self.at(TokenType.RBRACKET):
-                        self.parse_expr()  # skip size
+                        arr_sizes.append(self.parse_expr())
+                    else:
+                        arr_sizes.append(None)
                     self.expect(TokenType.RBRACKET, "']'")
                 ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
-                              is_unsigned=base_type.is_unsigned)
+                              is_unsigned=base_type.is_unsigned,
+                              array_sizes=arr_sizes if arr_sizes else None)
             elif self.at(TokenType.LPAREN):
                 # Function pointer: (*fp)(params)
                 self.advance()  # (
