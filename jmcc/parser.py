@@ -1210,12 +1210,21 @@ class Parser:
             if self.at(TokenType.DOT):
                 self.advance()
                 designator = self.expect(TokenType.IDENTIFIER, "field name").value
+                # Chained designator: .a.b = val (skip extra .field parts)
+                while self.at(TokenType.DOT):
+                    self.advance()
+                    self.expect(TokenType.IDENTIFIER, "field name")
                 self.expect(TokenType.ASSIGN, "'='")
             elif self.at(TokenType.LBRACKET):
                 self.advance()
                 idx_expr = self.parse_expr()
                 if isinstance(idx_expr, IntLiteral):
                     designator_index = idx_expr.value
+                # Range designator (GCC extension): [start ... end]
+                if self.match(TokenType.ELLIPSIS):
+                    end_expr = self.parse_expr()
+                    # Use the start index; range will init same value for all
+                    # (simplified: we just use start index)
                 self.expect(TokenType.RBRACKET, "']'")
                 self.expect(TokenType.ASSIGN, "'='")
 
