@@ -340,9 +340,9 @@ typedef void FILE;
 
         return ""
 
-    def _expand_macros(self, line: str) -> str:
+    def _expand_macros(self, line: str, depth=0) -> str:
         """Expand macros in a line of text."""
-        if not self.macros:
+        if not self.macros or depth > 20:
             return line
 
         # Don't expand inside string literals or comments
@@ -432,7 +432,11 @@ typedef void FILE;
             result.append(ch)
             i += 1
 
-        return ''.join(result)
+        final = ''.join(result)
+        # Re-scan: if expansion changed the line and there are still macros, re-expand
+        if final != line and depth < 20:
+            return self._expand_macros(final, depth + 1)
+        return final
 
     def _parse_macro_args(self, line: str, start: int) -> Tuple[List[str], int]:
         """Parse macro arguments starting from '('. Returns (args, end_pos)."""
