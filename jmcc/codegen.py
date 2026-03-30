@@ -1073,6 +1073,10 @@ class CodeGen:
             return ts
         if isinstance(expr, IntLiteral):
             return TypeSpec(base="int")
+        if isinstance(expr, FloatLiteral):
+            return TypeSpec(base="double")
+        if isinstance(expr, UnaryOp) and expr.op == "-":
+            return self.get_expr_type(expr.operand)
         if isinstance(expr, UnaryOp) and expr.op == "*":
             inner = self.get_expr_type(expr.operand)
             if inner and inner.is_pointer():
@@ -1415,7 +1419,21 @@ class CodeGen:
 
     def gen_assignment(self, expr: Assignment):
         if expr.op == "=":
+            target_type = self.get_expr_type(expr.target)
+            value_type = self.get_expr_type(expr.value)
+            target_is_float = target_type and target_type.base in ("float", "double", "long double") and not target_type.is_pointer()
+            value_is_float = (value_type and value_type.base in ("float", "double", "long double") and not value_type.is_pointer()) or isinstance(expr.value, FloatLiteral)
+
             self.gen_expr(expr.value)
+
+            # Int-to-float or float-to-int conversion
+            if target_is_float and not value_is_float:
+                self.emit("    cvtsi2sd %eax, %xmm0")
+                self.emit("    movq %xmm0, %rax")
+            elif not target_is_float and value_is_float:
+                self.emit("    movq %rax, %xmm0")
+                self.emit("    cvttsd2si %xmm0, %eax")
+
             self.emit("    pushq %rax")
             self.gen_lvalue_addr(expr.target)
             self.emit("    movq %rax, %rcx")
@@ -1423,7 +1441,6 @@ class CodeGen:
 
             # Determine store size
             store_size = 4
-            target_type = self.get_expr_type(expr.target)
             if target_type:
                 if target_type.is_pointer() or target_type.size_bytes() == 8:
                     store_size = 8
