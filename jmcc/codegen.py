@@ -554,8 +554,9 @@ class CodeGen:
         elif isinstance(stmt, SwitchStmt):
             self.gen_switch(stmt)
         elif isinstance(stmt, CaseStmt):
-            # handled by gen_switch
-            pass
+            if hasattr(stmt, '_label'):
+                self.label(stmt._label)
+            self.gen_stmt(stmt.stmt)
         elif isinstance(stmt, GotoStmt):
             fname = self.current_func.name if self.current_func else ""
             self.emit(f"    jmp .Luser_{fname}_{stmt.label}")
@@ -821,14 +822,40 @@ class CodeGen:
         cases = []
         default_label = None
 
-        for s in stmt.body.stmts:
-            if isinstance(s, CaseStmt):
+        def collect_cases(node):
+            """Recursively find all CaseStmt nodes in the switch body."""
+            nonlocal default_label
+            if isinstance(node, CaseStmt):
                 lbl = self.new_label("case")
-                if s.is_default:
+                if node.is_default:
                     default_label = lbl
                 else:
-                    cases.append((s, lbl))
-                s._label = lbl
+                    cases.append((node, lbl))
+                node._label = lbl
+                if node.stmt:
+                    collect_cases(node.stmt)
+            elif isinstance(node, Block):
+                for s in node.stmts:
+                    collect_cases(s)
+            elif isinstance(node, DoWhileStmt):
+                if node.body:
+                    collect_cases(node.body)
+            elif isinstance(node, WhileStmt):
+                if node.body:
+                    collect_cases(node.body)
+            elif isinstance(node, ForStmt):
+                if node.body:
+                    collect_cases(node.body)
+            elif isinstance(node, IfStmt):
+                if node.then_body:
+                    collect_cases(node.then_body)
+                if node.else_body:
+                    collect_cases(node.else_body)
+            elif isinstance(node, LabelStmt):
+                if node.stmt:
+                    collect_cases(node.stmt)
+
+        collect_cases(stmt.body)
 
         # Generate comparison jumps
         for case_stmt, lbl in cases:
@@ -841,13 +868,8 @@ class CodeGen:
         else:
             self.emit(f"    jmp {end_label}")
 
-        # Generate case bodies
-        for s in stmt.body.stmts:
-            if isinstance(s, CaseStmt) and hasattr(s, '_label'):
-                self.label(s._label)
-                self.gen_stmt(s.stmt)
-            else:
-                self.gen_stmt(s)
+        # Generate switch body (case labels emitted by gen_stmt(CaseStmt))
+        self.gen_stmt(stmt.body)
 
         self.label(end_label)
         self.break_labels.pop()
