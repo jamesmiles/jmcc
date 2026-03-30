@@ -818,24 +818,33 @@ class Parser:
         while self.match(TokenType.STAR):
             extra_ptrs += 1
 
-        # Function pointer: (*name)(args) or just name
+        # Function pointer or pointer-to-array: (*name)(args) or (*name)[size]
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
-            # Function pointer declaration: type (*name)(params)
             self.advance()  # (
             self.advance()  # *
             name = self.expect(TokenType.IDENTIFIER, "variable name").value
             self.expect(TokenType.RPAREN, "')'")
-            # Skip param list
-            self.expect(TokenType.LPAREN, "'('")
-            depth = 1
-            while depth > 0 and not self.at(TokenType.EOF):
-                if self.match(TokenType.LPAREN):
-                    depth += 1
-                elif self.match(TokenType.RPAREN):
-                    depth -= 1
-                else:
-                    self.advance()
-            ts = TypeSpec(base="void", pointer_depth=1)  # treat as void pointer for now
+
+            if self.at(TokenType.LBRACKET):
+                # Pointer to array: (*p)[4]
+                # Treat as a regular pointer for codegen
+                while self.match(TokenType.LBRACKET):
+                    if not self.at(TokenType.RBRACKET):
+                        self.parse_expr()  # skip size
+                    self.expect(TokenType.RBRACKET, "']'")
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
+                              is_unsigned=base_type.is_unsigned)
+            elif self.at(TokenType.LPAREN):
+                # Function pointer: (*fp)(params)
+                self.advance()  # (
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+                ts = TypeSpec(base="void", pointer_depth=1)
+            else:
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1)
             init = None
             if self.match(TokenType.ASSIGN):
                 init = self.parse_assignment()

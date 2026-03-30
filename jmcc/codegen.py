@@ -594,7 +594,15 @@ class CodeGen:
                 elem_size = size
                 if decl.type_spec.is_struct():
                     elem_size = decl.type_spec.struct_def.size_bytes()
-                total = elem_size * first.value
+                total = elem_size
+                # Multiply all dimensions for multi-dim arrays
+                for dim in decl.type_spec.array_sizes:
+                    if isinstance(dim, IntLiteral):
+                        total *= dim.value
+                    else:
+                        cv = self._try_eval_const(dim) if dim else None
+                        if cv:
+                            total *= cv
             else:
                 self.error("variable-length arrays not yet supported", decl.line, decl.col)
                 return
@@ -1004,6 +1012,9 @@ class CodeGen:
             else:
                 # Pointer: load pointer value
                 self.gen_expr(expr.array)
+        elif isinstance(expr.array, ArrayAccess):
+            # Nested array access (multi-dim): get address, don't dereference
+            self.gen_array_addr(expr.array)
         else:
             self.gen_expr(expr.array)
 
@@ -1015,7 +1026,25 @@ class CodeGen:
 
         # Element size (default to 4 for int, 8 for pointer, 1 for char)
         elem_size = 4  # default
-        if isinstance(expr.array, Identifier):
+        if isinstance(expr.array, ArrayAccess):
+            # Nested array access (e.g., arr[1][3]) — get base element size
+            # Walk up to the root Identifier to find the base type
+            root = expr.array
+            depth = 1
+            while isinstance(root, ArrayAccess):
+                root = root.array
+                depth += 1
+            if isinstance(root, Identifier):
+                _, ts = self.get_var_location(root.name)
+                if ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) > depth:
+                    # Element size is product of remaining dimensions * base size
+                    elem_size = ts.size_bytes()
+                    for dim in ts.array_sizes[depth:]:
+                        if isinstance(dim, IntLiteral):
+                            elem_size *= dim.value
+                elif ts:
+                    elem_size = ts.size_bytes()  # base element size
+        elif isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
                 if ts.is_array() and ts.struct_def:
@@ -1025,6 +1054,11 @@ class CodeGen:
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth,
                                        is_unsigned=ts.is_unsigned)
                     elem_size = elem_ts.size_bytes()
+                    # Multi-dim array: element size includes inner dimensions
+                    if ts.array_sizes and len(ts.array_sizes) > 1:
+                        for dim in ts.array_sizes[1:]:
+                            if isinstance(dim, IntLiteral):
+                                elem_size *= dim.value
                 else:
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
                                        is_unsigned=ts.is_unsigned)
