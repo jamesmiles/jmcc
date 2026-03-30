@@ -1763,7 +1763,11 @@ class CodeGen:
         # For indirect calls, save function pointer
         if is_indirect or is_fptr:
             if is_indirect:
-                self.gen_expr(expr.name)
+                # Strip * dereference on function pointer calls: (*fp)() == fp()
+                call_target = expr.name
+                while isinstance(call_target, UnaryOp) and call_target.op == "*":
+                    call_target = call_target.operand
+                self.gen_expr(call_target)
             else:
                 self.gen_load_var(func_name, expr.line, expr.col)
             self.emit("    pushq %rax")
