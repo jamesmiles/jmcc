@@ -1009,26 +1009,69 @@ class Parser:
 
         type_spec = self.parse_type_spec()
 
-        # Global function pointer: int (*name)(params) = init;
+        # Global function pointer or function returning function pointer
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
             self.advance()  # (
             self.advance()  # *
+            # Skip qualifiers
+            while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                self.advance()
             name = self.expect(TokenType.IDENTIFIER, "variable name").value
-            self.expect(TokenType.RPAREN, "')'")
-            # Skip param list
-            if self.match(TokenType.LPAREN):
-                depth = 1
-                while depth > 0 and not self.at(TokenType.EOF):
-                    if self.match(TokenType.LPAREN): depth += 1
-                    elif self.match(TokenType.RPAREN): depth -= 1
-                    else: self.advance()
-            # Treat as void* variable
-            fptr_type = TypeSpec(base="void", pointer_depth=1)
-            init = None
-            if self.match(TokenType.ASSIGN):
-                init = self.parse_expr()
-            self.expect(TokenType.SEMICOLON, "';'")
-            return GlobalVarDecl(type_spec=fptr_type, name=name, init=init, line=t.line, col=t.col)
+
+            if self.at(TokenType.LPAREN):
+                # Function returning function pointer: int (*f1(params))(ret_params)
+                self.advance()  # ( for f1's params
+                params = []
+                is_variadic = False
+                if not self.at(TokenType.RPAREN):
+                    if self.at(TokenType.VOID) and self.peek(1).type == TokenType.RPAREN:
+                        self.advance()
+                    else:
+                        params.append(self.parse_param())
+                        while self.match(TokenType.COMMA):
+                            if self.match(TokenType.ELLIPSIS):
+                                is_variadic = True
+                                break
+                            params.append(self.parse_param())
+                self.expect(TokenType.RPAREN, "')'")  # close f1's params
+                self.expect(TokenType.RPAREN, "')'")  # close outer (*...)
+                # Skip return function's param list
+                if self.match(TokenType.LPAREN):
+                    depth = 1
+                    while depth > 0 and not self.at(TokenType.EOF):
+                        if self.match(TokenType.LPAREN): depth += 1
+                        elif self.match(TokenType.RPAREN): depth -= 1
+                        else: self.advance()
+                ret_type = TypeSpec(base=type_spec.base,
+                    pointer_depth=type_spec.pointer_depth + 1,
+                    struct_def=type_spec.struct_def)
+                # Function body or forward declaration
+                body = None
+                if self.at(TokenType.LBRACE):
+                    body = self.parse_block()
+                else:
+                    self.expect(TokenType.SEMICOLON, "';'")
+                return FuncDecl(return_type=ret_type, name=name, params=params,
+                                body=body, is_variadic=is_variadic,
+                                line=t.line, col=t.col)
+            else:
+                self.expect(TokenType.RPAREN, "')'")
+                # Regular function pointer variable: int (*name)(params) = init;
+                if self.match(TokenType.LPAREN):
+                    depth = 1
+                    while depth > 0 and not self.at(TokenType.EOF):
+                        if self.match(TokenType.LPAREN): depth += 1
+                        elif self.match(TokenType.RPAREN): depth -= 1
+                        else: self.advance()
+                fptr_type = TypeSpec(base=type_spec.base,
+                    pointer_depth=type_spec.pointer_depth + 1,
+                    struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
+                    is_unsigned=type_spec.is_unsigned)
+                init = None
+                if self.match(TokenType.ASSIGN):
+                    init = self.parse_expr()
+                self.expect(TokenType.SEMICOLON, "';'")
+                return GlobalVarDecl(type_spec=fptr_type, name=name, init=init, line=t.line, col=t.col)
 
         name = self.expect(TokenType.IDENTIFIER, "identifier").value
 
