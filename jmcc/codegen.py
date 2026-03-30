@@ -1796,20 +1796,17 @@ class CodeGen:
                     self.emit("    movq %xmm0, %rax")
             self.emit("    pushq %rax")
 
-        # Pop into registers: float args go in BOTH int reg AND xmm reg
-        # (covers both variadic and non-variadic callees)
+        # Pop into registers: float args in xmm only, int args in int regs only
+        # Per System V AMD64 ABI: float args do NOT consume integer register slots
         int_idx = 0
         xmm_idx = 0
         for i in range(min(num_args, 6)):
             if arg_is_float[i]:
-                # Float arg: put in xmm AND int register
+                # Float arg: xmm register only
                 self.emit(f"    popq %rax")
                 if xmm_idx < 8:
                     self.emit(f"    movq %rax, %xmm{xmm_idx}")
                     xmm_idx += 1
-                if int_idx < 6:
-                    self.emit(f"    movq %rax, {self.ARG_REGS_64[int_idx]}")
-                    int_idx += 1
             else:
                 if int_idx < 6:
                     self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
