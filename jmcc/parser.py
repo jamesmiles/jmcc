@@ -1175,6 +1175,41 @@ class Parser:
         # Function body or declaration
         if self.at(TokenType.LBRACE):
             body = self.parse_block()
+        elif self.match(TokenType.COMMA) or self.match(TokenType.SEMICOLON):
+            # Forward declaration (possibly comma-separated: int f(int), g(int), a;)
+            body = None
+            first = FuncDecl(return_type=return_type, name=name, params=params,
+                             body=body, is_variadic=is_variadic,
+                             line=start_token.line, col=start_token.col)
+            # If we matched comma, parse remaining declarations
+            if self.tokens[self.pos - 1].type == TokenType.COMMA:
+                extra = [first]
+                while True:
+                    extra_ptrs = 0
+                    while self.match(TokenType.STAR):
+                        extra_ptrs += 1
+                    ename = self.expect(TokenType.IDENTIFIER, "identifier").value
+                    if self.at(TokenType.LPAREN):
+                        ets = TypeSpec(base=return_type.base, pointer_depth=extra_ptrs)
+                        # Parse func params inline
+                        self.advance()  # (
+                        fps = []
+                        if not self.at(TokenType.RPAREN):
+                            fps.append(self.parse_param())
+                            while self.match(TokenType.COMMA):
+                                fps.append(self.parse_param())
+                        self.expect(TokenType.RPAREN, "')'")
+                        extra.append(FuncDecl(return_type=ets, name=ename, params=fps,
+                                              body=None, line=start_token.line, col=start_token.col))
+                    else:
+                        ets = TypeSpec(base=return_type.base, pointer_depth=extra_ptrs)
+                        extra.append(GlobalVarDecl(type_spec=ets, name=ename,
+                                                    line=start_token.line, col=start_token.col))
+                    if not self.match(TokenType.COMMA):
+                        break
+                self.expect(TokenType.SEMICOLON, "';'")
+                return extra
+            return first
         else:
             self.expect(TokenType.SEMICOLON, "';'")
             body = None
