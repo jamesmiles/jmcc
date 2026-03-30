@@ -1096,10 +1096,16 @@ class CodeGen:
                 if arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def)
-        if isinstance(expr, BinaryOp) and expr.op in ("+", "-"):
+        if isinstance(expr, BinaryOp) and expr.op in ("+", "-", "*", "/"):
             lt = self.get_expr_type(expr.left)
+            rt = self.get_expr_type(expr.right)
             if lt and lt.is_pointer():
                 return lt
+            # Float arithmetic returns float
+            if (lt and lt.base in ("float", "double", "long double")) or \
+               (rt and rt.base in ("float", "double", "long double")) or \
+               isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral):
+                return TypeSpec(base="double")
         if isinstance(expr, Assignment):
             return self.get_expr_type(expr.target)
         if isinstance(expr, CastExpr):
