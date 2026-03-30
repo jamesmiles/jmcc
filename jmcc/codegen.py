@@ -1171,6 +1171,8 @@ class CodeGen:
 
         if elem_size == 1:
             self.emit("    movsbl (%rax), %eax")
+        elif elem_size == 2:
+            self.emit("    movswl (%rax), %eax")
         elif elem_size == 8:
             self.emit("    movq (%rax), %rax")
         else:
@@ -1488,10 +1490,11 @@ class CodeGen:
             # Determine pointed-to type for correct load size
             inner_type = self.get_expr_type(expr.operand)
             if inner_type and inner_type.pointer_depth > 1:
-                # Pointer to pointer: load a pointer (8 bytes)
                 self.emit("    movq (%rax), %rax")
             elif inner_type and inner_type.base == "char" and inner_type.pointer_depth == 1:
                 self.emit("    movsbl (%rax), %eax")
+            elif inner_type and inner_type.base == "short" and inner_type.pointer_depth == 1:
+                self.emit("    movswl (%rax), %eax")
             elif inner_type and inner_type.pointer_depth == 1 and (inner_type.base in ("long", "long long") or inner_type.struct_def):
                 self.emit("    movq (%rax), %rax")
             else:
@@ -1573,6 +1576,8 @@ class CodeGen:
 
             if store_size == 1:
                 self.emit("    movb %al, (%rcx)")
+            elif store_size == 2:
+                self.emit("    movw %ax, (%rcx)")
             elif store_size == 8:
                 self.emit("    movq %rax, (%rcx)")
             else:
