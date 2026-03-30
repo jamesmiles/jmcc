@@ -1442,7 +1442,7 @@ class CodeGen:
             # Determine store size
             store_size = 4
             if target_type:
-                if target_type.is_pointer() or target_type.size_bytes() == 8:
+                if target_is_float or target_type.is_pointer() or target_type.size_bytes() == 8:
                     store_size = 8
                 elif target_type.base == "char" and not target_type.is_pointer():
                     store_size = 1
