@@ -497,6 +497,20 @@ class CodeGen:
 
         if decl.type_spec.is_array() and decl.type_spec.array_sizes:
             first = decl.type_spec.array_sizes[0]
+            # Infer array size from initializer if unsized
+            if first is None and isinstance(decl.init, InitList):
+                count = len(decl.init.items)
+                first = IntLiteral(value=count)
+                decl.type_spec.array_sizes[0] = first
+            elif first is None and isinstance(decl.init, StringLiteral):
+                first = IntLiteral(value=len(decl.init.value) + 1)
+                decl.type_spec.array_sizes[0] = first
+            # Try to evaluate constant array size
+            if not isinstance(first, IntLiteral):
+                cv = self._try_eval_const(first)
+                if cv is not None:
+                    first = IntLiteral(value=cv)
+                    decl.type_spec.array_sizes[0] = first
             if isinstance(first, IntLiteral):
                 elem_size = size
                 if decl.type_spec.is_struct():
