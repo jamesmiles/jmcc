@@ -735,13 +735,18 @@ class Parser:
         t = self.advance()  # for
         self.expect(TokenType.LPAREN, "'('")
 
-        # Init
+        # Init (may have comma expressions: i=0, j=0)
         if self.match(TokenType.SEMICOLON):
             init = None
         elif self.is_type_start():
             init = self.parse_var_decl()
         else:
             expr = self.parse_expr()
+            if self.at(TokenType.COMMA):
+                exprs = [expr]
+                while self.match(TokenType.COMMA):
+                    exprs.append(self.parse_expr())
+                expr = CommaExpr(exprs=exprs, line=exprs[0].line, col=exprs[0].col)
             self.expect(TokenType.SEMICOLON, "';'")
             init = ExprStmt(expr=expr, line=expr.line, col=expr.col)
 
@@ -752,11 +757,16 @@ class Parser:
             condition = self.parse_expr()
         self.expect(TokenType.SEMICOLON, "';'")
 
-        # Update
+        # Update (may have comma expressions: i++, j++)
         if self.at(TokenType.RPAREN):
             update = None
         else:
             update = self.parse_expr()
+            if self.at(TokenType.COMMA):
+                exprs = [update]
+                while self.match(TokenType.COMMA):
+                    exprs.append(self.parse_expr())
+                update = CommaExpr(exprs=exprs, line=exprs[0].line, col=exprs[0].col)
         self.expect(TokenType.RPAREN, "')'")
 
         body = self.parse_stmt()
