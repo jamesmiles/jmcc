@@ -13,17 +13,28 @@ class StructDef:
     members: List['StructMember'] = field(default_factory=list)
     is_union: bool = False
 
+    def _member_total_size(self, ts):
+        """Get total size of a type including array dimensions."""
+        size = ts.size_bytes()
+        if ts.is_array() and ts.array_sizes:
+            from jmcc.ast_nodes import IntLiteral  # avoid circular at module level
+            first = ts.array_sizes[0]
+            if isinstance(first, IntLiteral):
+                size *= first.value
+        return size
+
     def size_bytes(self):
         if self.is_union:
-            return max((m.type_spec.size_bytes() for m in self.members), default=0)
+            return max((self._member_total_size(m.type_spec) for m in self.members), default=0)
         total = 0
         for m in self.members:
-            size = m.type_spec.size_bytes()
-            # Align to member size
-            align = min(size, 8)
+            elem_size = m.type_spec.size_bytes()  # element size for alignment
+            actual_size = self._member_total_size(m.type_spec)
+            # Align to element size
+            align = min(elem_size, 8)
             if align > 0:
                 total = (total + align - 1) & ~(align - 1)
-            total += size
+            total += actual_size
         # Align total to 8
         if total > 0:
             total = (total + 7) & ~7
@@ -34,13 +45,14 @@ class StructDef:
             return 0
         offset = 0
         for m in self.members:
-            size = m.type_spec.size_bytes()
-            align = min(size, 8)
+            elem_size = m.type_spec.size_bytes()
+            actual_size = self._member_total_size(m.type_spec)
+            align = min(elem_size, 8)
             if align > 0:
                 offset = (offset + align - 1) & ~(align - 1)
             if m.name == name:
                 return offset
-            offset += size
+            offset += actual_size
         return None
 
     def member_type(self, name):
