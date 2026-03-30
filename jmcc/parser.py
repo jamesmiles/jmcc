@@ -1242,6 +1242,11 @@ class Parser:
             self.advance()  # (
             self.advance()  # *
             name = self.expect(TokenType.IDENTIFIER, "typedef name").value
+            # Skip array brackets in fptr array typedef: (*name[4])
+            while self.match(TokenType.LBRACKET):
+                if not self.at(TokenType.RBRACKET):
+                    self.parse_expr()
+                self.expect(TokenType.RBRACKET, "']'")
             self.expect(TokenType.RPAREN, "')'")
             # Skip param list
             if self.match(TokenType.LPAREN):
@@ -1348,6 +1353,11 @@ class Parser:
                 self.advance()
             if self.at(TokenType.IDENTIFIER):
                 name = self.advance().value
+            # Skip array brackets: (*name[4]) or (*[4])
+            while self.match(TokenType.LBRACKET):
+                if not self.at(TokenType.RBRACKET):
+                    self.parse_expr()
+                self.expect(TokenType.RBRACKET, "']'")
             self.expect(TokenType.RPAREN, "')'")
             type_spec.pointer_depth += 1
             # Skip function params if present: (*fp)(int, int)
@@ -1358,6 +1368,20 @@ class Parser:
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
             return Param(type_spec=type_spec, name=name)
+        # Abstract function/array type param: int (), int (int), int ([4]) — decays to ptr
+        if not name and self.at(TokenType.LPAREN) and self.peek(1).type != TokenType.STAR:
+            if (self.peek(1).type == TokenType.RPAREN or
+                    self.peek(1).type == TokenType.LBRACKET or
+                    self.peek(1).type in self.TYPE_SPECIFIERS or
+                    (self.peek(1).type == TokenType.IDENTIFIER and self.peek(1).value in self.typedefs)):
+                self.advance()  # (
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+                type_spec.pointer_depth += 1  # function type decays to pointer
+                return Param(type_spec=type_spec, name=name)
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
         # Array parameter: int a[] or int a[100] or int a[const 5] — decays to pointer

@@ -164,6 +164,7 @@ double ceil(double);
         self.filename = filename
         self.include_paths = include_paths or []
         self.macros: Dict[str, 'Macro'] = {}
+        self.macro_stack: Dict[str, List] = {}  # name -> stack of saved Macro objects
         self.included_files: Set[str] = set()
 
         # Predefined macros
@@ -269,8 +270,28 @@ double ceil(double);
                 elif cmd == "error":
                     msg = ' '.join(directive[1:])
                     raise PreprocessorError(f"#error {msg}", filename)
-                elif cmd in ("pragma", "line"):
-                    output.append("")  # ignore
+                elif cmd == "pragma":
+                    # Handle push_macro/pop_macro
+                    rest = ' '.join(directive[1:])
+                    import re as _re
+                    push_m = _re.match(r'push_macro\s*\(\s*"(\w+)"\s*\)', rest)
+                    pop_m = _re.match(r'pop_macro\s*\(\s*"(\w+)"\s*\)', rest)
+                    if push_m:
+                        mname = push_m.group(1)
+                        if mname not in self.macro_stack:
+                            self.macro_stack[mname] = []
+                        self.macro_stack[mname].append(self.macros.get(mname))
+                    elif pop_m:
+                        mname = pop_m.group(1)
+                        if mname in self.macro_stack and self.macro_stack[mname]:
+                            saved = self.macro_stack[mname].pop()
+                            if saved is not None:
+                                self.macros[mname] = saved
+                            elif mname in self.macros:
+                                del self.macros[mname]
+                    output.append("")
+                elif cmd == "line":
+                    output.append("")
                 else:
                     output.append("")
             elif active:
