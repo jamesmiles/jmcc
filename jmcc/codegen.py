@@ -1082,7 +1082,10 @@ class CodeGen:
         sdef = obj_type.struct_def if obj_type else None
         mem_type = sdef.member_type(expr.member) if sdef else None
 
-        if mem_type is None:
+        if mem_type and mem_type.is_array():
+            # Array member: return address (don't dereference)
+            pass  # address already in %rax from gen_member_addr
+        elif mem_type is None:
             self.emit("    movl (%rax), %eax")
         elif mem_type.is_pointer() or mem_type.size_bytes() == 8:
             self.emit("    movq (%rax), %rax")
