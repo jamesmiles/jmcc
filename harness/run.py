@@ -63,9 +63,11 @@ def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
         result = subprocess.run(
             full_cmd,
             capture_output=True,
-            text=True,
             timeout=timeout + 30  # grace period for emulated environments
         )
+        # Decode with error replacement to handle binary output
+        result.stdout = result.stdout.decode('utf-8', errors='replace') if isinstance(result.stdout, bytes) else result.stdout
+        result.stderr = result.stderr.decode('utf-8', errors='replace') if isinstance(result.stderr, bytes) else result.stderr
         return result
     except subprocess.TimeoutExpired:
         # Return a fake result indicating timeout
