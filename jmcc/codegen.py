@@ -1570,12 +1570,18 @@ class CodeGen:
                       not at.is_pointer())
             if isinstance(arg, FloatLiteral):
                 is_flt = True
-            # Check if function param expects float but arg is int
+            # Check param types for conversion
             needs_conv = False
-            if i < len(param_types) and param_types[i].base in ("float", "double", "long double"):
-                if not is_flt:
-                    needs_conv = True
-                is_flt = True
+            if i < len(param_types):
+                param_is_float = param_types[i].base in ("float", "double", "long double") and not param_types[i].is_pointer()
+                if param_is_float and not is_flt:
+                    # int arg -> float param: convert int to double
+                    needs_conv = True  # will do cvtsi2sd
+                    is_flt = True
+                elif not param_is_float and is_flt:
+                    # float arg -> int param: convert double to int
+                    needs_conv = True  # will do cvttsd2si (handled below)
+                    is_flt = False  # treat as int for register assignment
             arg_is_float.append(is_flt)
             arg_needs_convert.append(needs_conv)
 
@@ -1598,11 +1604,20 @@ class CodeGen:
 
         # Evaluate args and push (all go on stack first, then distributed)
         for idx in range(num_args - 1, -1, -1):
-            self.gen_expr(expr.args[idx])
+            arg = expr.args[idx]
+            self.gen_expr(arg)
             if arg_needs_convert[idx]:
-                # Convert int to double before pushing
-                self.emit("    cvtsi2sd %eax, %xmm0")
-                self.emit("    movq %xmm0, %rax")
+                arg_type = self.get_expr_type(arg)
+                arg_actually_float = (arg_type and arg_type.base in ("float", "double", "long double")) or isinstance(arg, FloatLiteral)
+                if arg_actually_float and not arg_is_float[idx]:
+                    # float -> int conversion
+                    self.emit("    movq %rax, %xmm0")
+                    self.emit("    cvttsd2si %xmm0, %eax")
+                    self.emit("    cltq")  # sign extend to 64-bit
+                elif not arg_actually_float and arg_is_float[idx]:
+                    # int -> float conversion
+                    self.emit("    cvtsi2sd %eax, %xmm0")
+                    self.emit("    movq %xmm0, %rax")
             self.emit("    pushq %rax")
 
         # Pop into registers: float args go in BOTH int reg AND xmm reg
