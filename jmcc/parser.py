@@ -177,6 +177,22 @@ class Parser:
             while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                 pass
 
+        # Function pointer type in cast/sizeof: void (*)(void), int (*)(int, int)
+        # Only matches abstract fptr types (no name between * and ))
+        if (self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR and
+                pointer_depth == 0 and self.peek(2).type == TokenType.RPAREN):
+            self.advance()  # (
+            self.advance()  # *
+            self.expect(TokenType.RPAREN, "')'")
+            # Skip param list
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            pointer_depth = 1  # function pointer is a pointer
+
         return TypeSpec(
             base=base,
             pointer_depth=pointer_depth,
