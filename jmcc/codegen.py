@@ -1080,7 +1080,42 @@ class CodeGen:
         else:
             self.emit("    movl (%rax), %eax")
 
+    def _is_float_type(self, expr):
+        """Check if expression has float/double type."""
+        et = self.get_expr_type(expr)
+        return et and et.base in ("float", "double", "long double") and not et.is_pointer()
+
     def gen_binary_op(self, expr: BinaryOp):
+        # Float comparison: use SSE
+        if expr.op in ("<", ">", "<=", ">=", "==", "!=") and (
+                self._is_float_type(expr.left) or self._is_float_type(expr.right)):
+            # Load left into xmm0
+            lt = self.get_expr_type(expr.left)
+            if lt and lt.base in ("float", "double", "long double"):
+                self.gen_expr(expr.left)  # loads double into rax via movq
+                self.emit("    movq %rax, %xmm0")
+            else:
+                self.gen_expr(expr.left)
+                self.emit("    cvtsi2sd %eax, %xmm0")
+            # Load right into xmm1
+            rt = self.get_expr_type(expr.right)
+            if rt and rt.base in ("float", "double", "long double"):
+                self.gen_expr(expr.right)
+                self.emit("    movq %rax, %xmm1")
+            else:
+                self.gen_expr(expr.right)
+                self.emit("    cvtsi2sd %eax, %xmm1")
+            # Compare
+            self.emit("    ucomisd %xmm1, %xmm0")
+            cond_map = {
+                "<": "setb", ">": "seta",
+                "<=": "setbe", ">=": "setae",
+                "==": "sete", "!=": "setne",
+            }
+            self.emit(f"    {cond_map[expr.op]} %al")
+            self.emit("    movzbl %al, %eax")
+            return
+
         # Short-circuit for && and ||
         if expr.op == "&&":
             false_label = self.new_label("and_false")
