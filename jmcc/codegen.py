@@ -1653,6 +1653,11 @@ class CodeGen:
         else:
             self.emit(f"    call {func_name}")
 
+        # If function returns float/double, move xmm0 to rax
+        ret_type = self.func_return_types.get(func_name) if func_name else None
+        if ret_type and ret_type.base in ("float", "double", "long double") and not ret_type.is_pointer():
+            self.emit("    movq %xmm0, %rax")
+
         # Clean up stack args
         if stack_args > 0:
             cleanup = stack_args * 8
