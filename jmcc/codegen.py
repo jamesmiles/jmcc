@@ -1159,34 +1159,56 @@ class CodeGen:
         et = self.get_expr_type(expr)
         return et and et.base in ("float", "double", "long double") and not et.is_pointer()
 
+    def _gen_float_operands(self, expr):
+        """Load binary op operands into xmm0 (left) and xmm1 (right)."""
+        lt = self.get_expr_type(expr.left)
+        if lt and lt.base in ("float", "double", "long double"):
+            self.gen_expr(expr.left)
+            self.emit("    movq %rax, %xmm0")
+        elif isinstance(expr.left, FloatLiteral):
+            self.gen_expr(expr.left)
+            # Already in xmm0 from FloatLiteral codegen
+        else:
+            self.gen_expr(expr.left)
+            self.emit("    cvtsi2sd %eax, %xmm0")
+        self.emit("    subq $8, %rsp")
+        self.emit("    movsd %xmm0, (%rsp)")  # save left
+
+        rt = self.get_expr_type(expr.right)
+        if rt and rt.base in ("float", "double", "long double"):
+            self.gen_expr(expr.right)
+            self.emit("    movq %rax, %xmm1")
+        elif isinstance(expr.right, FloatLiteral):
+            self.gen_expr(expr.right)
+            self.emit("    movsd %xmm0, %xmm1")
+        else:
+            self.gen_expr(expr.right)
+            self.emit("    cvtsi2sd %eax, %xmm1")
+
+        self.emit("    movsd (%rsp), %xmm0")  # restore left
+        self.emit("    addq $8, %rsp")
+
     def gen_binary_op(self, expr: BinaryOp):
-        # Float comparison: use SSE
-        if expr.op in ("<", ">", "<=", ">=", "==", "!=") and (
-                self._is_float_type(expr.left) or self._is_float_type(expr.right)):
-            # Load left into xmm0
-            lt = self.get_expr_type(expr.left)
-            if lt and lt.base in ("float", "double", "long double"):
-                self.gen_expr(expr.left)  # loads double into rax via movq
-                self.emit("    movq %rax, %xmm0")
+        # Float operations: arithmetic and comparison
+        is_float_op = (self._is_float_type(expr.left) or self._is_float_type(expr.right) or
+                        isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral))
+        if is_float_op and expr.op in ("+", "-", "*", "/", "<", ">", "<=", ">=", "==", "!="):
+            self._gen_float_operands(expr)
+
+            if expr.op in ("+", "-", "*", "/"):
+                sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
+                self.emit(f"    {sse_ops[expr.op]} %xmm1, %xmm0")
+                self.emit(f"    movq %xmm0, %rax")  # result in rax for push/pop
+                return
             else:
-                self.gen_expr(expr.left)
-                self.emit("    cvtsi2sd %eax, %xmm0")
-            # Load right into xmm1
-            rt = self.get_expr_type(expr.right)
-            if rt and rt.base in ("float", "double", "long double"):
-                self.gen_expr(expr.right)
-                self.emit("    movq %rax, %xmm1")
-            else:
-                self.gen_expr(expr.right)
-                self.emit("    cvtsi2sd %eax, %xmm1")
-            # Compare
-            self.emit("    ucomisd %xmm1, %xmm0")
-            cond_map = {
-                "<": "setb", ">": "seta",
-                "<=": "setbe", ">=": "setae",
-                "==": "sete", "!=": "setne",
-            }
-            self.emit(f"    {cond_map[expr.op]} %al")
+                # Comparison
+                self.emit("    ucomisd %xmm1, %xmm0")
+                cond_map = {
+                    "<": "setb", ">": "seta",
+                    "<=": "setbe", ">=": "setae",
+                    "==": "sete", "!=": "setne",
+                }
+                self.emit(f"    {cond_map[expr.op]} %al")
             self.emit("    movzbl %al, %eax")
             return
 
@@ -1310,8 +1332,17 @@ class CodeGen:
 
     def gen_unary_op(self, expr: UnaryOp):
         if expr.op == "-":
-            self.gen_expr(expr.operand)
-            self.emit("    negl %eax")
+            if self._is_float_type(expr.operand) or isinstance(expr.operand, FloatLiteral):
+                self.gen_expr(expr.operand)
+                self.emit("    movq %rax, %xmm0")
+                # Negate by XOR with sign bit
+                self.emit("    movabsq $0x8000000000000000, %rax")
+                self.emit("    movq %rax, %xmm1")
+                self.emit("    xorpd %xmm1, %xmm0")
+                self.emit("    movq %xmm0, %rax")
+            else:
+                self.gen_expr(expr.operand)
+                self.emit("    negl %eax")
         elif expr.op == "~":
             self.gen_expr(expr.operand)
             self.emit("    notl %eax")
