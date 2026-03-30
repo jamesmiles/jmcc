@@ -945,7 +945,8 @@ class CodeGen:
                 self.emit(f"    leaq {offset}(%rbp), %rax")
             else:
                 self.emit(f"    leaq {name}(%rip), %rax")
-        elif ts and (ts.is_pointer() or ts.size_bytes() == 8):
+        elif ts and (ts.is_pointer() or ts.size_bytes() == 8 or
+                     ts.base in ("float", "double", "long double")):
             self.emit(f"    movq {loc}, %rax")
         else:
             self.emit(f"    movl {loc}, %eax")
