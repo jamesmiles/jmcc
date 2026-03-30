@@ -60,11 +60,26 @@ class CodeGen:
                         # Simulate sequential index progression with designated jumps
                         idx = 0
                         max_idx = 0
+                        has_nested = any(isinstance(item.value, InitList) for item in decl.init.items)
                         for item in decl.init.items:
                             if item.designator_index is not None:
                                 idx = item.designator_index
                             max_idx = max(max_idx, idx + 1)
                             idx += 1
+                        # For flat struct array init, divide by members per struct
+                        if ts.struct_def and not has_nested:
+                            member_count = 0
+                            for m in ts.struct_def.members:
+                                if m.type_spec.is_array() and m.type_spec.array_sizes:
+                                    first = m.type_spec.array_sizes[0]
+                                    if isinstance(first, IntLiteral):
+                                        member_count += first.value
+                                    else:
+                                        member_count += 1
+                                else:
+                                    member_count += 1
+                            if member_count > 0:
+                                max_idx = (max_idx + member_count - 1) // member_count
                         ts.array_sizes[0] = IntLiteral(value=max_idx)
                     elif isinstance(decl.init, StringLiteral):
                         ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
