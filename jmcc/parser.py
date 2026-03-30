@@ -169,8 +169,8 @@ class Parser:
         pointer_depth = 0
         while self.match(TokenType.STAR):
             pointer_depth += 1
-            # Skip const/volatile after *
-            while self.match(TokenType.CONST, TokenType.VOLATILE):
+            # Skip const/volatile/restrict after *
+            while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                 pass
 
         return TypeSpec(
@@ -833,9 +833,13 @@ class Parser:
             extra_ptrs += 1
 
         # Function pointer or pointer-to-array: (*name)(args) or (*name)[size]
+        # Also handles const-qualified pointers: (* const name)
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
             self.advance()  # (
             self.advance()  # *
+            # Skip qualifiers between * and name
+            while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                self.advance()
             name = self.expect(TokenType.IDENTIFIER, "variable name").value
             self.expect(TokenType.RPAREN, "')'")
 
@@ -1231,6 +1235,24 @@ class Parser:
     def parse_param(self) -> Param:
         type_spec = self.parse_type_spec()
         name = ""
+        # Parenthesized declarator: (*name), (* const name), (*name)(params)
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+            self.advance()  # (
+            self.advance()  # *
+            while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                self.advance()
+            if self.at(TokenType.IDENTIFIER):
+                name = self.advance().value
+            self.expect(TokenType.RPAREN, "')'")
+            type_spec.pointer_depth += 1
+            # Skip function params if present: (*fp)(int, int)
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            return Param(type_spec=type_spec, name=name)
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
         # Array parameter: int a[] or int a[100] or int a[const 5] — decays to pointer
@@ -1238,7 +1260,10 @@ class Parser:
             # Skip qualifiers (const, static, volatile, restrict) inside brackets
             while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC, TokenType.RESTRICT):
                 self.advance()
-            if not self.at(TokenType.RBRACKET):
+            # Handle * as VLA unspecified size
+            if self.at(TokenType.STAR) and self.peek(1).type == TokenType.RBRACKET:
+                self.advance()  # skip *
+            elif not self.at(TokenType.RBRACKET):
                 self.parse_expr()  # skip the size expression
             self.expect(TokenType.RBRACKET, "']'")
             type_spec.pointer_depth += 1  # arrays decay to pointers in params
