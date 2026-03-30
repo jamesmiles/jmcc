@@ -18,6 +18,7 @@ class CodeGen:
         self.string_literals: List[Tuple[str, str]] = []  # (label, value)
         self.global_vars: Dict[str, GlobalVarDecl] = {}
         self.known_functions: set = set()  # function names
+        self.func_return_types: Dict[str, TypeSpec] = {}  # func name -> return type
         self.label_count = 0
         self.break_labels: List[str] = []  # stack of break target labels
         self.continue_labels: List[str] = []  # stack of continue target labels
@@ -69,6 +70,8 @@ class CodeGen:
                 self.global_vars[decl.name] = decl
             elif isinstance(decl, FuncDecl):
                 self.known_functions.add(decl.name)
+                if decl.return_type:
+                    self.func_return_types[decl.name] = decl.return_type
 
         # Generate functions
         for decl in program.declarations:
@@ -1110,6 +1113,9 @@ class CodeGen:
                (rt and rt.base in ("float", "double", "long double")) or \
                isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral):
                 return TypeSpec(base="double")
+        if isinstance(expr, FuncCall):
+            if isinstance(expr.name, Identifier) and expr.name.name in self.func_return_types:
+                return self.func_return_types[expr.name.name]
         if isinstance(expr, Assignment):
             return self.get_expr_type(expr.target)
         if isinstance(expr, CastExpr):
