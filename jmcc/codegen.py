@@ -1141,6 +1141,12 @@ class CodeGen:
                     else:
                         elem_size = 4
 
+        # Fallback: use get_expr_type for load size
+        if elem_size == 4 and not isinstance(expr.array, (Identifier, ArrayAccess)):
+            arr_type = self.get_expr_type(expr.array)
+            if arr_type and arr_type.is_array():
+                elem_size = arr_type.size_bytes()
+
         if elem_size == 1:
             self.emit("    movsbl (%rax), %eax")
         elif elem_size == 8:
