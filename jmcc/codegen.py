@@ -464,19 +464,25 @@ class CodeGen:
         stack_alloc_idx = len(self.output)
         self.emit("    subq $PLACEHOLDER, %rsp")  # placeholder
 
-        # Save parameters to stack
+        # Save parameters to stack (float params come in xmm registers)
+        int_param_idx = 0
+        xmm_param_idx = 0
         for i, param in enumerate(func.params):
             size = param.type_spec.size_bytes()
-            self.stack_offset -= 8  # align to 8 bytes
+            is_float_param = param.type_spec.base in ("float", "double", "long double") and not param.type_spec.is_pointer()
+            self.stack_offset -= 8
             self.params[param.name] = (self.stack_offset, param.type_spec)
-            if i < 6:
-                reg = self.ARG_REGS_64[i] if size == 8 else self.ARG_REGS_32[i]
+            if is_float_param and xmm_param_idx < 8:
+                # Float param: save from xmm register
+                self.emit(f"    movsd %xmm{xmm_param_idx}, {self.stack_offset}(%rbp)")
+                xmm_param_idx += 1
+            elif not is_float_param and int_param_idx < 6:
                 if size <= 4:
-                    self.emit(f"    movl {self.ARG_REGS_32[i]}, {self.stack_offset}(%rbp)")
+                    self.emit(f"    movl {self.ARG_REGS_32[int_param_idx]}, {self.stack_offset}(%rbp)")
                 else:
-                    self.emit(f"    movq {self.ARG_REGS_64[i]}, {self.stack_offset}(%rbp)")
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx]}, {self.stack_offset}(%rbp)")
+                int_param_idx += 1
             else:
-                # Parameter on stack: at 16 + (i-6)*8 (%rbp)
                 stack_param_offset = 16 + (i - 6) * 8
                 self.emit(f"    movq {stack_param_offset}(%rbp), %rax")
                 self.emit(f"    movq %rax, {self.stack_offset}(%rbp)")
@@ -606,9 +612,24 @@ class CodeGen:
             elif isinstance(decl.init, InitList) and decl.type_spec.is_array():
                 self.gen_array_init(decl.name, decl.type_spec, decl.init)
             else:
+                is_float_var = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
+                is_float_init = isinstance(decl.init, FloatLiteral) or self._is_float_type(decl.init)
                 self.gen_expr(decl.init)
                 offset = self.locals[decl.name][0]
-                if size <= 4 and not decl.type_spec.is_pointer():
+
+                if is_float_var and not is_float_init:
+                    # int -> float: convert and store
+                    self.emit(f"    cvtsi2sd %eax, %xmm0")
+                    self.emit(f"    movsd %xmm0, {offset}(%rbp)")
+                elif not is_float_var and is_float_init:
+                    # float -> int: convert (value in xmm0 and rax)
+                    self.emit(f"    movq %rax, %xmm0")
+                    self.emit(f"    cvttsd2si %xmm0, %eax")
+                    self.emit(f"    movl %eax, {offset}(%rbp)")
+                elif is_float_var:
+                    # float -> float: store as double
+                    self.emit(f"    movq %rax, {offset}(%rbp)")
+                elif size <= 4 and not decl.type_spec.is_pointer():
                     self.emit(f"    movl %eax, {offset}(%rbp)")
                 else:
                     self.emit(f"    movq %rax, {offset}(%rbp)")
@@ -1485,22 +1506,26 @@ class CodeGen:
             self.gen_expr(arg)
             self.emit("    pushq %rax")
 
-        # Pop into correct registers (int regs or xmm regs)
+        # Pop into registers: float args go in BOTH int reg AND xmm reg
+        # (covers both variadic and non-variadic callees)
         int_idx = 0
         xmm_idx = 0
         for i in range(min(num_args, 6)):
-            if arg_is_float[i] and xmm_idx < 8:
-                # Float arg: pop to temp, move to xmm
+            if arg_is_float[i]:
+                # Float arg: put in xmm AND int register
                 self.emit(f"    popq %rax")
-                self.emit(f"    movq %rax, %xmm{xmm_idx}")
-                xmm_idx += 1
+                if xmm_idx < 8:
+                    self.emit(f"    movq %rax, %xmm{xmm_idx}")
+                    xmm_idx += 1
+                if int_idx < 6:
+                    self.emit(f"    movq %rax, {self.ARG_REGS_64[int_idx]}")
+                    int_idx += 1
             else:
-                # Integer arg
                 if int_idx < 6:
                     self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
                     int_idx += 1
                 else:
-                    self.emit(f"    addq $8, %rsp")  # skip (stays on stack)
+                    self.emit(f"    addq $8, %rsp")
 
         # For remaining args beyond 6, they stay on stack
         # (already there from the push loop)
