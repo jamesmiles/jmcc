@@ -75,34 +75,7 @@ class CodeGen:
             if isinstance(decl, FuncDecl) and decl.body is not None:
                 self.gen_function(decl)
 
-        # Generate string literals
-        if self.string_literals:
-            self.emit("")
-            self.emit("    .section .rodata")
-            for lbl, val in self.string_literals:
-                self.label(lbl)
-                # Escape for assembly
-                escaped = val.replace("\\", "\\\\").replace('"', '\\"')
-                # Handle actual control characters
-                asm_str = ""
-                for ch in val:
-                    if ch == '\n':
-                        asm_str += "\\n"
-                    elif ch == '\t':
-                        asm_str += "\\t"
-                    elif ch == '\r':
-                        asm_str += "\\r"
-                    elif ch == '\0':
-                        asm_str += "\\0"
-                    elif ch == '"':
-                        asm_str += '\\"'
-                    elif ch == '\\':
-                        asm_str += "\\\\"
-                    elif ord(ch) < 32 or ord(ch) > 126:
-                        asm_str += f"\\{ord(ch):03o}"
-                    else:
-                        asm_str += ch
-                self.emit(f'    .string "{asm_str}"')
+        # (String literals emitted at the end, after globals may add more)
 
         # Generate float constants
         if hasattr(self, 'float_constants') and self.float_constants:
@@ -245,6 +218,24 @@ class CodeGen:
                     self.emit(f"    .align {align}")
                     self.label(name)
                     self.emit(f"    .zero {size}")
+
+        # Generate string literals (at the end, after globals which may add more)
+        if self.string_literals:
+            self.emit("")
+            self.emit("    .section .rodata")
+            for lbl, val in self.string_literals:
+                self.label(lbl)
+                asm_str = ""
+                for ch in val:
+                    if ch == '\n': asm_str += "\\n"
+                    elif ch == '\t': asm_str += "\\t"
+                    elif ch == '\r': asm_str += "\\r"
+                    elif ch == '\0': asm_str += "\\0"
+                    elif ch == '"': asm_str += '\\"'
+                    elif ch == '\\': asm_str += "\\\\"
+                    elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
+                    else: asm_str += ch
+                self.emit(f'    .string "{asm_str}"')
 
         return "\n".join(self.output) + "\n"
 
