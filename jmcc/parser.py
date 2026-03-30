@@ -194,8 +194,8 @@ class Parser:
         members = []
         if self.match(TokenType.LBRACE):
             # Pre-register struct for self-referential types
-            # Reuse existing StructDef if already forward-declared (preserves references)
-            if name and name in self.struct_defs:
+            # Reuse existing EMPTY StructDef (forward-declared) to preserve references
+            if name and name in self.struct_defs and not self.struct_defs[name].members:
                 sdef = self.struct_defs[name]
                 sdef.is_union = is_union
             else:
