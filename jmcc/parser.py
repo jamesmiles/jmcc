@@ -913,10 +913,19 @@ class Parser:
         first = self._parse_single_declarator(type_spec)
 
         # Check for multiple declarators: int x, *p, **pp;
+        # For subsequent declarators, use base type without pointer depth
+        # (the * was consumed by parse_type_spec but belongs to first declarator)
         if self.match(TokenType.COMMA):
+            base_for_comma = TypeSpec(
+                base=type_spec.base, pointer_depth=0,
+                is_unsigned=type_spec.is_unsigned, is_const=type_spec.is_const,
+                is_volatile=type_spec.is_volatile, is_static=type_spec.is_static,
+                is_extern=type_spec.is_extern, struct_def=type_spec.struct_def,
+                enum_def=type_spec.enum_def,
+            )
             decls = [first]
             while True:
-                decls.append(self._parse_single_declarator(type_spec))
+                decls.append(self._parse_single_declarator(base_for_comma))
                 if not self.match(TokenType.COMMA):
                     break
             self.expect(TokenType.SEMICOLON, "';'")
