@@ -129,7 +129,7 @@ def assemble_and_link(asm_path, output_path, freestanding=False):
         cmd = [
             "sh", "-c",
             f"as --64 -o /tmp/prog.o /work/output/{asm_name} && "
-            f"gcc -o /work/output/{out_name} /tmp/prog.o -lc -no-pie"
+            f"gcc -o /work/output/{out_name} /tmp/prog.o -lc -lm -no-pie"
         ]
 
     result = docker_exec(cmd)
