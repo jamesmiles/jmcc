@@ -108,6 +108,74 @@ typedef void *va_list;
 #define DBL_MAX 1.7976931348623157e+308
 #define DBL_EPSILON 2.2204460492503131e-16
 """,
+        "stdio.h": """
+typedef struct _IO_FILE FILE;
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+extern int printf(const char *, ...);
+extern int fprintf(FILE *, const char *, ...);
+extern int sprintf(char *, const char *, ...);
+extern int snprintf(char *, unsigned long, const char *, ...);
+extern int puts(const char *);
+extern int putchar(int);
+extern int getchar(void);
+extern int fputc(int, FILE *);
+extern int fputs(const char *, FILE *);
+extern int fgetc(FILE *);
+extern char *fgets(char *, int, FILE *);
+extern FILE *fopen(const char *, const char *);
+extern int fclose(FILE *);
+extern unsigned long fread(void *, unsigned long, unsigned long, FILE *);
+extern unsigned long fwrite(const void *, unsigned long, unsigned long, FILE *);
+extern int feof(FILE *);
+extern int getc(FILE *);
+extern int putc(int, FILE *);
+extern int sscanf(const char *, const char *, ...);
+extern int fscanf(FILE *, const char *, ...);
+extern int fflush(FILE *);
+extern long ftell(FILE *);
+extern int fseek(FILE *, long, int);
+extern void rewind(FILE *);
+extern int remove(const char *);
+extern int rename(const char *, const char *);
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define BUFSIZ 8192
+""",
+        "stdlib.h": """
+extern void *malloc(unsigned long);
+extern void *calloc(unsigned long, unsigned long);
+extern void *realloc(void *, unsigned long);
+extern void free(void *);
+extern void exit(int);
+extern void abort(void);
+extern int atoi(const char *);
+extern long atol(const char *);
+extern long strtol(const char *, char **, int);
+extern unsigned long strtoul(const char *, char **, int);
+extern int abs(int);
+extern long labs(long);
+extern int rand(void);
+extern void srand(unsigned int);
+extern void qsort(void *, unsigned long, unsigned long, int (*)(const void *, const void *));
+""",
+        "string.h": """
+extern unsigned long strlen(const char *);
+extern char *strcpy(char *, const char *);
+extern char *strncpy(char *, const char *, unsigned long);
+extern int strcmp(const char *, const char *);
+extern int strncmp(const char *, const char *, unsigned long);
+extern char *strcat(char *, const char *);
+extern char *strchr(const char *, int);
+extern char *strrchr(const char *, int);
+extern char *strstr(const char *, const char *);
+extern void *memset(void *, int, unsigned long);
+extern void *memcpy(void *, const void *, unsigned long);
+extern void *memmove(void *, const void *, unsigned long);
+extern int memcmp(const void *, const void *, unsigned long);
+""",
     }
 
     def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
