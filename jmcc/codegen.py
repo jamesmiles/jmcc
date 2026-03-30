@@ -325,6 +325,11 @@ class CodeGen:
                     lbl = self.new_label("str")
                     self.string_literals.append((lbl, val.value))
                     self.emit(f"    .quad {lbl}")
+                elif (val and isinstance(val, UnaryOp) and val.op == "&" and
+                      isinstance(val.operand, Identifier)):
+                    self.emit(f"    .quad {val.operand.name}")
+                elif val and isinstance(val, Identifier) and val.name in self.known_functions:
+                    self.emit(f"    .quad {val.name}")
                 else:
                     if actual_size <= 4:
                         self.emit(f"    .long 0")
