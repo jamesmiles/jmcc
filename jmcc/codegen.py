@@ -1230,6 +1230,13 @@ class CodeGen:
         if isinstance(expr, FuncCall):
             if isinstance(expr.name, Identifier) and expr.name.name in self.func_return_types:
                 return self.func_return_types[expr.name.name]
+            # Indirect call through function pointer: return type is one pointer level less
+            callee_type = self.get_expr_type(expr.name)
+            if callee_type and callee_type.is_pointer() and callee_type.pointer_depth >= 2:
+                return TypeSpec(base=callee_type.base,
+                                pointer_depth=callee_type.pointer_depth - 1,
+                                struct_def=callee_type.struct_def,
+                                enum_def=callee_type.enum_def)
         if isinstance(expr, Assignment):
             return self.get_expr_type(expr.target)
         if isinstance(expr, CastExpr):

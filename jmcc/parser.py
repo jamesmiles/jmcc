@@ -1142,7 +1142,10 @@ class Parser:
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
             self.expect(TokenType.SEMICOLON, "';'")
-            fptr_type = TypeSpec(base="void", pointer_depth=1)
+            # Preserve the return type info — function pointer that returns type_spec
+            fptr_type = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth + 1,
+                                  struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
+                                  is_unsigned=type_spec.is_unsigned)
             self.typedefs[name] = fptr_type
             return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
 
