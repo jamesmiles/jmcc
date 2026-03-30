@@ -108,6 +108,26 @@ typedef void *va_list;
 #define DBL_MAX 1.7976931348623157e+308
 #define DBL_EPSILON 2.2204460492503131e-16
 """,
+        "stdio.h": """
+#ifndef _JMCC_STDIO_H
+#define _JMCC_STDIO_H
+typedef void FILE;
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define BUFSIZ 8192
+#endif
+""",
+        "stdlib.h": """
+#ifndef _JMCC_STDLIB_H
+#define _JMCC_STDLIB_H
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+#define RAND_MAX 2147483647
+#endif
+""",
+        "string.h": """
+""",
     }
 
     def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
