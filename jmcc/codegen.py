@@ -372,9 +372,17 @@ class CodeGen:
                 # Nested struct member
                 self._emit_struct_init_data(mem.type_spec.struct_def, val)
             else:
-                cv = self._try_eval_const(val) if val else None
+                # Unwrap {value} InitList for scalar members
+                unwrapped = val
+                if isinstance(unwrapped, InitList) and unwrapped.items and not mem.type_spec.struct_def:
+                    unwrapped = unwrapped.items[0].value
+                cv = self._try_eval_const(unwrapped) if unwrapped else None
                 if cv is not None:
-                    if size <= 4:
+                    if size == 1:
+                        self.emit(f"    .byte {cv}")
+                    elif size == 2:
+                        self.emit(f"    .word {cv}")
+                    elif size <= 4:
                         self.emit(f"    .long {cv}")
                     else:
                         self.emit(f"    .quad {cv}")
@@ -388,12 +396,7 @@ class CodeGen:
                 elif val and isinstance(val, Identifier) and val.name in self.known_functions:
                     self.emit(f"    .quad {val.name}")
                 else:
-                    if actual_size <= 4:
-                        self.emit(f"    .long 0")
-                    elif actual_size <= 8:
-                        self.emit(f"    .quad 0")
-                    else:
-                        self.emit(f"    .zero {actual_size}")
+                    self.emit(f"    .zero {actual_size}")
             offset += actual_size
 
         # Pad to total struct size

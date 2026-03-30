@@ -60,7 +60,7 @@ class StructDef:
         for m in self.members:
             elem_size = m.type_spec.size_bytes()
             actual_size = self._member_total_size(m.type_spec)
-            align = min(elem_size, 8) if elem_size > 0 else 4
+            align = min(elem_size, 8) if elem_size > 0 else 1
             if align > 0:
                 offset = (offset + align - 1) & ~(align - 1)
             if m.name == name:
