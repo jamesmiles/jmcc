@@ -193,10 +193,15 @@ class Parser:
 
         members = []
         if self.match(TokenType.LBRACE):
-            # Pre-register struct for self-referential types (e.g., struct S { struct S *next; })
-            sdef = StructDef(name=name, members=[], is_union=is_union)
-            if name:
-                self.struct_defs[name] = sdef
+            # Pre-register struct for self-referential types
+            # Reuse existing StructDef if already forward-declared (preserves references)
+            if name and name in self.struct_defs:
+                sdef = self.struct_defs[name]
+                sdef.is_union = is_union
+            else:
+                sdef = StructDef(name=name, members=[], is_union=is_union)
+                if name:
+                    self.struct_defs[name] = sdef
 
             while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
                 mem_type = self.parse_type_spec()
