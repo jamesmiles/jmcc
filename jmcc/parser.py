@@ -115,8 +115,8 @@ class Parser:
                 self.advance()
                 enum_def = self.parse_enum_spec()
                 break
-            elif t.type == TokenType.IDENTIFIER and t.value in self.typedefs:
-                # Typedef name - resolve to underlying type
+            elif t.type == TokenType.IDENTIFIER and t.value in self.typedefs and not base_parts:
+                # Typedef name - resolve to underlying type (only if no base type yet)
                 td = self.typedefs[t.value]
                 self.advance()
                 # Parse pointer levels on top of typedef
@@ -682,7 +682,16 @@ class Parser:
 
         # Variable declaration (including struct/enum types)
         if self.is_type_start():
-            return self.parse_var_decl()
+            # Disambiguate typedef name used as variable vs type
+            # If a typedef name is followed by . -> = ( [ ++ -- it's a variable use
+            if (self.at(TokenType.IDENTIFIER) and self.current().value in self.typedefs and
+                    self.peek(1).type in (TokenType.DOT, TokenType.ARROW, TokenType.ASSIGN,
+                                          TokenType.LBRACKET, TokenType.INC, TokenType.DEC,
+                                          TokenType.PLUS_ASSIGN, TokenType.MINUS_ASSIGN,
+                                          TokenType.STAR_ASSIGN, TokenType.SLASH_ASSIGN)):
+                pass  # fall through to expression statement
+            else:
+                return self.parse_var_decl()
 
         # Expression statement
         expr = self.parse_expr()
