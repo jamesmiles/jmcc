@@ -292,9 +292,9 @@ class CodeGen:
                     self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
                     if decl.type_spec.is_array() and decl.type_spec.array_sizes:
-                        first = decl.type_spec.array_sizes[0]
-                        if isinstance(first, IntLiteral):
-                            size *= first.value
+                        for dim in decl.type_spec.array_sizes:
+                            if isinstance(dim, IntLiteral):
+                                size *= dim.value
                     align = min(decl.type_spec.size_bytes(), 8)
                     if align < 4:
                         align = 4
