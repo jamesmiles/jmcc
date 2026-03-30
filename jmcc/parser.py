@@ -840,6 +840,44 @@ class Parser:
             # Skip qualifiers between * and name
             while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                 self.advance()
+
+            # Nested complex declarator: (* (*p)(params))(ret_params)
+            if self.at(TokenType.LPAREN):
+                # Scan forward to find the identifier name inside nested parens
+                # then skip everything, treat as void*
+                saved = self.pos
+                depth = 0
+                name = ""
+                while self.pos < len(self.tokens) - 1:
+                    tok = self.current()
+                    if tok.type == TokenType.LPAREN:
+                        depth += 1
+                        self.advance()
+                    elif tok.type == TokenType.RPAREN:
+                        if depth == 0:
+                            break
+                        depth -= 1
+                        self.advance()
+                    elif tok.type == TokenType.IDENTIFIER and not name:
+                        name = tok.value
+                        self.advance()
+                    else:
+                        self.advance()
+                self.expect(TokenType.RPAREN, "')'")  # close outer (*...)
+                # Skip trailing param list(s)
+                while self.match(TokenType.LPAREN):
+                    d = 1
+                    while d > 0 and not self.at(TokenType.EOF):
+                        if self.match(TokenType.LPAREN): d += 1
+                        elif self.match(TokenType.RPAREN): d -= 1
+                        else: self.advance()
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
+                              struct_def=base_type.struct_def)
+                init = None
+                if self.match(TokenType.ASSIGN):
+                    init = self.parse_assignment()
+                return VarDecl(type_spec=ts, name=name or "__anon__", init=init, line=t.line, col=t.col)
+
             name = self.expect(TokenType.IDENTIFIER, "variable name").value
             self.expect(TokenType.RPAREN, "')'")
 
