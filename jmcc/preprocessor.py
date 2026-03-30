@@ -31,6 +31,7 @@ class Preprocessor:
         "stddef.h": """
 typedef long ptrdiff_t;
 typedef unsigned long size_t;
+typedef int wchar_t;
 #define NULL ((void*)0)
 #define offsetof(type, member) __builtin_offsetof(type, member)
 """,
@@ -127,6 +128,25 @@ typedef void FILE;
 #endif
 """,
         "string.h": """
+""",
+        "wchar.h": """
+#ifndef _JMCC_WCHAR_H
+#define _JMCC_WCHAR_H
+typedef int wchar_t;
+typedef unsigned int wint_t;
+#define WEOF ((wint_t)-1)
+#endif
+""",
+        "ctype.h": """
+""",
+        "assert.h": """
+#define assert(x) ((void)0)
+""",
+        "errno.h": """
+extern int errno;
+#define ERANGE 34
+""",
+        "math.h": """
 """,
     }
 
