@@ -1005,6 +1005,9 @@ class CodeGen:
             if name in self.locals or name in self.params:
                 offset = self.locals.get(name, self.params.get(name, (0, None)))[0]
                 self.emit(f"    leaq {offset}(%rbp), %rax")
+            elif name in self.static_locals:
+                mangled = self.static_locals[name]
+                self.emit(f"    leaq {mangled}(%rip), %rax")
             else:
                 self.emit(f"    leaq {name}(%rip), %rax")
         elif ts and (ts.is_pointer() or ts.size_bytes() == 8 or
@@ -1051,6 +1054,9 @@ class CodeGen:
                 if expr.array.name in self.locals or expr.array.name in self.params:
                     offset = (self.locals.get(expr.array.name) or self.params.get(expr.array.name))[0]
                     self.emit(f"    leaq {offset}(%rbp), %rax")
+                elif expr.array.name in self.static_locals:
+                    mangled = self.static_locals[expr.array.name]
+                    self.emit(f"    leaq {mangled}(%rip), %rax")
                 else:
                     self.emit(f"    leaq {expr.array.name}(%rip), %rax")
             else:
