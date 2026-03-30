@@ -1076,7 +1076,21 @@ class CodeGen:
 
         # Determine element size for load (based on pointed-to/element type)
         elem_size = 4
-        if isinstance(expr.array, Identifier):
+        if isinstance(expr.array, ArrayAccess):
+            # Nested array access — find root type for base element size
+            root = expr.array
+            while isinstance(root, ArrayAccess):
+                root = root.array
+            if isinstance(root, Identifier):
+                _, ts = self.get_var_location(root.name)
+                if ts:
+                    if ts.base == "char":
+                        elem_size = 1
+                    elif ts.base in ("long", "long long") or ts.is_pointer():
+                        elem_size = 8
+                    elif ts.struct_def:
+                        elem_size = ts.struct_def.size_bytes()
+        elif isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
                 # For pointer or array, element type is one level of indirection less
