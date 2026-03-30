@@ -632,7 +632,12 @@ class CodeGen:
                     self.emit(f"    cvttsd2si %xmm0, %eax")
                     self.emit(f"    movl %eax, {offset}(%rbp)")
                 elif is_float_var:
-                    # float -> float: store as double
+                    # float -> float: store as double (truncate to float precision if float type)
+                    if decl.type_spec.base == "float":
+                        self.emit(f"    movq %rax, %xmm0")
+                        self.emit(f"    cvtsd2ss %xmm0, %xmm0")
+                        self.emit(f"    cvtss2sd %xmm0, %xmm0")
+                        self.emit(f"    movq %xmm0, %rax")
                     self.emit(f"    movq %rax, {offset}(%rbp)")
                 elif size <= 4 and not decl.type_spec.is_pointer():
                     self.emit(f"    movl %eax, {offset}(%rbp)")
@@ -1492,6 +1497,10 @@ class CodeGen:
                 self.emit("    addq $8, %rsp")
                 sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
                 self.emit(f"    {sse_ops[op]} %xmm1, %xmm0")
+                # Truncate to float precision if target is float (not double)
+                if target_type and target_type.base == "float":
+                    self.emit("    cvtsd2ss %xmm0, %xmm0")
+                    self.emit("    cvtss2sd %xmm0, %xmm0")
                 self.emit("    movq %xmm0, %rax")
                 self.emit("    popq %rcx")            # restore address
                 self.emit("    movq %rax, (%rcx)")    # store result
