@@ -112,6 +112,9 @@ class TypeSpec:
             "int": 4,
             "long": 8,
             "long long": 8,
+            "float": 4,
+            "double": 8,
+            "long double": 16,
             "void": 0,
         }
         return sizes.get(self.base, 4)
