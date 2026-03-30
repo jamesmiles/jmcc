@@ -136,6 +136,26 @@ class CodeGen:
                         self.emit(f"    .long {const_val}")
                     else:
                         self.emit(f"    .quad {const_val}")
+                elif (decl.init and isinstance(decl.init, UnaryOp) and
+                      decl.init.op == "&" and isinstance(decl.init.operand, InitList)):
+                    # &(struct S){1, 2} — compound literal with address-of
+                    # Create anonymous static for the compound literal
+                    anon_name = self.new_label("compound")
+                    anon_init = decl.init.operand
+                    sdef = decl.type_spec.struct_def  # pointer to struct
+                    self.emit("    .data")
+                    self.emit(f"    .align 8")
+                    self.label(anon_name)
+                    if sdef:
+                        self._emit_struct_init_data(sdef, anon_init)
+                    else:
+                        # Fallback: emit zeros
+                        self.emit(f"    .zero 8")
+                    # Now emit the pointer
+                    self.emit(f"    .globl {name}")
+                    self.emit(f"    .align 8")
+                    self.label(name)
+                    self.emit(f"    .quad {anon_name}")
                 elif decl.init and isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
                     # char s[] = "hello";
                     self.emit("    .data")
