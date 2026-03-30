@@ -1042,8 +1042,7 @@ class CodeGen:
         # Element size (default to 4 for int, 8 for pointer, 1 for char)
         elem_size = 4  # default
         if isinstance(expr.array, ArrayAccess):
-            # Nested array access (e.g., arr[1][3]) — get base element size
-            # Walk up to the root Identifier to find the base type
+            # Nested array access or member access — get element size from type
             root = expr.array
             depth = 1
             while isinstance(root, ArrayAccess):
@@ -1078,6 +1077,16 @@ class CodeGen:
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
                                        is_unsigned=ts.is_unsigned)
                     elem_size = elem_ts.size_bytes()
+
+        # Fallback: use get_expr_type for element size
+        if elem_size == 4 and not isinstance(expr.array, Identifier):
+            arr_type = self.get_expr_type(expr.array)
+            if arr_type and arr_type.is_array():
+                elem_size = arr_type.size_bytes()
+            elif arr_type and arr_type.is_pointer():
+                pointed = TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
+                                   struct_def=arr_type.struct_def)
+                elem_size = pointed.size_bytes()
 
         if elem_size != 1:
             self.emit(f"    imulq ${elem_size}, %rax")
