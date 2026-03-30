@@ -233,6 +233,10 @@ class Parser:
 
                 if mem_name:
                     members.append(StructMember(type_spec=mem_type, name=mem_name))
+                elif not mem_name and mem_type.struct_def:
+                    # Anonymous struct/union: flatten members into parent
+                    for anon_mem in mem_type.struct_def.members:
+                        members.append(anon_mem)
 
                 # Handle comma-separated members: int i, j, k;
                 while self.match(TokenType.COMMA):
