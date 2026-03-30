@@ -1464,6 +1464,30 @@ class CodeGen:
             op = expr.op[:-1]  # strip '='
             target_type = self.get_expr_type(expr.target)
             is_ptr = target_type and target_type.is_pointer()
+            is_float_target = target_type and target_type.base in ("float", "double", "long double") and not is_ptr
+
+            if is_float_target and op in ("+", "-", "*", "/"):
+                # Float compound assignment: a += 1.0
+                self.gen_lvalue_addr(expr.target)
+                self.emit("    pushq %rax")          # save address
+                self.emit("    movq (%rax), %rax")   # load current value (double)
+                self.emit("    movq %rax, %xmm0")    # into xmm0
+                self.emit("    subq $8, %rsp")
+                self.emit("    movsd %xmm0, (%rsp)") # save current value
+                self.gen_expr(expr.value)             # evaluate RHS
+                value_is_float = self._is_float_type(expr.value) or isinstance(expr.value, FloatLiteral)
+                if value_is_float:
+                    self.emit("    movq %rax, %xmm1")
+                else:
+                    self.emit("    cvtsi2sd %eax, %xmm1")
+                self.emit("    movsd (%rsp), %xmm0") # restore current
+                self.emit("    addq $8, %rsp")
+                sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
+                self.emit(f"    {sse_ops[op]} %xmm1, %xmm0")
+                self.emit("    movq %xmm0, %rax")
+                self.emit("    popq %rcx")            # restore address
+                self.emit("    movq %rax, (%rcx)")    # store result
+                return
 
             self.gen_lvalue_addr(expr.target)
             self.emit("    pushq %rax")
