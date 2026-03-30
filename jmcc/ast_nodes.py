@@ -35,9 +35,14 @@ class StructDef:
             if align > 0:
                 total = (total + align - 1) & ~(align - 1)
             total += actual_size
-        # Align total to 8
-        if total > 0:
-            total = (total + 7) & ~7
+        # Align total to largest member alignment (not always 8)
+        max_align = 4  # minimum
+        for m in self.members:
+            ma = min(m.type_spec.size_bytes(), 8)
+            if ma > max_align:
+                max_align = ma
+        if total > 0 and max_align > 1:
+            total = (total + max_align - 1) & ~(max_align - 1)
         return total
 
     def member_offset(self, name):
@@ -50,7 +55,7 @@ class StructDef:
                     sub_off = m.type_spec.struct_def.member_offset(name)
                     if sub_off is not None:
                         return sub_off
-            return 0
+            return None
         offset = 0
         for m in self.members:
             elem_size = m.type_spec.size_bytes()
