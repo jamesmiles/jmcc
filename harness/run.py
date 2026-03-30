@@ -218,12 +218,16 @@ def parse_test_metadata(source_path):
                 metadata["expected_exit"] = int(comment[14:].strip())
                 in_stdout = False
             elif comment.startswith("EXPECTED_STDOUT:"):
-                rest = comment[16:].strip()
-                if rest:
-                    stdout_lines.append(rest)
+                rest = comment[16:]
+                if rest.strip():
+                    stdout_lines.append(rest.strip())
                 in_stdout = True
             elif comment.startswith("STDOUT:"):
-                stdout_lines.append(comment[7:].strip())
+                # Preserve leading whitespace (important for formatted output)
+                content = comment[7:]
+                if content.startswith(" "):
+                    content = content[1:]  # strip exactly one space after STDOUT:
+                stdout_lines.append(content)
                 in_stdout = True
             elif comment.startswith("ENVIRONMENT:"):
                 metadata["environment"] = comment[12:].strip()
