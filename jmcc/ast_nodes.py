@@ -122,6 +122,9 @@ class TypeSpec:
         return self.pointer_depth > 0
 
     def is_array(self):
+        # Pointer-to-array (ptr>0 with array_sizes) is a pointer, not an array
+        if self.pointer_depth > 0:
+            return False
         return self.array_sizes is not None and len(self.array_sizes) > 0
 
     def is_void(self):

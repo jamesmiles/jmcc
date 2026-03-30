@@ -1085,6 +1085,9 @@ class CodeGen:
                     for dim in ts.array_sizes[depth:]:
                         if isinstance(dim, IntLiteral):
                             elem_size *= dim.value
+                elif ts and ts.is_pointer() and ts.array_sizes:
+                    # Pointer-to-array: inner element is the base type
+                    elem_size = TypeSpec(base=ts.base).size_bytes()
                 elif ts:
                     elem_size = ts.size_bytes()  # base element size
         elif isinstance(expr.array, Identifier):
