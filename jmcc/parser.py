@@ -165,6 +165,10 @@ class Parser:
             else:
                 base = base_parts[-1]
 
+        # Skip trailing qualifiers before pointer (e.g., enum E const *)
+        while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+            self.advance()
+
         # Parse pointer levels
         pointer_depth = 0
         while self.match(TokenType.STAR):
