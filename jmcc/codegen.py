@@ -989,6 +989,12 @@ class CodeGen:
             for e in expr.exprs:
                 self.gen_expr(e)
 
+        elif isinstance(expr, InitList):
+            # Compound literal in expression: (type){val, ...}
+            # For simple cases, evaluate the first item
+            if expr.items:
+                self.gen_expr(expr.items[0].value)
+
         else:
             self.error(f"unhandled expression type: {type(expr).__name__}", expr.line, expr.col)
 
