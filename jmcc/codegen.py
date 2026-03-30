@@ -811,7 +811,7 @@ class CodeGen:
                 self.emit(f"    movabsq ${expr.value}, %rax")
 
         elif isinstance(expr, FloatLiteral):
-            # Store double constant in rodata and load via SSE
+            # Store double constant in rodata, load via SSE AND into rax
             import struct
             lbl = self.new_label("flt")
             packed = struct.pack('<d', expr.value)
@@ -820,6 +820,7 @@ class CodeGen:
                 self.float_constants = []
             self.float_constants.append((lbl, val_as_int))
             self.emit(f"    movsd {lbl}(%rip), %xmm0")
+            self.emit(f"    movq %xmm0, %rax")  # also in rax for push/pop
 
         elif isinstance(expr, CharLiteral):
             self.emit(f"    movl ${ord(expr.value)}, %eax")
@@ -1442,7 +1443,6 @@ class CodeGen:
 
     def gen_func_call(self, expr: FuncCall):
         is_indirect = not isinstance(expr.name, Identifier)
-        # Also check if the name is a variable (function pointer) vs a function
         is_fptr = False
         if isinstance(expr.name, Identifier):
             loc, ts = self.get_var_location(expr.name.name)
@@ -1452,33 +1452,65 @@ class CodeGen:
         func_name = expr.name.name if isinstance(expr.name, Identifier) else None
         num_args = len(expr.args)
 
+        # Classify args as int or float
+        arg_is_float = []
+        for arg in expr.args:
+            at = self.get_expr_type(arg)
+            is_flt = (at and at.base in ("float", "double", "long double") and
+                      not at.is_pointer())
+            # Also check if it's a FloatLiteral
+            if isinstance(arg, FloatLiteral):
+                is_flt = True
+            arg_is_float.append(is_flt)
+
+        # Count integer and float args for register assignment
+        int_arg_idx = 0
+        xmm_arg_idx = 0
+
         # Align stack to 16 bytes before call if needed
         stack_args = max(0, num_args - 6)
         if stack_args % 2 != 0:
-            self.emit("    subq $8, %rsp")  # align
+            self.emit("    subq $8, %rsp")
 
-        # For indirect calls, evaluate the function expression first and save it
+        # For indirect calls, save function pointer
         if is_indirect or is_fptr:
             if is_indirect:
                 self.gen_expr(expr.name)
             else:
                 self.gen_load_var(func_name, expr.line, expr.col)
-            self.emit("    pushq %rax")  # save function pointer
+            self.emit("    pushq %rax")
 
-        # Evaluate args and push
+        # Evaluate args and push (all go on stack first, then distributed)
         for arg in reversed(expr.args):
             self.gen_expr(arg)
             self.emit("    pushq %rax")
 
-        # Pop into registers
+        # Pop into correct registers (int regs or xmm regs)
+        int_idx = 0
+        xmm_idx = 0
         for i in range(min(num_args, 6)):
-            self.emit(f"    popq {self.ARG_REGS_64[i]}")
+            if arg_is_float[i] and xmm_idx < 8:
+                # Float arg: pop to temp, move to xmm
+                self.emit(f"    popq %rax")
+                self.emit(f"    movq %rax, %xmm{xmm_idx}")
+                xmm_idx += 1
+            else:
+                # Integer arg
+                if int_idx < 6:
+                    self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
+                    int_idx += 1
+                else:
+                    self.emit(f"    addq $8, %rsp")  # skip (stays on stack)
 
-        self.emit("    xorl %eax, %eax")  # clear AL for variadic functions
+        # For remaining args beyond 6, they stay on stack
+        # (already there from the push loop)
+
+        # Set %al to number of xmm registers used (required for variadic calls)
+        self.emit(f"    movl ${xmm_idx}, %eax")
 
         if is_indirect or is_fptr:
-            self.emit("    popq %r11")  # restore function pointer
-            self.emit("    call *%r11")  # indirect call
+            self.emit("    popq %r11")
+            self.emit("    call *%r11")
         else:
             self.emit(f"    call {func_name}")
 
