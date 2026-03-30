@@ -128,7 +128,13 @@ class CodeGen:
                     size = decl.type_spec.size_bytes()
                     self.emit(f"    .align {min(max(size, 4), 8)}")
                     self.label(name)
-                    if size == 1:
+                    if decl.type_spec.base in ("double", "float", "long double"):
+                        # Store as IEEE 754 double
+                        import struct
+                        packed = struct.pack('<d', float(const_val))
+                        val_int = int.from_bytes(packed, 'little')
+                        self.emit(f"    .quad {val_int}")
+                    elif size == 1:
                         self.emit(f"    .byte {const_val}")
                     elif size == 2:
                         self.emit(f"    .word {const_val}")
