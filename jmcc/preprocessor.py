@@ -147,6 +147,16 @@ extern int errno;
 #define ERANGE 34
 """,
         "math.h": """
+double sin(double);
+double cos(double);
+double tan(double);
+double sqrt(double);
+double fabs(double);
+double pow(double, double);
+double log(double);
+double exp(double);
+double floor(double);
+double ceil(double);
 """,
     }
 

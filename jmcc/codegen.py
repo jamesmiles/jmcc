@@ -19,6 +19,7 @@ class CodeGen:
         self.global_vars: Dict[str, GlobalVarDecl] = {}
         self.known_functions: set = set()  # function names
         self.func_return_types: Dict[str, TypeSpec] = {}  # func name -> return type
+        self.func_param_types: Dict[str, List] = {}  # func name -> list of param TypeSpec
         self.label_count = 0
         self.break_labels: List[str] = []  # stack of break target labels
         self.continue_labels: List[str] = []  # stack of continue target labels
@@ -72,6 +73,7 @@ class CodeGen:
                 self.known_functions.add(decl.name)
                 if decl.return_type:
                     self.func_return_types[decl.name] = decl.return_type
+                self.func_param_types[decl.name] = [p.type_spec for p in decl.params]
 
         # Generate functions
         for decl in program.declarations:
@@ -1558,16 +1560,24 @@ class CodeGen:
         func_name = expr.name.name if isinstance(expr.name, Identifier) else None
         num_args = len(expr.args)
 
-        # Classify args as int or float
+        # Classify args as int or float (using param types when available)
+        param_types = self.func_param_types.get(func_name, []) if func_name else []
         arg_is_float = []
-        for arg in expr.args:
+        arg_needs_convert = []  # True if int arg needs conversion to double for float param
+        for i, arg in enumerate(expr.args):
             at = self.get_expr_type(arg)
             is_flt = (at and at.base in ("float", "double", "long double") and
                       not at.is_pointer())
-            # Also check if it's a FloatLiteral
             if isinstance(arg, FloatLiteral):
                 is_flt = True
+            # Check if function param expects float but arg is int
+            needs_conv = False
+            if i < len(param_types) and param_types[i].base in ("float", "double", "long double"):
+                if not is_flt:
+                    needs_conv = True
+                is_flt = True
             arg_is_float.append(is_flt)
+            arg_needs_convert.append(needs_conv)
 
         # Count integer and float args for register assignment
         int_arg_idx = 0
@@ -1587,8 +1597,12 @@ class CodeGen:
             self.emit("    pushq %rax")
 
         # Evaluate args and push (all go on stack first, then distributed)
-        for arg in reversed(expr.args):
-            self.gen_expr(arg)
+        for idx in range(num_args - 1, -1, -1):
+            self.gen_expr(expr.args[idx])
+            if arg_needs_convert[idx]:
+                # Convert int to double before pushing
+                self.emit("    cvtsi2sd %eax, %xmm0")
+                self.emit("    movq %xmm0, %rax")
             self.emit("    pushq %rax")
 
         # Pop into registers: float args go in BOTH int reg AND xmm reg
