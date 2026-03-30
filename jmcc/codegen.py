@@ -194,20 +194,57 @@ class CodeGen:
                             first = decl.type_spec.array_sizes[0]
                             if isinstance(first, IntLiteral):
                                 total_elems = first.value
-                        # Build element map: idx -> InitList
-                        elem_inits = [None] * total_elems
-                        idx = 0
-                        for item in decl.init.items:
-                            if item.designator_index is not None:
-                                idx = item.designator_index
-                            if isinstance(item.value, InitList) and idx < total_elems:
-                                elem_inits[idx] = item.value
-                            idx += 1
-                        for einit in elem_inits:
-                            if einit:
-                                self._emit_struct_init_data(sdef, einit)
-                            else:
-                                self.emit(f"    .zero {sdef.size_bytes()}")
+                        # Check if init items are nested InitLists or flat values
+                        has_nested = any(isinstance(item.value, InitList) for item in decl.init.items)
+
+                        if has_nested:
+                            # Build element map: idx -> InitList
+                            elem_inits = [None] * total_elems
+                            idx = 0
+                            for item in decl.init.items:
+                                if item.designator_index is not None:
+                                    idx = item.designator_index
+                                if isinstance(item.value, InitList) and idx < total_elems:
+                                    elem_inits[idx] = item.value
+                                idx += 1
+                            for einit in elem_inits:
+                                if einit:
+                                    self._emit_struct_init_data(sdef, einit)
+                                else:
+                                    self.emit(f"    .zero {sdef.size_bytes()}")
+                        else:
+                            # Flat initializer: distribute values across struct members
+                            # Count total member slots including array elements
+                            member_count = 0
+                            for m in sdef.members:
+                                if m.type_spec.is_array() and m.type_spec.array_sizes:
+                                    first = m.type_spec.array_sizes[0]
+                                    if isinstance(first, IntLiteral):
+                                        member_count += first.value
+                                    else:
+                                        member_count += 1
+                                else:
+                                    member_count += 1
+
+                            flat_vals = []
+                            for item in decl.init.items:
+                                cv = self._try_eval_const(item.value)
+                                flat_vals.append(cv if cv is not None else 0)
+
+                            for elem_idx in range(total_elems):
+                                start = elem_idx * member_count
+                                for j in range(member_count):
+                                    val_idx = start + j
+                                    val = flat_vals[val_idx] if val_idx < len(flat_vals) else 0
+                                    if sdef.members and sdef.members[0].type_spec.size_bytes() == 8:
+                                        self.emit(f"    .quad {val}")
+                                    else:
+                                        self.emit(f"    .long {val}")
+                                # Pad to struct size
+                                data_bytes = member_count * 8  # assuming long
+                                struct_bytes = sdef.size_bytes()
+                                if data_bytes < struct_bytes:
+                                    self.emit(f"    .zero {struct_bytes - data_bytes}")
                     else:
                         # Plain array initializer (with designated initializer support)
                         elem_size = decl.type_spec.size_bytes()
