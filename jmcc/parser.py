@@ -227,6 +227,10 @@ class Parser:
                         mem_type.array_sizes = [self.parse_expr()]
                     self.expect(TokenType.RBRACKET, "']'")
 
+                # Bit-field width: int x : 8;
+                if self.match(TokenType.COLON):
+                    self.parse_expr()  # skip width expression
+
                 if mem_name:
                     members.append(StructMember(type_spec=mem_type, name=mem_name))
 
