@@ -1155,7 +1155,12 @@ class CodeGen:
         if isinstance(expr, ArrayAccess):
             arr_type = self.get_expr_type(expr.array)
             if arr_type:
-                if arr_type.is_array() or arr_type.is_pointer():
+                if arr_type.is_array() and arr_type.array_sizes and len(arr_type.array_sizes) > 1:
+                    # Multi-dim array: strip first dimension, keep rest
+                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
+                                    struct_def=arr_type.struct_def,
+                                    array_sizes=arr_type.array_sizes[1:])
+                elif arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def)
         if isinstance(expr, BinaryOp) and expr.op in ("+", "-", "*", "/"):
