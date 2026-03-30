@@ -42,16 +42,29 @@ class StructDef:
 
     def member_offset(self, name):
         if self.is_union:
+            # Union: all members at offset 0, but also check anonymous sub-members
+            for m in self.members:
+                if m.name == name:
+                    return 0
+                if m.name == "" and m.type_spec.struct_def:
+                    sub_off = m.type_spec.struct_def.member_offset(name)
+                    if sub_off is not None:
+                        return sub_off
             return 0
         offset = 0
         for m in self.members:
             elem_size = m.type_spec.size_bytes()
             actual_size = self._member_total_size(m.type_spec)
-            align = min(elem_size, 8)
+            align = min(elem_size, 8) if elem_size > 0 else 4
             if align > 0:
                 offset = (offset + align - 1) & ~(align - 1)
             if m.name == name:
                 return offset
+            # Search anonymous struct/union members
+            if m.name == "" and m.type_spec.struct_def:
+                sub_off = m.type_spec.struct_def.member_offset(name)
+                if sub_off is not None:
+                    return offset + sub_off
             offset += actual_size
         return None
 
@@ -59,6 +72,11 @@ class StructDef:
         for m in self.members:
             if m.name == name:
                 return m.type_spec
+            # Search anonymous struct/union members
+            if m.name == "" and m.type_spec.struct_def:
+                t = m.type_spec.struct_def.member_type(name)
+                if t is not None:
+                    return t
         return None
 
 
