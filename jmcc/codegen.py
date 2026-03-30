@@ -627,7 +627,21 @@ class CodeGen:
                         if cv:
                             total *= cv
             else:
-                self.error("variable-length arrays not yet supported", decl.line, decl.col)
+                # Variable-length array: runtime stack allocation
+                self.gen_expr(first)  # size expression in %eax
+                elem_size = size
+                if elem_size != 1:
+                    self.emit(f"    imull ${elem_size}, %eax")
+                # Align to 16
+                self.emit("    addl $15, %eax")
+                self.emit("    andl $-16, %eax")
+                self.emit("    movslq %eax, %rax")
+                self.emit("    subq %rax, %rsp")  # allocate on stack
+                # Store the pointer (rsp is now the base of the VLA)
+                self.stack_offset -= 8
+                self.locals[decl.name] = (self.stack_offset, TypeSpec(
+                    base=decl.type_spec.base, pointer_depth=1))
+                self.emit(f"    movq %rsp, {self.stack_offset}(%rbp)")
                 return
             # Align to 8
             total = (total + 7) & ~7
