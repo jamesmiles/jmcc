@@ -1181,8 +1181,11 @@ class Parser:
         name = ""
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
-        # Array parameter: int a[] or int a[100] — decays to pointer
+        # Array parameter: int a[] or int a[100] or int a[const 5] — decays to pointer
         if self.match(TokenType.LBRACKET):
+            # Skip qualifiers (const, static, volatile, restrict) inside brackets
+            while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC, TokenType.RESTRICT):
+                self.advance()
             if not self.at(TokenType.RBRACKET):
                 self.parse_expr()  # skip the size expression
             self.expect(TokenType.RBRACKET, "']'")
