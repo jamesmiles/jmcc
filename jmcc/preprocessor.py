@@ -134,6 +134,8 @@ typedef void *va_list;
     def preprocess(self, source: str, filename: str = None) -> str:
         if filename:
             self.filename = filename
+        # Phase 2: splice lines (backslash-newline removal)
+        source = source.replace('\\\n', '')
         lines = source.split('\n')
         output = []
         self._process_lines(lines, output, filename or self.filename)
