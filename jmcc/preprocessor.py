@@ -575,6 +575,11 @@ class Macro:
         # Replace remaining markers with args
         for param, marker in markers.items():
             if param in param_map:
-                temp = temp.replace(marker, param_map[param])
+                arg = param_map[param]
+                # For ## paste: if arg is empty, use space to prevent token merging
+                if arg == "" and '##' in self.body:
+                    temp = temp.replace(marker, ' ')
+                else:
+                    temp = temp.replace(marker, arg)
 
         return temp
