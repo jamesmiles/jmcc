@@ -523,8 +523,12 @@ class CodeGen:
         self.output[stack_alloc_idx] = f"    subq ${total_stack}, %rsp"
 
     def gen_block(self, block: Block):
+        # Save local scope for proper block scoping
+        saved_locals = dict(self.locals)
         for stmt in block.stmts:
             self.gen_stmt(stmt)
+        # Restore — variables declared in this block go out of scope
+        self.locals = saved_locals
 
     def gen_stmt(self, stmt: Stmt):
         if isinstance(stmt, ReturnStmt):
