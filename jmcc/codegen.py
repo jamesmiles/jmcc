@@ -1764,8 +1764,11 @@ class CodeGen:
         int_arg_idx = 0
         xmm_arg_idx = 0
 
-        # Align stack to 16 bytes before call if needed
-        stack_args = max(0, num_args - 6)
+        # Count actual stack args (those that don't fit in registers)
+        # Float args use xmm regs (up to 8), int args use int regs (up to 6)
+        float_reg_count = sum(1 for f in arg_is_float if f)
+        int_reg_count = sum(1 for f in arg_is_float if not f)
+        stack_args = max(0, float_reg_count - 8) + max(0, int_reg_count - 6)
         if stack_args % 2 != 0:
             self.emit("    subq $8, %rsp")
 
@@ -1803,19 +1806,23 @@ class CodeGen:
         # Per System V AMD64 ABI: float args do NOT consume integer register slots
         int_idx = 0
         xmm_idx = 0
-        for i in range(min(num_args, 6)):
+        # Pop args into registers. Args that don't fit stay on stack for the call.
+        # We must pop from the front (first arg = top of stack after all pushes).
+        # Stop when we can't assign the current arg to any register.
+        for i in range(num_args):
             if arg_is_float[i]:
-                # Float arg: xmm register only
-                self.emit(f"    popq %rax")
                 if xmm_idx < 8:
+                    self.emit(f"    popq %rax")
                     self.emit(f"    movq %rax, %xmm{xmm_idx}")
                     xmm_idx += 1
+                else:
+                    break  # no more xmm slots, rest stay on stack
             else:
                 if int_idx < 6:
                     self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
                     int_idx += 1
                 else:
-                    self.emit(f"    addq $8, %rsp")
+                    break  # no more int slots, rest stay on stack
 
         # For remaining args beyond 6, they stay on stack
         # (already there from the push loop)
