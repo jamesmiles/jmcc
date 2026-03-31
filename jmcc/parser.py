@@ -591,6 +591,7 @@ class Parser:
         t = self.current()
 
         if self.match(TokenType.INT_LITERAL):
+            suffix = ''.join(c for c in t.value if c in 'uUlL').upper()
             val_str = t.value.rstrip('uUlL')
             if val_str.startswith('0x') or val_str.startswith('0X'):
                 val = int(val_str, 16)
@@ -598,7 +599,7 @@ class Parser:
                 val = int(val_str, 8)
             else:
                 val = int(val_str)
-            return IntLiteral(value=val, line=t.line, col=t.col)
+            return IntLiteral(value=val, suffix=suffix, line=t.line, col=t.col)
 
         if self.match(TokenType.FLOAT_LITERAL):
             return FloatLiteral(value=float(t.value.rstrip('fFlL')), line=t.line, col=t.col)
@@ -606,12 +607,44 @@ class Parser:
         if self.match(TokenType.CHAR_LITERAL):
             return IntLiteral(value=ord(t.value), line=t.line, col=t.col)
 
-        if self.match(TokenType.STRING_LITERAL):
-            # Handle string concatenation
+        if self.current().type in (TokenType.STRING_LITERAL, TokenType.WIDE_STRING_LITERAL):
+            t = self.advance()
+            wide = t.type == TokenType.WIDE_STRING_LITERAL
             value = t.value
-            while self.at(TokenType.STRING_LITERAL):
-                value += self.advance().value
-            return StringLiteral(value=value, line=t.line, col=t.col)
+            while self.current().type in (TokenType.STRING_LITERAL, TokenType.WIDE_STRING_LITERAL):
+                nt = self.advance()
+                if nt.type == TokenType.WIDE_STRING_LITERAL:
+                    wide = True
+                value += nt.value
+            return StringLiteral(value=value, wide=wide, line=t.line, col=t.col)
+
+        if self.match(TokenType.GENERIC):
+            # _Generic(controlling-expr, type: expr, ..., default: expr)
+            self.expect(TokenType.LPAREN, "'('")
+            controlling = self.parse_assignment()
+            assocs = []
+            while self.match(TokenType.COMMA):
+                if self.at(TokenType.DEFAULT):
+                    self.advance()  # default
+                    self.expect(TokenType.COLON, "':'")
+                    assocs.append(GenericAssoc(type_spec=None, expr=self.parse_assignment()))
+                else:
+                    ts = self.parse_type_spec()
+                    # Parse optional array dimensions (e.g. int[4])
+                    if self.at(TokenType.LBRACKET):
+                        array_sizes = []
+                        while self.match(TokenType.LBRACKET):
+                            if self.at(TokenType.RBRACKET):
+                                array_sizes.append(None)
+                            else:
+                                array_sizes.append(self.parse_expr())
+                            self.expect(TokenType.RBRACKET, "']'")
+                        ts.array_sizes = array_sizes
+                    self.expect(TokenType.COLON, "':'")
+                    assocs.append(GenericAssoc(type_spec=ts, expr=self.parse_assignment()))
+            self.expect(TokenType.RPAREN, "')'")
+            return GenericSelection(controlling=controlling, associations=assocs,
+                                    line=t.line, col=t.col)
 
         if self.match(TokenType.IDENTIFIER):
             # Check if this is an enum constant

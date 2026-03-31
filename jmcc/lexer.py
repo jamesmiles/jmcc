@@ -11,6 +11,7 @@ class TokenType(Enum):
     INT_LITERAL = auto()
     CHAR_LITERAL = auto()
     STRING_LITERAL = auto()
+    WIDE_STRING_LITERAL = auto()
     FLOAT_LITERAL = auto()
 
     # Identifiers and keywords
@@ -375,13 +376,16 @@ class Lexer:
             ch = self.advance()
 
             # Wide string/char prefix: L"..." or L'...'
+            is_wide = False
             if ch == 'L' and self.pos < len(self.source) and self.source[self.pos] in '"\'':
+                is_wide = True
                 ch = self.advance()  # skip L, consume the quote
 
             # String literal
             if ch == '"':
                 val = self.read_string()
-                tokens.append(Token(TokenType.STRING_LITERAL, val, start_line, start_col, self.filename))
+                tt = TokenType.WIDE_STRING_LITERAL if is_wide else TokenType.STRING_LITERAL
+                tokens.append(Token(tt, val, start_line, start_col, self.filename))
                 continue
 
             # Char literal

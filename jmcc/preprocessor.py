@@ -113,6 +113,9 @@ typedef void *va_list;
 #ifndef _JMCC_STDIO_H
 #define _JMCC_STDIO_H
 typedef void FILE;
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2

@@ -183,20 +183,27 @@ class CodeGen:
                     self.label(name)
                     self.emit(f"    .quad {anon_name}")
                 elif decl.init and isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
-                    # char s[] = "hello";
+                    # char s[] = "hello";  or  wchar_t s[] = L"hello";
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
-                    self.emit(f"    .align 1")
-                    self.label(name)
-                    asm_str = ""
-                    for ch in decl.init.value:
-                        if ch == '\n': asm_str += "\\n"
-                        elif ch == '\t': asm_str += "\\t"
-                        elif ch == '\\': asm_str += "\\\\"
-                        elif ch == '"': asm_str += '\\"'
-                        elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
-                        else: asm_str += ch
-                    self.emit(f'    .string "{asm_str}"')
+                    if decl.init.wide:
+                        self.emit(f"    .align 4")
+                        self.label(name)
+                        for ch in decl.init.value:
+                            self.emit(f"    .long {ord(ch)}")
+                        self.emit("    .long 0")
+                    else:
+                        self.emit(f"    .align 1")
+                        self.label(name)
+                        asm_str = ""
+                        for ch in decl.init.value:
+                            if ch == '\n': asm_str += "\\n"
+                            elif ch == '\t': asm_str += "\\t"
+                            elif ch == '\\': asm_str += "\\\\"
+                            elif ch == '"': asm_str += '\\"'
+                            elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
+                            else: asm_str += ch
+                        self.emit(f'    .string "{asm_str}"')
                 elif decl.init and isinstance(decl.init, InitList):
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
@@ -287,6 +294,8 @@ class CodeGen:
                                 self.emit(f"    .long {val}")
                             else:
                                 self.emit(f"    .quad {val}")
+                elif decl.type_spec.is_extern:
+                    pass  # extern declaration — symbol provided by linker, don't emit
                 else:
                     self.emit("    .bss")
                     self.emit(f"    .globl {name}")
@@ -306,19 +315,25 @@ class CodeGen:
         if self.string_literals:
             self.emit("")
             self.emit("    .section .rodata")
-            for lbl, val in self.string_literals:
+            for lbl, val, *rest in self.string_literals:
+                wide = rest[0] if rest else False
                 self.label(lbl)
-                asm_str = ""
-                for ch in val:
-                    if ch == '\n': asm_str += "\\n"
-                    elif ch == '\t': asm_str += "\\t"
-                    elif ch == '\r': asm_str += "\\r"
-                    elif ch == '\0': asm_str += "\\0"
-                    elif ch == '"': asm_str += '\\"'
-                    elif ch == '\\': asm_str += "\\\\"
-                    elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
-                    else: asm_str += ch
-                self.emit(f'    .string "{asm_str}"')
+                if wide:
+                    for ch in val:
+                        self.emit(f"    .long {ord(ch)}")
+                    self.emit("    .long 0")
+                else:
+                    asm_str = ""
+                    for ch in val:
+                        if ch == '\n': asm_str += "\\n"
+                        elif ch == '\t': asm_str += "\\t"
+                        elif ch == '\r': asm_str += "\\r"
+                        elif ch == '\0': asm_str += "\\0"
+                        elif ch == '"': asm_str += '\\"'
+                        elif ch == '\\': asm_str += "\\\\"
+                        elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
+                        else: asm_str += ch
+                    self.emit(f'    .string "{asm_str}"')
 
         return "\n".join(self.output) + "\n"
 
@@ -388,7 +403,7 @@ class CodeGen:
                         self.emit(f"    .quad {cv}")
                 elif val and isinstance(val, StringLiteral):
                     lbl = self.new_label("str")
-                    self.string_literals.append((lbl, val.value))
+                    self.string_literals.append((lbl, val.value, val.wide))
                     self.emit(f"    .quad {lbl}")
                 elif (val and isinstance(val, UnaryOp) and val.op == "&" and
                       isinstance(val.operand, Identifier)):
@@ -664,6 +679,18 @@ class CodeGen:
                 self.gen_struct_init(decl.name, decl.type_spec, decl.init)
             elif isinstance(decl.init, InitList) and decl.type_spec.is_array():
                 self.gen_array_init(decl.name, decl.type_spec, decl.init)
+            elif isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
+                # char s[] = "..." or wchar_t s[] = L"..."
+                base_offset = self.locals[decl.name][0]
+                s = decl.init
+                if s.wide:
+                    for i, ch in enumerate(s.value):
+                        self.emit(f"    movl ${ord(ch)}, {base_offset + i * 4}(%rbp)")
+                    self.emit(f"    movl $0, {base_offset + len(s.value) * 4}(%rbp)")
+                else:
+                    for i, ch in enumerate(s.value):
+                        self.emit(f"    movb ${ord(ch)}, {base_offset + i}(%rbp)")
+                    self.emit(f"    movb $0, {base_offset + len(s.value)}(%rbp)")
             else:
                 is_float_var = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
                 is_float_init = isinstance(decl.init, FloatLiteral) or self._is_float_type(decl.init)
@@ -927,7 +954,7 @@ class CodeGen:
 
         elif isinstance(expr, StringLiteral):
             lbl = self.new_label("str")
-            self.string_literals.append((lbl, expr.value))
+            self.string_literals.append((lbl, expr.value, expr.wide))
             self.emit(f"    leaq {lbl}(%rip), %rax")
 
         elif isinstance(expr, Identifier):
@@ -987,6 +1014,23 @@ class CodeGen:
                 else:
                     size = 4
             self.emit(f"    movl ${size}, %eax")
+
+        elif isinstance(expr, GenericSelection):
+            ct = self.get_expr_type(expr.controlling)
+            selected = None
+            default_expr = None
+            for assoc in expr.associations:
+                if assoc.type_spec is None:
+                    default_expr = assoc.expr
+                elif ct and self._generic_types_match(ct, assoc.type_spec):
+                    selected = assoc.expr
+                    break
+            if selected is None:
+                selected = default_expr
+            if selected is not None:
+                self.gen_expr(selected)
+            else:
+                self.emit("    movl $0, %eax")
 
         elif isinstance(expr, CommaExpr):
             for e in expr.exprs:
@@ -1226,9 +1270,26 @@ class CodeGen:
         """Try to determine the type of an expression."""
         if isinstance(expr, Identifier):
             _, ts = self.get_var_location(expr.name)
-            return ts
+            if ts is not None:
+                return ts
+            # Function name used as value decays to function pointer
+            if expr.name in self.func_return_types:
+                rt = self.func_return_types[expr.name]
+                return TypeSpec(base=rt.base, pointer_depth=rt.pointer_depth + 1,
+                                is_unsigned=rt.is_unsigned, struct_def=rt.struct_def)
+            return None
         if isinstance(expr, IntLiteral):
-            return TypeSpec(base="int")
+            s = expr.suffix.upper()
+            if 'LL' in s:
+                base = "long long"
+            elif 'L' in s:
+                base = "long"
+            else:
+                base = "int"
+            is_unsigned = 'U' in s
+            return TypeSpec(base=base, is_unsigned=is_unsigned)
+        if isinstance(expr, StringLiteral):
+            return TypeSpec(base="char", pointer_depth=1)
         if isinstance(expr, FloatLiteral):
             return TypeSpec(base="double")
         if isinstance(expr, UnaryOp) and expr.op == "-":
@@ -1266,7 +1327,8 @@ class CodeGen:
                 elif arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def)
-        if isinstance(expr, BinaryOp) and expr.op in ("+", "-", "*", "/"):
+        if isinstance(expr, BinaryOp) and expr.op in (
+                "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"):
             lt = self.get_expr_type(expr.left)
             rt = self.get_expr_type(expr.right)
             if lt and lt.is_pointer():
@@ -1276,6 +1338,16 @@ class CodeGen:
                (rt and rt.base in ("float", "double", "long double")) or \
                isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral):
                 return TypeSpec(base="double")
+            # Shifts: result type is promoted type of LEFT operand only
+            if expr.op in ("<<", ">>"):
+                if lt and lt.base in ("long long", "long"):
+                    return TypeSpec(base=lt.base, is_unsigned=lt.is_unsigned)
+                return None  # short/int promoted to int — let default handle it
+            # Usual arithmetic conversions: long long > long > int
+            if (lt and lt.base == "long long") or (rt and rt.base == "long long"):
+                return TypeSpec(base="long long")
+            if (lt and lt.base == "long") or (rt and rt.base == "long"):
+                return TypeSpec(base="long")
         if isinstance(expr, FuncCall):
             if isinstance(expr.name, Identifier) and expr.name.name in self.func_return_types:
                 return self.func_return_types[expr.name.name]
@@ -1291,6 +1363,23 @@ class CodeGen:
         if isinstance(expr, CastExpr):
             return expr.target_type
         return None
+
+    def _generic_types_match(self, controlling: TypeSpec, assoc: TypeSpec) -> bool:
+        """Check if a controlling expression type matches a _Generic association type.
+        Applies lvalue conversion: strips top-level const from non-pointer scalars."""
+        # Apply lvalue conversion: strip const from scalar (non-pointer) types
+        ctrl_const = controlling.is_const if controlling.pointer_depth > 0 else False
+        if controlling.pointer_depth != assoc.pointer_depth:
+            return False
+        if controlling.is_unsigned != assoc.is_unsigned:
+            return False
+        if controlling.base != assoc.base:
+            return False
+        if ctrl_const != assoc.is_const:
+            return False
+        if controlling.is_array() != assoc.is_array():
+            return False
+        return True
 
     def gen_member_addr(self, expr: MemberAccess):
         """Generate address of a struct member into %rax."""

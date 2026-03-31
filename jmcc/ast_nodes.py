@@ -187,6 +187,7 @@ class Expr:
 @dataclass
 class IntLiteral(Expr):
     value: int = 0
+    suffix: str = ""  # e.g. "L", "UL", "LL" — used for _Generic type matching
 
 
 @dataclass
@@ -197,6 +198,7 @@ class CharLiteral(Expr):
 @dataclass
 class StringLiteral(Expr):
     value: str = ""
+    wide: bool = False
 
 
 @dataclass
@@ -266,6 +268,18 @@ class CastExpr(Expr):
 class SizeofExpr(Expr):
     operand: Optional[Union[Expr, TypeSpec]] = None
     is_type: bool = False
+
+
+@dataclass
+class GenericAssoc:
+    type_spec: Optional['TypeSpec'] = None  # None means 'default'
+    expr: Optional[Expr] = None
+
+
+@dataclass
+class GenericSelection(Expr):
+    controlling: Optional[Expr] = None
+    associations: List[GenericAssoc] = field(default_factory=list)
 
 
 @dataclass
