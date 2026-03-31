@@ -19,10 +19,14 @@ PROJECT_DIR = HARNESS_DIR.parent
 DOCKER_IMAGE = "jmcc-test"
 CONTAINER_NAME = "jmcc-test-runner"
 TIMEOUT_SECONDS = int(os.environ.get("JMCC_TIMEOUT", "60"))
+def _use_native():
+    return os.environ.get("JMCC_NATIVE", "0") == "1"
 
 
 def ensure_docker_image():
-    """Build the Docker image if it doesn't exist."""
+    """Build the Docker image if it doesn't exist (skipped in native mode)."""
+    if _use_native():
+        return
     result = subprocess.run(
         ["docker", "images", "-q", DOCKER_IMAGE],
         capture_output=True, text=True
@@ -78,6 +82,39 @@ def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
         return TimeoutResult()
 
 
+def _native_assemble_and_link(asm_path, output_path, freestanding=False):
+    """Assemble and link on the host without Docker."""
+    obj_path = asm_path + ".o"
+    try:
+        r = subprocess.run(
+            ["as", "--64", "-o", obj_path, asm_path],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+        )
+        if r.returncode != 0:
+            return {"success": False, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+
+        r = subprocess.run(
+            ["gcc", "-o", output_path, obj_path, "-lc", "-lm", "-no-pie"],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+        )
+        return {"success": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+    finally:
+        if os.path.exists(obj_path):
+            os.unlink(obj_path)
+
+
+def _native_execute_hosted(binary_path, stdin_data=None):
+    """Execute a hosted binary directly on the host."""
+    try:
+        r = subprocess.run(
+            [binary_path],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+        )
+        return {"stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+    except subprocess.TimeoutExpired:
+        return {"stdout": "", "stderr": "TIMEOUT", "returncode": -1}
+
+
 def compile_with_reference(source_path, compiler, output_path, std="c11"):
     """Compile a C file with a reference compiler inside Docker."""
     src_name = os.path.basename(source_path)
@@ -114,7 +151,9 @@ def compile_with_jmcc(source_path, output_asm_path):
 
 
 def assemble_and_link(asm_path, output_path, freestanding=False):
-    """Assemble and link JMCC output inside Docker."""
+    """Assemble and link JMCC output (native or Docker)."""
+    if _use_native():
+        return _native_assemble_and_link(asm_path, output_path, freestanding)
     asm_name = os.path.basename(asm_path)
     out_name = os.path.basename(output_path)
 
@@ -142,7 +181,9 @@ def assemble_and_link(asm_path, output_path, freestanding=False):
 
 
 def execute_hosted(binary_path, stdin_data=None):
-    """Execute a hosted binary inside Docker."""
+    """Execute a hosted binary (native or Docker)."""
+    if _use_native():
+        return _native_execute_hosted(binary_path, stdin_data)
     bin_name = os.path.basename(binary_path)
 
     cmd = [f"/work/output/{bin_name}"]

@@ -145,7 +145,12 @@ def main():
                         help="Run only negative tests")
     parser.add_argument("--positive-only", action="store_true",
                         help="Run only positive tests")
+    parser.add_argument("--native", action="store_true",
+                        help="Run without Docker (faster, uses host as/gcc)")
     args = parser.parse_args()
+
+    if args.native:
+        os.environ["JMCC_NATIVE"] = "1"
 
     test_dir = PROJECT_DIR / "tests"
 
