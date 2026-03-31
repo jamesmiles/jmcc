@@ -283,6 +283,12 @@ class GenericSelection(Expr):
 
 
 @dataclass
+class StatementExpr(Expr):
+    """GNU statement expression: ({ stmt; stmt; expr; })"""
+    body: Optional['Block'] = None
+
+
+@dataclass
 class CommaExpr(Expr):
     exprs: List[Expr] = field(default_factory=list)
 

@@ -653,6 +653,11 @@ class Parser:
             return Identifier(name=t.value, line=t.line, col=t.col)
 
         if self.match(TokenType.LPAREN):
+            # GNU statement expression: ({ ... })
+            if self.at(TokenType.LBRACE):
+                block = self.parse_block()
+                self.expect(TokenType.RPAREN, "')'")
+                return StatementExpr(body=block, line=t.line, col=t.col)
             expr = self.parse_expr()
             # Handle comma operator inside parentheses
             if self.at(TokenType.COMMA):

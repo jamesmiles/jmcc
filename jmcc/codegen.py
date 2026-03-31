@@ -1032,6 +1032,13 @@ class CodeGen:
             else:
                 self.emit("    movl $0, %eax")
 
+        elif isinstance(expr, StatementExpr):
+            saved_locals = dict(self.locals)
+            for stmt in expr.body.stmts:
+                self.gen_stmt(stmt)
+            # Last ExprStmt's value is already in %rax
+            self.locals = saved_locals
+
         elif isinstance(expr, CommaExpr):
             for e in expr.exprs:
                 self.gen_expr(e)
