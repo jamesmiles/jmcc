@@ -161,6 +161,49 @@ double exp(double);
 double floor(double);
 double ceil(double);
 """,
+        "unistd.h": """
+#define R_OK 4
+#define W_OK 2
+#define X_OK 1
+#define F_OK 0
+int access(const char *path, int mode);
+int close(int fd);
+int read(int fd, void *buf, unsigned long count);
+int write(int fd, const void *buf, unsigned long count);
+int lseek(int fd, long offset, int whence);
+""",
+        "fcntl.h": """
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_RDWR 2
+#define O_CREAT 64
+#define O_TRUNC 512
+int open(const char *path, int flags, ...);
+""",
+        "sys/stat.h": """
+struct stat {
+    unsigned long st_dev;
+    unsigned long st_ino;
+    unsigned long st_nlink;
+    unsigned int st_mode;
+    unsigned int st_uid;
+    unsigned int st_gid;
+    unsigned int __pad0;
+    unsigned long st_rdev;
+    long st_size;
+    long st_blksize;
+    long st_blocks;
+    long st_atime;
+    long st_atimensec;
+    long st_mtime;
+    long st_mtimensec;
+    long st_ctime;
+    long st_ctimensec;
+    long __unused[3];
+};
+int stat(const char *path, struct stat *buf);
+int fstat(int fd, struct stat *buf);
+""",
     }
 
     def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
