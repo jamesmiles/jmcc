@@ -564,14 +564,22 @@ class Parser:
                 self.expect(TokenType.RBRACKET, "']'")
                 expr = ArrayAccess(array=expr, index=index, line=expr.line, col=expr.col)
             elif self.match(TokenType.LPAREN):
-                # Function call
-                args = []
-                if not self.at(TokenType.RPAREN):
-                    args.append(self.parse_assignment())
-                    while self.match(TokenType.COMMA):
+                # Check for __builtin_va_arg(ap, type)
+                if isinstance(expr, Identifier) and expr.name == "__builtin_va_arg":
+                    ap_expr = self.parse_assignment()
+                    self.expect(TokenType.COMMA, "','")
+                    target_type = self.parse_type_spec()
+                    self.expect(TokenType.RPAREN, "')'")
+                    expr = BuiltinVaArg(ap=ap_expr, target_type=target_type, line=expr.line, col=expr.col)
+                else:
+                    # Function call
+                    args = []
+                    if not self.at(TokenType.RPAREN):
                         args.append(self.parse_assignment())
-                self.expect(TokenType.RPAREN, "')'")
-                expr = FuncCall(name=expr, args=args, line=expr.line, col=expr.col)
+                        while self.match(TokenType.COMMA):
+                            args.append(self.parse_assignment())
+                    self.expect(TokenType.RPAREN, "')'")
+                    expr = FuncCall(name=expr, args=args, line=expr.line, col=expr.col)
             elif self.match(TokenType.DOT):
                 member = self.expect(TokenType.IDENTIFIER, "member name").value
                 expr = MemberAccess(obj=expr, member=member, arrow=False, line=expr.line, col=expr.col)

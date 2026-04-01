@@ -308,6 +308,12 @@ class StatementExpr(Expr):
 
 
 @dataclass
+class BuiltinVaArg(Expr):
+    ap: Optional[Expr] = None
+    target_type: Optional['TypeSpec'] = None
+
+
+@dataclass
 class CommaExpr(Expr):
     exprs: List[Expr] = field(default_factory=list)
 

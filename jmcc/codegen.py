@@ -20,6 +20,7 @@ class CodeGen:
         self.known_functions: set = set()  # function names
         self.func_return_types: Dict[str, TypeSpec] = {}  # func name -> return type
         self.func_param_types: Dict[str, List] = {}  # func name -> list of param TypeSpec
+        self.func_is_variadic: Dict[str, bool] = {}  # func name -> is variadic
         self.label_count = 0
         self.break_labels: List[str] = []  # stack of break target labels
         self.continue_labels: List[str] = []  # stack of continue target labels
@@ -46,6 +47,37 @@ class CodeGen:
     def new_label(self, prefix="L") -> str:
         self.label_count += 1
         return f".{prefix}{self.label_count}"
+
+    def _is_struct_by_value(self, ts):
+        """Check if a type is a struct passed/returned by value (not pointer)."""
+        return ts and ts.struct_def is not None and ts.pointer_depth == 0
+
+    def _struct_arg_regs(self, size):
+        """Return number of integer registers needed for a struct arg (System V ABI).
+        Structs <= 8 bytes: 1 reg, 9-16 bytes: 2 regs, >16 bytes: passed by pointer (1 reg)."""
+        if size <= 8:
+            return 1
+        elif size <= 16:
+            return 2
+        else:
+            return 1  # pointer
+
+    def _emit_memcpy_from_rax(self, dst_offset, size):
+        """Copy 'size' bytes from address in %rax to dst_offset(%rbp).
+        Uses %r11 as temp to avoid clobbering arg registers."""
+        i = 0
+        while i + 8 <= size:
+            self.emit(f"    movq {i}(%rax), %r11")
+            self.emit(f"    movq %r11, {dst_offset + i}(%rbp)")
+            i += 8
+        while i + 4 <= size:
+            self.emit(f"    movl {i}(%rax), %r11d")
+            self.emit(f"    movl %r11d, {dst_offset + i}(%rbp)")
+            i += 4
+        while i < size:
+            self.emit(f"    movb {i}(%rax), %r11b")
+            self.emit(f"    movb %r11b, {dst_offset + i}(%rbp)")
+            i += 1
 
     def generate(self, program: Program) -> str:
         self.emit("    .text")
@@ -89,6 +121,7 @@ class CodeGen:
                 if decl.return_type:
                     self.func_return_types[decl.name] = decl.return_type
                 self.func_param_types[decl.name] = [p.type_spec for p in decl.params]
+                self.func_is_variadic[decl.name] = decl.is_variadic
 
         # Generate functions
         for decl in program.declarations:
@@ -481,6 +514,36 @@ class CodeGen:
             cv = self._try_eval_const(unwrapped) if unwrapped else None
             if cv is not None:
                 store_val(mem_offset, min(mem_size, actual_size), cv)
+            elif isinstance(unwrapped, FloatLiteral):
+                import struct as pystruct
+                fval = unwrapped.value
+                if mem_ts.base == "float" and not mem_ts.is_pointer():
+                    packed = pystruct.pack('<f', fval)
+                    for bi, bv in enumerate(packed):
+                        store_byte(mem_offset + bi, bv)
+                elif mem_ts.base == "long double" and not mem_ts.is_pointer():
+                    # 80-bit extended precision, stored in 16 bytes
+                    # Python doesn't have native 80-bit float support
+                    # Use 64-bit double as approximation, stored in first 8 bytes
+                    packed = pystruct.pack('<d', fval)
+                    for bi, bv in enumerate(packed):
+                        store_byte(mem_offset + bi, bv)
+                    # Set the rest to form a proper 80-bit representation
+                    # Actually, x86 long double is 80-bit: use ctypes
+                    try:
+                        import ctypes
+                        ld = ctypes.c_longdouble(fval)
+                        ld_bytes = bytes(ctypes.c_char * 16).join(b'')  # won't work
+                        # Fallback: construct from parts
+                        raise Exception("use fallback")
+                    except Exception:
+                        # Encode as 80-bit IEEE 754 extended precision
+                        self._store_long_double(buf, mem_offset, fval)
+                else:
+                    # double
+                    packed = pystruct.pack('<d', fval)
+                    for bi, bv in enumerate(packed):
+                        store_byte(mem_offset + bi, bv)
             elif isinstance(unwrapped, StringLiteral):
                 # String literal as a pointer
                 lbl = self.new_label("str")
@@ -755,6 +818,25 @@ class CodeGen:
                 self.emit(f"    .byte {buf[i]}")
                 i += 1
 
+    def _store_long_double(self, buf, offset, fval):
+        """Store a float value as 80-bit x86 extended precision (padded to 16 bytes)."""
+        import ctypes
+        # Use ctypes to get the correct long double representation
+        try:
+            ld = ctypes.c_longdouble(fval)
+            # Get bytes via pointer cast
+            ptr = ctypes.cast(ctypes.pointer(ld), ctypes.POINTER(ctypes.c_ubyte * 16))
+            ld_bytes = bytes(ptr.contents)
+            for i in range(min(16, len(buf) - offset)):
+                buf[offset + i] = ld_bytes[i]
+        except Exception:
+            # Fallback: store as double in first 8 bytes
+            import struct as pystruct
+            packed = pystruct.pack('<d', fval)
+            for i in range(8):
+                if offset + i < len(buf):
+                    buf[offset + i] = packed[i]
+
     def _try_eval_const(self, expr) -> Optional[int]:
         """Try to evaluate an expression as a compile-time integer constant."""
         if isinstance(expr, IntLiteral):
@@ -824,6 +906,8 @@ class CodeGen:
         self.params = {}
         self.static_locals = {}
         self.stack_offset = 0
+        if hasattr(self, '_va_area_offset'):
+            del self._va_area_offset
 
         self.emit("")
         self.emit(f"    .globl {func.name}")
@@ -838,28 +922,87 @@ class CodeGen:
         stack_alloc_idx = len(self.output)
         self.emit("    subq $PLACEHOLDER, %rsp")  # placeholder
 
+        # If function returns struct > 16 bytes, hidden pointer in %rdi
+        self._hidden_ret_ptr_offset = None
+        if func.return_type and self._is_struct_by_value(func.return_type):
+            ret_size = func.return_type.size_bytes()
+            if ret_size > 16:
+                self.stack_offset -= 8
+                self._hidden_ret_ptr_offset = self.stack_offset
+                self.emit(f"    movq %rdi, {self.stack_offset}(%rbp)")
+
+        # For variadic functions, save all 6 GP registers to a known area
+        if func.is_variadic:
+            self.stack_offset -= 48  # 6 * 8 bytes for register save area
+            self._va_area_offset = self.stack_offset
+            for ri, reg in enumerate(self.ARG_REGS_64):
+                self.emit(f"    movq {reg}, {self._va_area_offset + ri * 8}(%rbp)")
+
         # Save parameters to stack (float params come in xmm registers)
         int_param_idx = 0
+        # Account for hidden return pointer consuming %rdi
+        if self._hidden_ret_ptr_offset is not None:
+            int_param_idx = 1
         xmm_param_idx = 0
+        stack_param_offset = 16  # first stack arg is at 16(%rbp) (above saved rbp and return addr)
         for i, param in enumerate(func.params):
             size = param.type_spec.size_bytes()
-            is_float_param = param.type_spec.base in ("float", "double", "long double") and not param.type_spec.is_pointer()
-            self.stack_offset -= 8
-            self.params[param.name] = (self.stack_offset, param.type_spec)
-            if is_float_param and xmm_param_idx < 8:
+            is_float_param = (param.type_spec.base in ("float", "double", "long double")
+                              and not param.type_spec.is_pointer()
+                              and not param.type_spec.struct_def)
+            is_struct = self._is_struct_by_value(param.type_spec)
+
+            if is_struct:
+                # Struct parameter: allocate full size on stack
+                alloc = (size + 7) & ~7
+                self.stack_offset -= alloc
+                self.params[param.name] = (self.stack_offset, param.type_spec)
+                if size <= 8 and int_param_idx < 6:
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx]}, {self.stack_offset}(%rbp)")
+                    int_param_idx += 1
+                elif size <= 16 and int_param_idx + 1 < 6:
+                    # Two registers
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx]}, {self.stack_offset}(%rbp)")
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx + 1]}, {self.stack_offset + 8}(%rbp)")
+                    int_param_idx += 2
+                elif size > 16 and int_param_idx < 6:
+                    # Passed by pointer: copy from pointer to local
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx]}, %rax")
+                    self._emit_memcpy_from_rax(self.stack_offset, size)
+                    int_param_idx += 1
+                else:
+                    # From stack
+                    if size > 16:
+                        # >16 bytes: stack has a pointer to the struct
+                        self.emit(f"    movq {stack_param_offset}(%rbp), %rax")
+                        self._emit_memcpy_from_rax(self.stack_offset, size)
+                        stack_param_offset += 8
+                    else:
+                        # <=16 bytes: struct data directly on stack
+                        for off in range(0, alloc, 8):
+                            self.emit(f"    movq {stack_param_offset + off}(%rbp), %rax")
+                            self.emit(f"    movq %rax, {self.stack_offset + off}(%rbp)")
+                        stack_param_offset += alloc
+            elif is_float_param and xmm_param_idx < 8:
+                self.stack_offset -= 8
+                self.params[param.name] = (self.stack_offset, param.type_spec)
                 # Float param: save from xmm register
                 self.emit(f"    movsd %xmm{xmm_param_idx}, {self.stack_offset}(%rbp)")
                 xmm_param_idx += 1
             elif not is_float_param and int_param_idx < 6:
+                self.stack_offset -= 8
+                self.params[param.name] = (self.stack_offset, param.type_spec)
                 if size <= 4:
                     self.emit(f"    movl {self.ARG_REGS_32[int_param_idx]}, {self.stack_offset}(%rbp)")
                 else:
                     self.emit(f"    movq {self.ARG_REGS_64[int_param_idx]}, {self.stack_offset}(%rbp)")
                 int_param_idx += 1
             else:
-                stack_param_offset = 16 + (i - 6) * 8
+                self.stack_offset -= 8
+                self.params[param.name] = (self.stack_offset, param.type_spec)
                 self.emit(f"    movq {stack_param_offset}(%rbp), %rax")
                 self.emit(f"    movq %rax, {self.stack_offset}(%rbp)")
+                stack_param_offset += 8
 
         # Generate body
         self.gen_block(func.body)
@@ -932,8 +1075,50 @@ class CodeGen:
 
     def gen_return(self, stmt: ReturnStmt):
         if stmt.value:
-            self.gen_expr(stmt.value)
-            # Result is in %rax/%eax already
+            # Check if returning a struct by value
+            ret_type = None
+            if self.current_func and self.current_func.return_type:
+                ret_type = self.current_func.return_type
+            if ret_type and self._is_struct_by_value(ret_type):
+                size = ret_type.size_bytes()
+                # Get address of the struct being returned
+                if isinstance(stmt.value, Identifier):
+                    loc, vts = self.get_var_location(stmt.value.name)
+                    if stmt.value.name in self.locals or stmt.value.name in self.params:
+                        off = (self.locals.get(stmt.value.name) or self.params.get(stmt.value.name))[0]
+                        self.emit(f"    leaq {off}(%rbp), %rcx")
+                    elif stmt.value.name in self.static_locals:
+                        mangled = self.static_locals[stmt.value.name]
+                        self.emit(f"    leaq {mangled}(%rip), %rcx")
+                    else:
+                        self.emit(f"    leaq {stmt.value.name}(%rip), %rcx")
+                else:
+                    self.gen_lvalue_addr(stmt.value)
+                    self.emit("    movq %rax, %rcx")
+
+                if size <= 8:
+                    self.emit("    movq (%rcx), %rax")
+                elif size <= 16:
+                    self.emit("    movq (%rcx), %rax")
+                    self.emit("    movq 8(%rcx), %rdx")
+                else:
+                    # >16 bytes: hidden pointer was passed in %rdi (first param)
+                    # Copy struct to *%rdi and return %rdi in %rax
+                    # The hidden pointer was saved to the first param slot
+                    # For now, assume it's the first integer param saved
+                    self.emit(f"    movq {self._hidden_ret_ptr_offset}(%rbp), %rdi")
+                    for off in range(0, size, 8):
+                        if off + 8 <= size:
+                            self.emit(f"    movq {off}(%rcx), %r11")
+                            self.emit(f"    movq %r11, {off}(%rdi)")
+                        else:
+                            for b in range(off, size):
+                                self.emit(f"    movb {b}(%rcx), %r11b")
+                                self.emit(f"    movb %r11b, {b}(%rdi)")
+                    self.emit("    movq %rdi, %rax")
+            else:
+                self.gen_expr(stmt.value)
+                # Result is in %rax/%eax already
         self.emit("    leave")
         self.emit("    ret")
 
@@ -1029,6 +1214,43 @@ class CodeGen:
                     for i, ch in enumerate(s.value):
                         self.emit(f"    movb ${ord(ch)}, {base_offset + i}(%rbp)")
                     self.emit(f"    movb $0, {base_offset + len(s.value)}(%rbp)")
+            elif self._is_struct_by_value(decl.type_spec) and not isinstance(decl.init, InitList):
+                # Struct init from expression (function call, va_arg, variable, etc.)
+                offset = self.locals[decl.name][0]
+                struct_size = decl.type_spec.size_bytes()
+
+                if isinstance(decl.init, BuiltinVaArg):
+                    # va_arg returns address of struct temp in %rax
+                    self.gen_expr(decl.init)
+                    self._emit_memcpy_from_rax(offset, struct_size)
+                elif isinstance(decl.init, FuncCall):
+                    # Function returning struct: value in %rax (and %rdx for 9-16 bytes)
+                    self.gen_expr(decl.init)
+                    if struct_size <= 8:
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
+                    elif struct_size <= 16:
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
+                        self.emit(f"    movq %rdx, {offset + 8}(%rbp)")
+                    else:
+                        # >16 bytes: return value is pointer in %rax
+                        self._emit_memcpy_from_rax(offset, struct_size)
+                elif isinstance(decl.init, Identifier):
+                    # Copy from another struct variable
+                    name = decl.init.name
+                    if name in self.locals or name in self.params:
+                        src_off = (self.locals.get(name) or self.params.get(name))[0]
+                        self._emit_memcpy_stack(offset, src_off, struct_size)
+                    elif name in self.static_locals:
+                        mangled = self.static_locals[name]
+                        self.emit(f"    leaq {mangled}(%rip), %rax")
+                        self._emit_memcpy_from_rax(offset, struct_size)
+                    else:
+                        self.emit(f"    leaq {name}(%rip), %rax")
+                        self._emit_memcpy_from_rax(offset, struct_size)
+                else:
+                    # Generic struct expression: get address and copy
+                    self.gen_lvalue_addr(decl.init)
+                    self._emit_memcpy_from_rax(offset, struct_size)
             else:
                 is_float_var = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
                 is_float_init = isinstance(decl.init, FloatLiteral) or self._is_float_type(decl.init)
@@ -1697,6 +1919,9 @@ class CodeGen:
         elif isinstance(expr, FuncCall):
             self.gen_func_call(expr)
 
+        elif isinstance(expr, BuiltinVaArg):
+            self._gen_builtin_va_arg(expr)
+
         elif isinstance(expr, ArrayAccess):
             self.gen_array_access(expr)
 
@@ -2097,6 +2322,8 @@ class CodeGen:
             return expr.target_type
         if isinstance(expr, TernaryOp):
             return self.get_expr_type(expr.true_expr)
+        if isinstance(expr, BuiltinVaArg):
+            return expr.target_type
         return None
 
     def _generic_types_match(self, controlling: TypeSpec, assoc: TypeSpec) -> bool:
@@ -2121,6 +2348,33 @@ class CodeGen:
         if expr.arrow:
             # expr->member: obj is a pointer, load it
             self.gen_expr(expr.obj)
+        elif isinstance(expr.obj, FuncCall) or isinstance(expr.obj, BuiltinVaArg):
+            # Function call returning struct: store to temp, get address
+            obj_type = self.get_expr_type(expr.obj) if isinstance(expr.obj, FuncCall) else None
+            if isinstance(expr.obj, BuiltinVaArg):
+                obj_type = expr.obj.target_type
+            if obj_type and self._is_struct_by_value(obj_type):
+                size = obj_type.size_bytes()
+                alloc = (size + 7) & ~7
+                self.stack_offset -= alloc
+                temp_off = self.stack_offset
+                self.gen_expr(expr.obj)
+                # For FuncCall returning struct: result in %rax (and %rdx for 9-16 bytes)
+                if isinstance(expr.obj, FuncCall):
+                    if size <= 8:
+                        self.emit(f"    movq %rax, {temp_off}(%rbp)")
+                    elif size <= 16:
+                        self.emit(f"    movq %rax, {temp_off}(%rbp)")
+                        self.emit(f"    movq %rdx, {temp_off + 8}(%rbp)")
+                    else:
+                        # >16 bytes: %rax has pointer
+                        self._emit_memcpy_from_rax(temp_off, size)
+                else:
+                    # BuiltinVaArg returns address in %rax
+                    self._emit_memcpy_from_rax(temp_off, size)
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
+            else:
+                self.gen_lvalue_addr(expr.obj)
         else:
             # expr.member: obj is a struct, get its address
             self.gen_lvalue_addr(expr.obj)
@@ -2157,10 +2411,34 @@ class CodeGen:
             pass  # address already in %rax from gen_member_addr
         elif mem_type is None:
             self.emit("    movl (%rax), %eax")
+        elif mem_type.base == "float" and not mem_type.is_pointer():
+            # Load 32-bit float, convert to 64-bit double, store in %rax
+            self.emit("    movss (%rax), %xmm0")
+            self.emit("    cvtss2sd %xmm0, %xmm0")
+            self.emit("    movq %xmm0, %rax")
+        elif mem_type.base == "double" and not mem_type.is_pointer():
+            # Load 64-bit double into %rax
+            self.emit("    movsd (%rax), %xmm0")
+            self.emit("    movq %xmm0, %rax")
+        elif mem_type.base == "long double" and not mem_type.is_pointer():
+            # Long double: 80-bit x87 value stored in 16 bytes
+            # Load the raw 16 bytes into rax (first 8 bytes).
+            # The full 16-byte value is at (%rax) before we load.
+            # For proper long double handling, we copy the full 16 bytes to a temp.
+            self.stack_offset -= 16
+            temp_off = self.stack_offset
+            self.emit(f"    movq (%rax), %rcx")
+            self.emit(f"    movq %rcx, {temp_off}(%rbp)")
+            self.emit(f"    movq 8(%rax), %rcx")
+            self.emit(f"    movq %rcx, {temp_off + 8}(%rbp)")
+            # Store temp offset for long double push path
+            self.emit(f"    movq {temp_off}(%rbp), %rax")
         elif mem_type.is_pointer() or mem_type.size_bytes() == 8:
             self.emit("    movq (%rax), %rax")
         elif mem_type.base == "char" and not mem_type.is_pointer():
             self.emit("    movsbl (%rax), %eax")
+        elif mem_type.base == "short" and not mem_type.is_pointer():
+            self.emit("    movswl (%rax), %eax")
         else:
             self.emit("    movl (%rax), %eax")
 
@@ -2266,8 +2544,19 @@ class CodeGen:
         is_ptr_op = ((left_type and left_type.is_pointer()) or
                       (right_type and right_type.is_pointer()))
 
-        if is_ptr_op:
-            self.emit("    movq %rax, %rcx")   # right operand in rcx (64-bit for pointers)
+        # Check for 64-bit operations (long, long long, unsigned long)
+        is_64bit = (is_ptr_op or
+                    (left_type and left_type.base in ("long", "long long") and not left_type.is_pointer()) or
+                    (right_type and right_type.base in ("long", "long long") and not right_type.is_pointer()))
+
+        if is_ptr_op or is_64bit:
+            # Sign-extend right operand if it's a narrower type
+            right_is_narrow = (right_type is None or
+                               (right_type.base not in ("long", "long long") and
+                                not right_type.is_pointer()))
+            if right_is_narrow and not is_ptr_op:
+                self.emit("    cltq")  # sign-extend eax to rax
+            self.emit("    movq %rax, %rcx")   # right operand in rcx (64-bit)
             self.emit("    popq %rax")          # left operand in rax
         else:
             self.emit("    movl %eax, %ecx")   # right operand in ecx (32-bit for ints)
@@ -2286,6 +2575,8 @@ class CodeGen:
                                   struct_def=right_type.struct_def).size_bytes()
             if elem_size > 1:
                 self.emit(f"    imulq ${elem_size}, %rax")
+            self.emit("    addq %rcx, %rax")
+        elif expr.op == "+" and is_64bit:
             self.emit("    addq %rcx, %rax")
         elif expr.op == "+":
             self.emit("    addl %ecx, %eax")
@@ -2307,27 +2598,64 @@ class CodeGen:
                     self.emit("    cqo")
                     self.emit(f"    movq ${elem_size}, %rcx")
                     self.emit("    idivq %rcx")
+        elif expr.op == "-" and is_64bit:
+            self.emit("    subq %rcx, %rax")
         elif expr.op == "-":
             self.emit("    subl %ecx, %eax")
+        elif expr.op == "*" and is_64bit:
+            self.emit("    imulq %rcx, %rax")
         elif expr.op == "*":
             self.emit("    imull %ecx, %eax")
+        elif expr.op == "/" and is_64bit:
+            if left_type and left_type.is_unsigned:
+                self.emit("    xorq %rdx, %rdx")
+                self.emit("    divq %rcx")
+            else:
+                self.emit("    cqo")
+                self.emit("    idivq %rcx")
         elif expr.op == "/":
             self.emit("    cdq")
             self.emit("    idivl %ecx")
+        elif expr.op == "%" and is_64bit:
+            if left_type and left_type.is_unsigned:
+                self.emit("    xorq %rdx, %rdx")
+                self.emit("    divq %rcx")
+            else:
+                self.emit("    cqo")
+                self.emit("    idivq %rcx")
+            self.emit("    movq %rdx, %rax")
         elif expr.op == "%":
             self.emit("    cdq")
             self.emit("    idivl %ecx")
             self.emit("    movl %edx, %eax")
         elif expr.op == "&":
-            self.emit("    andl %ecx, %eax")
+            if is_64bit:
+                self.emit("    andq %rcx, %rax")
+            else:
+                self.emit("    andl %ecx, %eax")
         elif expr.op == "|":
-            self.emit("    orl %ecx, %eax")
+            if is_64bit:
+                self.emit("    orq %rcx, %rax")
+            else:
+                self.emit("    orl %ecx, %eax")
         elif expr.op == "^":
-            self.emit("    xorl %ecx, %eax")
+            if is_64bit:
+                self.emit("    xorq %rcx, %rax")
+            else:
+                self.emit("    xorl %ecx, %eax")
         elif expr.op == "<<":
-            self.emit("    shll %cl, %eax")
+            if is_64bit:
+                self.emit("    shlq %cl, %rax")
+            else:
+                self.emit("    shll %cl, %eax")
         elif expr.op == ">>":
-            self.emit("    sarl %cl, %eax")
+            if is_64bit:
+                if left_type and left_type.is_unsigned:
+                    self.emit("    shrq %cl, %rax")
+                else:
+                    self.emit("    sarq %cl, %rax")
+            else:
+                self.emit("    sarl %cl, %eax")
         elif expr.op in ("==", "!=", "<", ">", "<=", ">="):
             self.emit("    cmpl %ecx, %eax")
             cond_map = {
@@ -2555,6 +2883,19 @@ class CodeGen:
                 self.emit("    movl %eax, (%rcx)")
 
     def gen_func_call(self, expr: FuncCall):
+        func_name = expr.name.name if isinstance(expr.name, Identifier) else None
+
+        # Handle va_start/va_end/va_copy builtins
+        if func_name == "__builtin_va_start":
+            self._gen_va_start(expr)
+            return
+        if func_name == "__builtin_va_end":
+            # va_end is a no-op
+            return
+        if func_name == "__builtin_va_copy":
+            self._gen_va_copy(expr)
+            return
+
         is_indirect = not isinstance(expr.name, Identifier)
         is_fptr = False
         if isinstance(expr.name, Identifier):
@@ -2562,50 +2903,136 @@ class CodeGen:
             if loc is not None and ts and ts.is_pointer():
                 is_fptr = True
 
-        func_name = expr.name.name if isinstance(expr.name, Identifier) else None
         num_args = len(expr.args)
 
-        # Classify args as int or float (using param types when available)
+        # Classify args as int, float, or struct (using param types and expr types)
         param_types = self.func_param_types.get(func_name, []) if func_name else []
         arg_is_float = []
-        arg_needs_convert = []  # True if int arg needs conversion to double for float param
+        arg_is_struct = []  # True if arg is a struct passed by value
+        arg_struct_size = []  # size of struct arg (0 if not struct)
+        arg_needs_convert = []
+        arg_is_long_double = []  # long double: stays on stack, not in registers
+
         for i, arg in enumerate(expr.args):
             at = self.get_expr_type(arg)
-            is_flt = (at and at.base in ("float", "double", "long double") and
-                      not at.is_pointer())
+            # Check if param type or arg type is struct
+            pt = param_types[i] if i < len(param_types) else None
+            is_struct = False
+            struct_size = 0
+            if pt and self._is_struct_by_value(pt):
+                is_struct = True
+                struct_size = pt.size_bytes()
+            elif at and self._is_struct_by_value(at):
+                is_struct = True
+                struct_size = at.size_bytes()
+
+            if is_struct:
+                arg_is_float.append(False)
+                arg_is_struct.append(True)
+                arg_struct_size.append(struct_size)
+                arg_needs_convert.append(False)
+                arg_is_long_double.append(False)
+                continue
+
+            # Check if long double: needs 16 bytes on stack (X87 class in ABI)
+            is_long_dbl = (at and at.base == "long double" and not at.is_pointer())
+            if not is_long_dbl and pt and pt.base == "long double" and not pt.is_pointer():
+                is_long_dbl = True
+            if is_long_dbl:
+                # Treat like a 16-byte struct for passing purposes
+                # But must stay on stack (X87 class), never in GP registers
+                arg_is_float.append(False)
+                arg_is_struct.append(True)
+                arg_struct_size.append(16)
+                arg_needs_convert.append(False)
+                arg_is_long_double.append(True)
+                continue
+
+            is_flt = (at and at.base in ("float", "double") and
+                      not at.is_pointer() and not (at.struct_def and at.pointer_depth == 0))
             if isinstance(arg, FloatLiteral):
                 is_flt = True
-            # Check param types for conversion
             needs_conv = False
-            if i < len(param_types):
-                param_is_float = param_types[i].base in ("float", "double", "long double") and not param_types[i].is_pointer()
+            if pt:
+                param_is_float = (pt.base in ("float", "double")
+                                  and not pt.is_pointer()
+                                  and not (pt.struct_def and pt.pointer_depth == 0))
                 if param_is_float and not is_flt:
-                    # int arg -> float param: convert int to double
-                    needs_conv = True  # will do cvtsi2sd
+                    needs_conv = True
                     is_flt = True
                 elif not param_is_float and is_flt:
-                    # float arg -> int param: convert double to int
-                    needs_conv = True  # will do cvttsd2si (handled below)
-                    is_flt = False  # treat as int for register assignment
+                    needs_conv = True
+                    is_flt = False
             arg_is_float.append(is_flt)
+            arg_is_struct.append(False)
+            arg_struct_size.append(0)
             arg_needs_convert.append(needs_conv)
+            arg_is_long_double.append(False)
 
-        # Count integer and float args for register assignment
-        int_arg_idx = 0
-        xmm_arg_idx = 0
+        # Count actual pushes and how many will be popped to registers.
+        # This determines how many 8-byte words remain on the stack for the call.
+        total_pushes = 0  # non-long-double pushes
+        ld_pushes = 0  # long double pushes (always stay on stack)
+        pop_count = 0  # how many words will be popped to registers
+        int_idx_sim = 0  # simulate int register assignment
+        xmm_idx_sim = 0
+        for i in range(num_args):
+            if arg_is_long_double[i]:
+                ld_pushes += 2  # 16 bytes = 2 pushes
+            elif arg_is_struct[i]:
+                sz = arg_struct_size[i]
+                if sz <= 8:
+                    total_pushes += 1
+                elif sz <= 16:
+                    total_pushes += 2
+                else:
+                    total_pushes += 1  # pointer
+            elif arg_is_float[i]:
+                total_pushes += 1
+            else:
+                total_pushes += 1
 
-        # Count actual stack args (those that don't fit in registers)
-        # Float args use xmm regs (up to 8), int args use int regs (up to 6)
-        float_reg_count = sum(1 for f in arg_is_float if f)
-        int_reg_count = sum(1 for f in arg_is_float if not f)
-        stack_args = max(0, float_reg_count - 8) + max(0, int_reg_count - 6)
-        if stack_args % 2 != 0:
+        # Simulate pop to count how many words get popped
+        int_idx_sim = 0
+        xmm_idx_sim = 0
+        for i in range(num_args):
+            if arg_is_long_double[i]:
+                continue
+            elif arg_is_struct[i]:
+                sz = arg_struct_size[i]
+                if sz <= 8:
+                    if int_idx_sim < 6:
+                        pop_count += 1; int_idx_sim += 1
+                    else:
+                        break
+                elif sz <= 16:
+                    if int_idx_sim + 1 < 6:
+                        pop_count += 2; int_idx_sim += 2
+                    else:
+                        break
+                else:
+                    if int_idx_sim < 6:
+                        pop_count += 1; int_idx_sim += 1
+                    else:
+                        break
+            elif arg_is_float[i]:
+                if xmm_idx_sim < 8:
+                    pop_count += 1; xmm_idx_sim += 1
+                else:
+                    break
+            else:
+                if int_idx_sim < 6:
+                    pop_count += 1; int_idx_sim += 1
+                else:
+                    break
+
+        remaining_on_stack = total_pushes - pop_count + ld_pushes
+        if remaining_on_stack % 2 != 0:
             self.emit("    subq $8, %rsp")
 
         # For indirect calls, save function pointer
         if is_indirect or is_fptr:
             if is_indirect:
-                # Strip * dereference on function pointer calls: (*fp)() == fp()
                 call_target = expr.name
                 while isinstance(call_target, UnaryOp) and call_target.op == "*":
                     call_target = call_target.operand
@@ -2614,48 +3041,92 @@ class CodeGen:
                 self.gen_load_var(func_name, expr.line, expr.col)
             self.emit("    pushq %rax")
 
-        # Evaluate args and push (all go on stack first, then distributed)
+        # Phase 1: Push long double args (they stay on the stack, last-to-first order)
         for idx in range(num_args - 1, -1, -1):
+            if not arg_is_long_double[idx]:
+                continue
             arg = expr.args[idx]
-            self.gen_expr(arg)
-            if arg_needs_convert[idx]:
-                arg_type = self.get_expr_type(arg)
-                arg_actually_float = (arg_type and arg_type.base in ("float", "double", "long double")) or isinstance(arg, FloatLiteral)
-                if arg_actually_float and not arg_is_float[idx]:
-                    # float -> int conversion
-                    self.emit("    movq %rax, %xmm0")
-                    self.emit("    cvttsd2si %xmm0, %eax")
-                    self.emit("    cltq")  # sign extend to 64-bit
-                elif not arg_actually_float and arg_is_float[idx]:
-                    # int -> float conversion
-                    self.emit("    cvtsi2sd %eax, %xmm0")
-                    self.emit("    movq %xmm0, %rax")
-            self.emit("    pushq %rax")
+            self._push_struct_arg(arg, 16)
 
-        # Pop into registers: float args in xmm only, int args in int regs only
-        # Per System V AMD64 ABI: float args do NOT consume integer register slots
+        # Phase 2: Push non-long-double args (will be popped to registers or stay as stack args)
+        for idx in range(num_args - 1, -1, -1):
+            if arg_is_long_double[idx]:
+                continue  # already pushed
+            arg = expr.args[idx]
+            if arg_is_struct[idx]:
+                self._push_struct_arg(arg, arg_struct_size[idx])
+            else:
+                self.gen_expr(arg)
+                if arg_needs_convert[idx]:
+                    arg_type = self.get_expr_type(arg)
+                    arg_actually_float = (arg_type and arg_type.base in ("float", "double", "long double")) or isinstance(arg, FloatLiteral)
+                    if arg_actually_float and not arg_is_float[idx]:
+                        self.emit("    movq %rax, %xmm0")
+                        self.emit("    cvttsd2si %xmm0, %eax")
+                        self.emit("    cltq")
+                    elif not arg_actually_float and arg_is_float[idx]:
+                        self.emit("    cvtsi2sd %eax, %xmm0")
+                        self.emit("    movq %xmm0, %rax")
+                self.emit("    pushq %rax")
+
+        # Pop into registers (long doubles stay on stack)
         int_idx = 0
         xmm_idx = 0
-        # Pop args into registers. Args that don't fit stay on stack for the call.
-        # We must pop from the front (first arg = top of stack after all pushes).
-        # Stop when we can't assign the current arg to any register.
         for i in range(num_args):
-            if arg_is_float[i]:
+            if arg_is_long_double[i]:
+                # Long double stays on stack - don't pop
+                continue
+            elif arg_is_struct[i]:
+                sz = arg_struct_size[i]
+                if sz <= 8:
+                    if int_idx < 6:
+                        self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
+                        int_idx += 1
+                elif sz <= 16:
+                    if int_idx + 1 < 6:
+                        self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
+                        self.emit(f"    popq {self.ARG_REGS_64[int_idx + 1]}")
+                        int_idx += 2
+                    else:
+                        break  # stays on stack
+                else:
+                    # >16 bytes: pointer in one int reg
+                    if int_idx < 6:
+                        self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
+                        int_idx += 1
+                    else:
+                        break
+            elif arg_is_float[i]:
                 if xmm_idx < 8:
                     self.emit(f"    popq %rax")
                     self.emit(f"    movq %rax, %xmm{xmm_idx}")
                     xmm_idx += 1
                 else:
-                    break  # no more xmm slots, rest stay on stack
+                    break
             else:
                 if int_idx < 6:
                     self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
                     int_idx += 1
                 else:
-                    break  # no more int slots, rest stay on stack
+                    break
 
-        # For remaining args beyond 6, they stay on stack
-        # (already there from the push loop)
+        # For functions returning struct > 16 bytes, pass hidden pointer in %rdi
+        # Shift other int args to the right
+        ret_type = self.func_return_types.get(func_name) if func_name else None
+        needs_hidden_ret_ptr = (ret_type and self._is_struct_by_value(ret_type)
+                                and ret_type.size_bytes() > 16)
+        hidden_ret_off = None
+        if needs_hidden_ret_ptr:
+            # Allocate temp space for the returned struct
+            ret_size = ret_type.size_bytes()
+            alloc = (ret_size + 15) & ~15
+            self.stack_offset -= alloc
+            hidden_ret_off = self.stack_offset
+            # Shift existing int regs: rdi->rsi, rsi->rdx, etc.
+            # We need to push the existing regs down by one
+            for ri in range(min(int_idx, 5), 0, -1):
+                self.emit(f"    movq {self.ARG_REGS_64[ri - 1]}, {self.ARG_REGS_64[ri]}")
+            self.emit(f"    leaq {hidden_ret_off}(%rbp), %rdi")
 
         # Set %al to number of xmm registers used (required for variadic calls)
         self.emit(f"    movl ${xmm_idx}, %eax")
@@ -2667,21 +3138,201 @@ class CodeGen:
             self.emit(f"    call {func_name}")
 
         # If function returns float/double, move xmm0 to rax
-        ret_type = self.func_return_types.get(func_name) if func_name else None
         if ret_type and ret_type.base in ("float", "double", "long double") and not ret_type.is_pointer():
-            self.emit("    movq %xmm0, %rax")
+            if not (ret_type.struct_def and ret_type.pointer_depth == 0):
+                self.emit("    movq %xmm0, %rax")
 
         # Clean up stack args
-        if stack_args > 0:
-            cleanup = stack_args * 8
-            if stack_args % 2 != 0:
+        if remaining_on_stack > 0:
+            cleanup = remaining_on_stack * 8
+            if remaining_on_stack % 2 != 0:
                 cleanup += 8  # alignment padding
             self.emit(f"    addq ${cleanup}, %rsp")
-        elif stack_args == 0 and num_args > 6:
-            pass
-        # If we added alignment padding but no stack args
-        if stack_args == 0 and num_args <= 6:
-            pass
+        elif remaining_on_stack == 0 and remaining_on_stack % 2 != 0:
+            self.emit("    addq $8, %rsp")
+
+    def _push_struct_arg(self, arg, sz):
+        """Push a struct (or long double) argument onto the stack for a function call.
+        Gets the address of the argument, then pushes sz bytes."""
+        if isinstance(arg, Identifier):
+            loc, vts = self.get_var_location(arg.name)
+            if vts and vts.is_array():
+                self.gen_lvalue_addr(arg)
+            elif arg.name in self.locals or arg.name in self.params:
+                offset = (self.locals.get(arg.name) or self.params.get(arg.name))[0]
+                self.emit(f"    leaq {offset}(%rbp), %rax")
+            elif arg.name in self.static_locals:
+                mangled = self.static_locals[arg.name]
+                self.emit(f"    leaq {mangled}(%rip), %rax")
+            else:
+                self.emit(f"    leaq {arg.name}(%rip), %rax")
+        elif isinstance(arg, MemberAccess):
+            # Member access (e.g., accessing a.a where a is a struct with long double)
+            self.gen_member_addr(arg)
+        else:
+            self.gen_lvalue_addr(arg)
+
+        if sz > 16:
+            # Pass by hidden pointer
+            self.emit(f"    pushq %rax")
+        elif sz <= 8:
+            self.emit(f"    movq (%rax), %rcx")
+            self.emit(f"    pushq %rcx")
+        else:
+            # 9-16 bytes: push high word first (so low word ends up on top)
+            self.emit(f"    movq 8(%rax), %rcx")
+            self.emit(f"    pushq %rcx")
+            self.emit(f"    movq (%rax), %rcx")
+            self.emit(f"    pushq %rcx")
+
+    def _gen_va_start(self, expr: FuncCall):
+        """Generate code for __builtin_va_start(ap, last_named_param).
+        va_list is void* pointing to a va_state struct:
+          [0]  reg_ptr      - current position in register save area
+          [8]  overflow_ptr - current position in overflow arg area
+          [16] reg_end      - end of register save area
+        """
+        if len(expr.args) < 2:
+            return
+        ap_arg = expr.args[0]
+
+        if self.current_func and hasattr(self, '_va_area_offset'):
+            named_int_slots = 0
+            for p in self.current_func.params:
+                if self._is_struct_by_value(p.type_spec):
+                    sz = p.type_spec.size_bytes()
+                    if sz <= 8: named_int_slots += 1
+                    elif sz <= 16: named_int_slots += 2
+                    else: named_int_slots += 1
+                elif (p.type_spec.base in ("float", "double", "long double")
+                      and not p.type_spec.is_pointer()):
+                    pass
+                else:
+                    named_int_slots += 1
+
+            # Allocate va_state (24 bytes)
+            self.stack_offset -= 24
+            state_off = self.stack_offset
+
+            # reg_ptr = va_area + named_int_slots * 8
+            reg_start = self._va_area_offset + min(named_int_slots, 6) * 8
+            self.emit(f"    leaq {reg_start}(%rbp), %rax")
+            self.emit(f"    movq %rax, {state_off}(%rbp)")
+
+            # overflow_ptr = 16(%rbp) (first overflow arg on caller's stack)
+            self.emit(f"    leaq 16(%rbp), %rax")
+            self.emit(f"    movq %rax, {state_off + 8}(%rbp)")
+
+            # reg_end = va_area + 48 (past all 6 register slots)
+            self.emit(f"    leaq {self._va_area_offset + 48}(%rbp), %rax")
+            self.emit(f"    movq %rax, {state_off + 16}(%rbp)")
+
+            # ap = &va_state
+            self.gen_lvalue_addr(ap_arg)
+            self.emit(f"    leaq {state_off}(%rbp), %rcx")
+            self.emit(f"    movq %rcx, (%rax)")
+        else:
+            self.gen_lvalue_addr(ap_arg)
+            self.emit("    leaq 16(%rbp), %rcx")
+            self.emit("    movq %rcx, (%rax)")
+
+    def _gen_va_copy(self, expr: FuncCall):
+        """Generate code for __builtin_va_copy(dest, src).
+        Allocate new va_state and copy 24 bytes from src's state."""
+        if len(expr.args) < 2:
+            return
+        # Allocate new va_state
+        self.stack_offset -= 24
+        new_state_off = self.stack_offset
+
+        # Load src va_state pointer
+        self.gen_expr(expr.args[1])  # src va_list value = pointer to va_state
+        # Copy 24 bytes from src state to new state
+        self.emit(f"    movq (%rax), %rcx")
+        self.emit(f"    movq %rcx, {new_state_off}(%rbp)")
+        self.emit(f"    movq 8(%rax), %rcx")
+        self.emit(f"    movq %rcx, {new_state_off + 8}(%rbp)")
+        self.emit(f"    movq 16(%rax), %rcx")
+        self.emit(f"    movq %rcx, {new_state_off + 16}(%rbp)")
+
+        # Store new state pointer into dest
+        self.gen_lvalue_addr(expr.args[0])
+        self.emit(f"    leaq {new_state_off}(%rbp), %rcx")
+        self.emit(f"    movq %rcx, (%rax)")
+
+    def _gen_builtin_va_arg(self, expr):
+        """Generate code for __builtin_va_arg(ap, type).
+        ap is void* -> va_state { reg_ptr, overflow_ptr, reg_end }.
+        For each arg of aligned_size bytes:
+          if reg_ptr + aligned_size <= reg_end: read from reg_ptr, advance reg_ptr
+          else: read from overflow_ptr, advance overflow_ptr
+        Result: for scalar types, value in %rax. For struct types, address in %rax."""
+        target_type = expr.target_type
+        size = target_type.size_bytes()
+        aligned_size = (size + 7) & ~7
+        is_struct = self._is_struct_by_value(target_type)
+
+        # For >16 byte structs, the va slot contains a pointer (8 bytes), not the full struct
+        slot_size = 8 if (is_struct and size > 16) else aligned_size
+
+        # Load va_state pointer: ap -> va_state*
+        self.gen_lvalue_addr(expr.ap)
+        self.emit("    movq (%rax), %r10")  # r10 = va_state*
+
+        # Check if we can read from register save area
+        # r10+0 = reg_ptr, r10+8 = overflow_ptr, r10+16 = reg_end
+        use_overflow = self.new_label("va_overflow")
+        va_done = self.new_label("va_done")
+
+        self.emit(f"    movq (%r10), %rax")       # reg_ptr
+        self.emit(f"    addq ${slot_size}, %rax")  # reg_ptr + slot_size
+        self.emit(f"    cmpq 16(%r10), %rax")     # compare with reg_end
+        self.emit(f"    ja {use_overflow}")         # if past end, use overflow
+
+        # Read from register save area
+        self.emit(f"    movq (%r10), %rax")  # reg_ptr (source address)
+        self.emit(f"    pushq %rax")  # save source
+        # Advance reg_ptr
+        self.emit(f"    addq ${slot_size}, %rax")
+        self.emit(f"    movq %rax, (%r10)")  # update reg_ptr
+        self.emit(f"    jmp {va_done}")
+
+        # Read from overflow area
+        self.label(use_overflow)
+        self.emit(f"    movq 8(%r10), %rax")  # overflow_ptr (source address)
+        self.emit(f"    pushq %rax")  # save source
+        # Advance overflow_ptr
+        self.emit(f"    addq ${slot_size}, %rax")
+        self.emit(f"    movq %rax, 8(%r10)")  # update overflow_ptr
+
+        self.label(va_done)
+        # Source address is on top of stack
+        self.emit(f"    popq %r11")  # r11 = source address
+
+        if is_struct:
+            if size > 16:
+                # >16 byte struct: source contains a pointer to the actual struct
+                self.emit("    movq (%r11), %rax")
+            else:
+                # Struct <= 16 bytes: copy from source to temp
+                alloc = (size + 7) & ~7
+                self.stack_offset -= alloc
+                temp_off = self.stack_offset
+                for off in range(0, size, 8):
+                    if off + 8 <= size:
+                        self.emit(f"    movq {off}(%r11), %rax")
+                        self.emit(f"    movq %rax, {temp_off + off}(%rbp)")
+                    else:
+                        for b in range(off, size):
+                            self.emit(f"    movb {b}(%r11), %al")
+                            self.emit(f"    movb %al, {temp_off + b}(%rbp)")
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
+        else:
+            # Scalar type
+            if size <= 4:
+                self.emit("    movl (%r11), %eax")
+            else:
+                self.emit("    movq (%r11), %rax")
 
     def gen_ternary(self, expr: TernaryOp):
         false_label = self.new_label("tern_f")
