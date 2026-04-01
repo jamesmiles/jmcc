@@ -4,7 +4,7 @@
 // EXPECTED_STDOUT: 42
 // ENVIRONMENT: hosted
 // PHASE: 5
-// MULTI_FILE: 006_helper.c
+// MULTI_FILE: helpers/006_helper.c
 // NOTE: Requires multi-file compilation support. Will not pass until harness is updated.
 
 int printf(const char *fmt, ...);

@@ -4,10 +4,10 @@
 // EXPECTED_STDOUT: x=10 y=20
 // ENVIRONMENT: hosted
 // PHASE: 5
-// MULTI_FILE: 010_helper.c
+// MULTI_FILE: helpers/010_helper.c
 // NOTE: Requires multi-file compilation support. Will not pass until harness is updated.
 
-#include "010_shared.h"
+#include "helpers/010_shared.h"
 
 int printf(const char *fmt, ...);
 
