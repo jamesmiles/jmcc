@@ -610,9 +610,26 @@ extern int errno;
                     output.append("")
             elif active:
                 # Regular line — expand macros
+                # Join continuation lines if macro args span multiple lines
+                joined = line
+                while i + 1 < len(lines):
+                    # Check for unbalanced parens (macro call split across lines)
+                    depth = 0
+                    in_s = False
+                    for ch in joined:
+                        if ch == '"' and not in_s: in_s = True
+                        elif ch == '"' and in_s: in_s = False
+                        elif not in_s and ch == '(': depth += 1
+                        elif not in_s and ch == ')': depth -= 1
+                    if depth > 0:
+                        i += 1
+                        joined += " " + lines[i].strip()
+                        output.append("")  # placeholder for joined line
+                    else:
+                        break
                 self._current_line = i + 1
                 self._current_file = filename
-                expanded = self._expand_macros(line)
+                expanded = self._expand_macros(joined)
                 output.append(expanded)
             else:
                 output.append("")
