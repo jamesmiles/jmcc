@@ -346,6 +346,9 @@ typedef struct { int width, height; int xoffset; int format; char *data; int byt
 #define ZPixmap 2
 #define GrabModeAsync 1
 #define CurrentTime 0L
+#define GXclear 0x0
+#define GXcopy 0x3
+#define None 0L
 #define TrueColor 4
 #define True 1
 #define False 0
