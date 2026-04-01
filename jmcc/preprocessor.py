@@ -363,8 +363,10 @@ int XCloseDisplay(Display *dpy);
 #define XK_Meta_R 0xffe8
 #define XK_Meta_L 0xffe7
 #define XK_Pause 0xff13
+#define XK_space 0x0020
 #define XK_equal 0x003d
 #define XK_minus 0x002d
+#define XK_asciitilde 0x007e
 """,
         "X11/extensions/XShm.h": """
 typedef struct {
