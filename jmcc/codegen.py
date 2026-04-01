@@ -157,7 +157,8 @@ class CodeGen:
                                 isinstance(decl.init.operand.operand, Identifier))
                 if is_addr_init or is_func_init or is_cast_addr:
                     self.emit("    .data")
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     self.emit(f"    .align 8")
                     self.label(name)
                     if is_addr_init:
@@ -169,7 +170,8 @@ class CodeGen:
                 elif is_float_init:
                     import struct
                     self.emit("    .data")
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     self.emit(f"    .align 8")
                     self.label(name)
                     packed = struct.pack('<d', decl.init.value)
@@ -177,7 +179,8 @@ class CodeGen:
                     self.emit(f"    .quad {val_int}")
                 elif const_val is not None:
                     self.emit("    .data")
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
                     self.emit(f"    .align {min(max(size, 4), 8)}")
                     self.label(name)
@@ -211,14 +214,16 @@ class CodeGen:
                         # Fallback: emit zeros
                         self.emit(f"    .zero 8")
                     # Now emit the pointer
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     self.emit(f"    .align 8")
                     self.label(name)
                     self.emit(f"    .quad {anon_name}")
                 elif decl.init and isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
                     # char s[] = "hello";  or  wchar_t s[] = L"hello";
                     self.emit("    .data")
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     if decl.init.wide:
                         self.emit(f"    .align 4")
                         self.label(name)
@@ -243,7 +248,8 @@ class CodeGen:
                     if isinstance(actual_init, CastExpr):
                         actual_init = actual_init.operand
                     self.emit("    .data")
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     self.emit(f"    .align 8")
                     self.label(name)
                     sdef = decl.type_spec.struct_def
@@ -376,7 +382,8 @@ class CodeGen:
                     pass  # extern declaration — symbol provided by linker, don't emit
                 else:
                     self.emit("    .bss")
-                    self.emit(f"    .globl {name}")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
                     if decl.type_spec.is_array() and decl.type_spec.array_sizes:
                         for dim in decl.type_spec.array_sizes:
@@ -910,7 +917,8 @@ class CodeGen:
             del self._va_area_offset
 
         self.emit("")
-        self.emit(f"    .globl {func.name}")
+        if not (func.return_type and func.return_type.is_static):
+            self.emit(f"    .globl {func.name}")
         self.emit(f"    .type {func.name}, @function")
         self.label(func.name)
 
@@ -1933,7 +1941,49 @@ class CodeGen:
 
         elif isinstance(expr, CastExpr):
             self.gen_expr(expr.operand)
-            # TODO: actual type conversion
+            src_type = self.get_expr_type(expr.operand)
+            dst_type = expr.target_type
+            if dst_type and src_type:
+                src_size = src_type.size_bytes() if not src_type.is_pointer() else 8
+                dst_size = dst_type.size_bytes() if not dst_type.is_pointer() else 8
+                src_is_float = src_type.base in ("float", "double", "long double") and not src_type.is_pointer()
+                dst_is_float = dst_type.base in ("float", "double", "long double") and not dst_type.is_pointer()
+                if src_is_float and not dst_is_float:
+                    # float/double -> int
+                    self.emit("    movq %rax, %xmm0")
+                    self.emit("    cvttsd2si %xmm0, %rax")
+                elif not src_is_float and dst_is_float:
+                    # int -> float/double
+                    self.emit("    cvtsi2sd %rax, %xmm0")
+                    self.emit("    movq %xmm0, %rax")
+                elif not src_is_float and not dst_is_float:
+                    # int -> int: handle widening/narrowing
+                    if dst_size > src_size:
+                        # Widening cast
+                        if src_size <= 4 and dst_size == 8:
+                            if src_type.is_unsigned:
+                                # Zero-extend: movl %eax, %eax clears upper 32 bits
+                                self.emit("    movl %eax, %eax")
+                            else:
+                                # Sign-extend 32-bit to 64-bit
+                                self.emit("    movslq %eax, %rax")
+                        elif src_size == 1 and dst_size >= 2:
+                            if src_type.is_unsigned:
+                                self.emit("    movzbl %al, %eax")
+                            else:
+                                self.emit("    movsbl %al, %eax")
+                            if dst_size == 8 and not src_type.is_unsigned:
+                                self.emit("    movslq %eax, %rax")
+                        elif src_size == 2 and dst_size >= 4:
+                            if src_type.is_unsigned:
+                                self.emit("    movzwl %ax, %eax")
+                            else:
+                                self.emit("    movswl %ax, %eax")
+                            if dst_size == 8 and not src_type.is_unsigned:
+                                self.emit("    movslq %eax, %rax")
+                    elif dst_size < src_size:
+                        # Narrowing cast — truncation is implicit in x86
+                        pass
 
         elif isinstance(expr, SizeofExpr):
             if expr.is_type:

@@ -945,9 +945,19 @@ class Parser:
                 return VarDecl(type_spec=ts, name=name or "__anon__", init=init, line=t.line, col=t.col)
 
             name = self.expect(TokenType.IDENTIFIER, "variable name").value
+
+            # Handle function pointer array: (*name[4])(params)
+            fptr_arr_sizes = []
+            while self.match(TokenType.LBRACKET):
+                if not self.at(TokenType.RBRACKET):
+                    fptr_arr_sizes.append(self.parse_expr())
+                else:
+                    fptr_arr_sizes.append(None)
+                self.expect(TokenType.RBRACKET, "']'")
+
             self.expect(TokenType.RPAREN, "')'")
 
-            if self.at(TokenType.LBRACKET):
+            if self.at(TokenType.LBRACKET) and not fptr_arr_sizes:
                 # Pointer to array: (*p)[4]
                 # Store array size so element stride is computed correctly
                 arr_sizes = []
@@ -961,19 +971,24 @@ class Parser:
                               is_unsigned=base_type.is_unsigned,
                               array_sizes=arr_sizes if arr_sizes else None)
             elif self.at(TokenType.LPAREN):
-                # Function pointer: (*fp)(params)
+                # Function pointer: (*fp)(params) or (*fp[4])(params)
                 self.advance()  # (
                 depth = 1
                 while depth > 0 and not self.at(TokenType.EOF):
                     if self.match(TokenType.LPAREN): depth += 1
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
-                ts = TypeSpec(base="void", pointer_depth=1)
+                ts = TypeSpec(base="void", pointer_depth=1,
+                              is_ptr_array=bool(fptr_arr_sizes),
+                              array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
             else:
                 ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1)
             init = None
             if self.match(TokenType.ASSIGN):
-                init = self.parse_assignment()
+                if self.at(TokenType.LBRACE):
+                    init = self.parse_init_list()
+                else:
+                    init = self.parse_assignment()
             return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
 
         name = self.expect(TokenType.IDENTIFIER, "variable name").value

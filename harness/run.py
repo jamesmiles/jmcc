@@ -82,9 +82,10 @@ def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
         return TimeoutResult()
 
 
-def _native_assemble_and_link(asm_path, output_path, freestanding=False):
+def _native_assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None):
     """Assemble and link on the host without Docker."""
     obj_path = asm_path + ".o"
+    extra_obj_paths = []
     try:
         r = subprocess.run(
             ["as", "--64", "-o", obj_path, asm_path],
@@ -93,14 +94,29 @@ def _native_assemble_and_link(asm_path, output_path, freestanding=False):
         if r.returncode != 0:
             return {"success": False, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
 
+        # Assemble extra files (for multi-file tests)
+        for extra_asm in (extra_asm_paths or []):
+            extra_obj = extra_asm + ".o"
+            extra_obj_paths.append(extra_obj)
+            r = subprocess.run(
+                ["as", "--64", "-o", extra_obj, extra_asm],
+                capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+            )
+            if r.returncode != 0:
+                return {"success": False, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+
+        all_objs = [obj_path] + extra_obj_paths
         r = subprocess.run(
-            ["gcc", "-o", output_path, obj_path, "-lc", "-lm", "-no-pie"],
+            ["gcc", "-o", output_path] + all_objs + ["-lc", "-lm", "-no-pie"],
             capture_output=True, text=True, timeout=TIMEOUT_SECONDS
         )
         return {"success": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
     finally:
         if os.path.exists(obj_path):
             os.unlink(obj_path)
+        for ep in extra_obj_paths:
+            if os.path.exists(ep):
+                os.unlink(ep)
 
 
 def _native_execute_hosted(binary_path, stdin_data=None):
@@ -150,10 +166,10 @@ def compile_with_jmcc(source_path, output_asm_path):
     }
 
 
-def assemble_and_link(asm_path, output_path, freestanding=False):
+def assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None):
     """Assemble and link JMCC output (native or Docker)."""
     if _use_native():
-        return _native_assemble_and_link(asm_path, output_path, freestanding)
+        return _native_assemble_and_link(asm_path, output_path, freestanding, extra_asm_paths=extra_asm_paths)
     asm_name = os.path.basename(asm_path)
     out_name = os.path.basename(output_path)
 
@@ -236,6 +252,7 @@ def parse_test_metadata(source_path):
         "expect_compile_fail": False,
         "error_pattern": "",
         "standard_ref": "",
+        "multi_file": [],
     }
 
     stdout_lines = []
@@ -284,6 +301,10 @@ def parse_test_metadata(source_path):
                 in_stdout = False
             elif comment.startswith("STANDARD_REF:"):
                 metadata["standard_ref"] = comment[13:].strip()
+                in_stdout = False
+            elif comment.startswith("MULTI_FILE:"):
+                files = comment[11:].strip()
+                metadata["multi_file"] = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
                 in_stdout = False
             elif in_stdout and comment:
                 stdout_lines.append(comment)
@@ -334,9 +355,21 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
             result["details"] = f"JMCC compilation failed:\n{comp['stderr']}"
             return result
 
+        # Compile multi-file helpers
+        extra_asm_paths = []
+        source_dir = str(Path(source_path).parent)
+        for helper_file in metadata.get("multi_file", []):
+            helper_path = os.path.join(source_dir, helper_file)
+            helper_asm = str(output_dir / f"{Path(helper_file).stem}.s")
+            hcomp = compile_with_jmcc(helper_path, helper_asm)
+            if not hcomp["success"]:
+                result["details"] = f"JMCC compilation failed (helper {helper_file}):\n{hcomp['stderr']}"
+                return result
+            extra_asm_paths.append(helper_asm)
+
         # Assemble and link
         freestanding = metadata["environment"] == "freestanding"
-        link = assemble_and_link(asm_path, bin_path, freestanding=freestanding)
+        link = assemble_and_link(asm_path, bin_path, freestanding=freestanding, extra_asm_paths=extra_asm_paths)
         if not link["success"]:
             result["details"] = f"Assembly/linking failed:\n{link['stderr']}"
             return result
