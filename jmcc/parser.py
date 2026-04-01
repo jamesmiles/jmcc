@@ -164,8 +164,8 @@ class Parser:
         elif enum_def is not None:
             base = f"enum {enum_def.name}" if enum_def.name else "enum"
         elif not base_parts:
-            if is_unsigned or is_signed:
-                base = "int"
+            if is_unsigned or is_signed or is_static or is_extern:
+                base = "int"  # implicit int (C89 K&R style)
             else:
                 self.error("expected type specifier")
         elif base_parts == ["long", "long"]:
