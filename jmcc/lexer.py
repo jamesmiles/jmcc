@@ -306,6 +306,10 @@ class Lexer:
         result = [first_char]
         is_float = False
 
+        # Float starting with dot: .867
+        if first_char == '.':
+            is_float = True
+
         # Hex
         if first_char == '0' and self.pos < len(self.source) and self.source[self.pos] in 'xX':
             result.append(self.advance())

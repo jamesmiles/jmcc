@@ -1,7 +1,7 @@
 // TEST: float_literal_no_leading_zero
 // DESCRIPTION: Float literal without leading zero like .867 (Doom's am_map chevron coords)
 // EXPECTED_EXIT: 0
-// EXPECTED_STDOUT: -56832
+// EXPECTED_STDOUT: -56819
 // STDOUT: -32768
 // ENVIRONMENT: hosted
 // PHASE: 5

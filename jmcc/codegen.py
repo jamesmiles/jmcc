@@ -2647,9 +2647,9 @@ class CodeGen:
             self.emit("    addq %rcx, %rax")
         elif expr.op == "+":
             self.emit("    addl %ecx, %eax")
-        elif expr.op == "-" and left_type and left_type.is_pointer():
+        elif expr.op == "-" and left_type and (left_type.is_pointer() or left_type.is_array()):
             # pointer - int: scale int by element size
-            right_is_ptr = right_type and right_type.is_pointer()
+            right_is_ptr = right_type and (right_type.is_pointer() or right_type.is_array())
             if not right_is_ptr:
                 elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1,
                                       struct_def=left_type.struct_def).size_bytes()
@@ -2660,7 +2660,8 @@ class CodeGen:
             else:
                 # pointer - pointer: result is element count
                 self.emit("    subq %rcx, %rax")
-                elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1).size_bytes()
+                elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1,
+                                     struct_def=left_type.struct_def).size_bytes()
                 if elem_size > 1:
                     self.emit("    cqo")
                     self.emit(f"    movq ${elem_size}, %rcx")
