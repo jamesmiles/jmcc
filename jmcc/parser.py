@@ -93,6 +93,7 @@ class Parser:
         is_volatile = False
         is_static = False
         is_extern = False
+        has_storage_class = False  # any qualifier that implies implicit int
         base_parts = []
         struct_def = None
         enum_def = None
@@ -114,14 +115,18 @@ class Parser:
                 self.advance()
             elif t.type == TokenType.STATIC:
                 is_static = True
+                has_storage_class = True
                 self.advance()
             elif t.type == TokenType.EXTERN:
                 is_extern = True
+                has_storage_class = True
                 self.advance()
             elif t.type == TokenType.INLINE:
-                self.advance()  # ignore for now
+                has_storage_class = True
+                self.advance()
             elif t.type == TokenType.REGISTER:
-                self.advance()  # ignore for now
+                has_storage_class = True
+                self.advance()
             elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
                 self.skip_attribute()
                 continue
@@ -164,7 +169,7 @@ class Parser:
         elif enum_def is not None:
             base = f"enum {enum_def.name}" if enum_def.name else "enum"
         elif not base_parts:
-            if is_unsigned or is_signed or is_static or is_extern:
+            if is_unsigned or is_signed or has_storage_class:
                 base = "int"  # implicit int (C89 K&R style)
             else:
                 self.error("expected type specifier")
