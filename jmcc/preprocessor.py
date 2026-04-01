@@ -384,11 +384,6 @@ double ceil(double);
         if inc_name in self.BUILTIN_HEADERS:
             return self.BUILTIN_HEADERS[inc_name]
 
-        # For system headers we don't have, just skip silently
-        # (the actual declarations will be provided by the user as forward decls)
-        if is_system:
-            return ""
-
         # For quoted includes, search relative to current file
         if current_file and current_file != "<stdin>":
             dir_path = os.path.dirname(current_file)
