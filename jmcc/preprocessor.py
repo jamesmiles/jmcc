@@ -299,6 +299,8 @@ double ceil(double);
                     output.append("")
             elif active:
                 # Regular line — expand macros
+                self._current_line = i + 1
+                self._current_file = filename
                 expanded = self._expand_macros(line)
                 output.append(expanded)
             else:
@@ -380,7 +382,7 @@ double ceil(double);
                     return ""  # already included
                 self.included_files.add(full)
                 with open(full) as f:
-                    return f.read()
+                    return f.read().replace('\\\n', '')
 
         # Search include paths
         for path in self.include_paths:
@@ -390,7 +392,7 @@ double ceil(double);
                     return ""
                 self.included_files.add(full)
                 with open(full) as f:
-                    return f.read()
+                    return f.read().replace('\\\n', '')
 
         return ""
 
@@ -451,7 +453,15 @@ double ceil(double);
                     j += 1
                 word = line[i:j]
 
-                if word in self.macros:
+                if word == "__LINE__":
+                    result.append(str(getattr(self, '_current_line', 0)))
+                    i = j
+                    continue
+                elif word == "__FILE__":
+                    result.append(f'"{getattr(self, "_current_file", "<unknown>")}"')
+                    i = j
+                    continue
+                elif word in self.macros:
                     macro = self.macros[word]
                     if macro.is_func:
                         # Function-like macro — look for (args)

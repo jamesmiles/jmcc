@@ -336,8 +336,9 @@ class Parser:
                 mem_name = self.expect(TokenType.IDENTIFIER, "enumerator name").value
                 if self.match(TokenType.ASSIGN):
                     val_expr = self.parse_expr()
-                    if isinstance(val_expr, IntLiteral):
-                        value = val_expr.value
+                    cv = self._eval_const(val_expr)
+                    if cv is not None:
+                        value = cv
                     else:
                         self.error("enum value must be a constant integer")
                 members.append(EnumMember(name=mem_name, value=value))
@@ -360,6 +361,40 @@ class Parser:
             return edef
         else:
             self.error("expected enum name or '{'")
+
+    def _eval_const(self, expr) -> Optional[int]:
+        """Evaluate a constant expression at parse time (for enum values, etc.)."""
+        if isinstance(expr, IntLiteral):
+            return expr.value
+        if isinstance(expr, CharLiteral):
+            return ord(expr.value)
+        if isinstance(expr, Identifier) and expr.name in self.enum_values:
+            return self.enum_values[expr.name]
+        if isinstance(expr, UnaryOp):
+            v = self._eval_const(expr.operand)
+            if v is None:
+                return None
+            if expr.op == "-": return -v
+            if expr.op == "~": return ~v
+            if expr.op == "!": return 0 if v else 1
+        if isinstance(expr, BinaryOp):
+            l = self._eval_const(expr.left)
+            r = self._eval_const(expr.right)
+            if l is None or r is None:
+                return None
+            ops = {
+                "+": lambda a, b: a + b, "-": lambda a, b: a - b,
+                "*": lambda a, b: a * b, "/": lambda a, b: a // b if b else 0,
+                "%": lambda a, b: a % b if b else 0,
+                "<<": lambda a, b: a << b, ">>": lambda a, b: a >> b,
+                "&": lambda a, b: a & b, "|": lambda a, b: a | b,
+                "^": lambda a, b: a ^ b,
+            }
+            if expr.op in ops:
+                return ops[expr.op](l, r)
+        if isinstance(expr, CastExpr):
+            return self._eval_const(expr.operand)
+        return None
 
     # ---- Expression parsing (precedence climbing) ----
 
