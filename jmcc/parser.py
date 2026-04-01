@@ -1007,6 +1007,8 @@ class Parser:
                 array_sizes.append(self.parse_expr())
             self.expect(TokenType.RBRACKET, "']'")
         if array_sizes:
+            if ts.pointer_depth > 0:
+                ts.is_ptr_array = True
             ts.array_sizes = array_sizes
 
         init = None
@@ -1093,6 +1095,8 @@ class Parser:
                     array_sizes.append(self.parse_expr())
                 self.expect(TokenType.RBRACKET, "']'")
             if array_sizes:
+                if type_spec.pointer_depth > 0:
+                    type_spec.is_ptr_array = True
                 type_spec.array_sizes = array_sizes
 
             init = None
@@ -1188,6 +1192,8 @@ class Parser:
                 array_sizes.append(self.parse_expr())
             self.expect(TokenType.RBRACKET, "']'")
         if array_sizes:
+            if type_spec.pointer_depth > 0:
+                type_spec.is_ptr_array = True
             type_spec.array_sizes = array_sizes
 
         # Global variable (with possible comma-separated additional declarations)
@@ -1245,13 +1251,18 @@ class Parser:
             designator_index = None
 
             # Designated initializer: .field = expr or [idx] = expr
+            designator_path = None
+            designator_end = None
             if self.at(TokenType.DOT):
                 self.advance()
                 designator = self.expect(TokenType.IDENTIFIER, "field name").value
-                # Chained designator: .a.b = val (skip extra .field parts)
-                while self.at(TokenType.DOT):
-                    self.advance()
-                    self.expect(TokenType.IDENTIFIER, "field name")
+                # Chained designator: .a.b = val -> path ["a", "b"]
+                if self.at(TokenType.DOT):
+                    designator_path = [designator]
+                    while self.at(TokenType.DOT):
+                        self.advance()
+                        designator_path.append(self.expect(TokenType.IDENTIFIER, "field name").value)
+                    designator = designator_path[0]
                 self.expect(TokenType.ASSIGN, "'='")
             elif self.at(TokenType.LBRACKET):
                 self.advance()
@@ -1261,8 +1272,8 @@ class Parser:
                 # Range designator (GCC extension): [start ... end]
                 if self.match(TokenType.ELLIPSIS):
                     end_expr = self.parse_expr()
-                    # Use the start index; range will init same value for all
-                    # (simplified: we just use start index)
+                    if isinstance(end_expr, IntLiteral):
+                        designator_end = end_expr.value
                 self.expect(TokenType.RBRACKET, "']'")
                 self.expect(TokenType.ASSIGN, "'='")
 
@@ -1272,7 +1283,9 @@ class Parser:
             else:
                 value = self.parse_assignment()
 
-            items.append(InitItem(designator=designator, designator_index=designator_index, value=value))
+            items.append(InitItem(designator=designator, designator_index=designator_index,
+                                  designator_path=designator_path, designator_end=designator_end,
+                                  value=value))
 
             if not self.match(TokenType.COMMA):
                 break

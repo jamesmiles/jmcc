@@ -204,7 +204,11 @@ class CodeGen:
                             elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
                             else: asm_str += ch
                         self.emit(f'    .string "{asm_str}"')
-                elif decl.init and isinstance(decl.init, InitList):
+                elif decl.init and (isinstance(decl.init, InitList) or
+                                     (isinstance(decl.init, CastExpr) and isinstance(decl.init.operand, InitList))):
+                    actual_init = decl.init
+                    if isinstance(actual_init, CastExpr):
+                        actual_init = actual_init.operand
                     self.emit("    .data")
                     self.emit(f"    .globl {name}")
                     self.emit(f"    .align 8")
@@ -212,7 +216,7 @@ class CodeGen:
                     sdef = decl.type_spec.struct_def
                     if sdef and not decl.type_spec.is_array():
                         # Single struct init
-                        self._emit_struct_init_data(sdef, decl.init)
+                        self._emit_struct_init_data(sdef, actual_init)
                     elif decl.type_spec.is_array() and sdef:
                         # Array of structs initializer
                         sdef = decl.type_spec.struct_def
@@ -221,18 +225,26 @@ class CodeGen:
                             first = decl.type_spec.array_sizes[0]
                             if isinstance(first, IntLiteral):
                                 total_elems = first.value
-                        # Check if init items are nested InitLists or flat values
-                        has_nested = any(isinstance(item.value, InitList) for item in decl.init.items)
+                        # Check if init items are nested InitLists/compound literals or flat values
+                        def _is_struct_init_item(item_val):
+                            v = self._unwrap_compound_literal(item_val)
+                            return isinstance(v, InitList)
+                        has_nested = any(_is_struct_init_item(item.value) for item in actual_init.items)
 
                         if has_nested:
-                            # Build element map: idx -> InitList
+                            # Build element map: idx -> InitList or single-value init
                             elem_inits = [None] * total_elems
                             idx = 0
-                            for item in decl.init.items:
+                            for item in actual_init.items:
                                 if item.designator_index is not None:
                                     idx = item.designator_index
-                                if isinstance(item.value, InitList) and idx < total_elems:
-                                    elem_inits[idx] = item.value
+                                val = self._unwrap_compound_literal(item.value)
+                                if idx < total_elems:
+                                    if isinstance(val, InitList):
+                                        elem_inits[idx] = val
+                                    else:
+                                        # Wrap scalar/identifier in a single-item InitList
+                                        elem_inits[idx] = InitList(items=[InitItem(value=item.value)])
                                 idx += 1
                             for einit in elem_inits:
                                 if einit:
@@ -240,38 +252,20 @@ class CodeGen:
                                 else:
                                     self.emit(f"    .zero {sdef.size_bytes()}")
                         else:
-                            # Flat initializer: distribute values across struct members
-                            # Count total member slots including array elements
-                            member_count = 0
-                            for m in sdef.members:
-                                if m.type_spec.is_array() and m.type_spec.array_sizes:
-                                    first = m.type_spec.array_sizes[0]
-                                    if isinstance(first, IntLiteral):
-                                        member_count += first.value
-                                    else:
-                                        member_count += 1
-                                else:
-                                    member_count += 1
-
-                            flat_vals = []
-                            for item in decl.init.items:
-                                cv = self._try_eval_const(item.value)
-                                flat_vals.append(cv if cv is not None else 0)
-
+                            # Flat initializer: use _build_data_bytes for each element
+                            # by splitting items across elements using brace elision
+                            items_per_elem = len(actual_init.items) // total_elems if total_elems > 0 else 0
+                            if items_per_elem * total_elems < len(actual_init.items):
+                                items_per_elem += 1
+                            item_pos = 0
                             for elem_idx in range(total_elems):
-                                start = elem_idx * member_count
-                                for j in range(member_count):
-                                    val_idx = start + j
-                                    val = flat_vals[val_idx] if val_idx < len(flat_vals) else 0
-                                    if sdef.members and sdef.members[0].type_spec.size_bytes() == 8:
-                                        self.emit(f"    .quad {val}")
-                                    else:
-                                        self.emit(f"    .long {val}")
-                                # Pad to struct size
-                                data_bytes = member_count * 8  # assuming long
-                                struct_bytes = sdef.size_bytes()
-                                if data_bytes < struct_bytes:
-                                    self.emit(f"    .zero {struct_bytes - data_bytes}")
+                                elem_items = actual_init.items[item_pos:item_pos + items_per_elem]
+                                item_pos += items_per_elem
+                                if elem_items:
+                                    sub_init = InitList(items=elem_items)
+                                    self._emit_struct_init_data(sdef, sub_init)
+                                else:
+                                    self.emit(f"    .zero {sdef.size_bytes()}")
                     else:
                         # Plain array initializer (with designated initializer support)
                         elem_size = decl.type_spec.size_bytes()
@@ -280,20 +274,71 @@ class CodeGen:
                             first = decl.type_spec.array_sizes[0]
                             if isinstance(first, IntLiteral):
                                 total_elems = first.value
-                        elems = [0] * total_elems
-                        idx = 0
-                        for item in decl.init.items:
-                            if item.designator_index is not None:
-                                idx = item.designator_index
-                            cv = self._try_eval_const(item.value)
-                            if cv is not None and idx < total_elems:
-                                elems[idx] = cv
-                            idx += 1
-                        for val in elems:
-                            if elem_size <= 4:
-                                self.emit(f"    .long {val}")
-                            else:
-                                self.emit(f"    .quad {val}")
+
+                        # Handle pointer-sized elements (function pointers) vs scalar arrays
+                        is_ptr_array = decl.type_spec.is_pointer() or (decl.type_spec.struct_def and decl.type_spec.size_bytes() == 8)
+                        if not is_ptr_array and not decl.type_spec.struct_def:
+                            # Check if element type is a pointer (e.g., void* or function pointer)
+                            if elem_size == 8:
+                                is_ptr_array = True
+
+                        if is_ptr_array:
+                            # Array of pointers: handle relocations
+                            elems = [None] * total_elems  # None = zero, string = symbol
+                            idx = 0
+                            for item in actual_init.items:
+                                if item.designator_index is not None:
+                                    idx = item.designator_index
+                                end_idx = idx
+                                if item.designator_end is not None:
+                                    end_idx = item.designator_end
+                                for j in range(idx, end_idx + 1):
+                                    if j < total_elems:
+                                        val = self._unwrap_compound_literal(item.value)
+                                        # Check if it's an address or function ref
+                                        if isinstance(val, UnaryOp) and val.op == "&" and isinstance(val.operand, Identifier):
+                                            elems[j] = val.operand.name
+                                        elif isinstance(val, Identifier) and val.name in self.known_functions:
+                                            elems[j] = val.name
+                                        elif isinstance(val, InitList) and val.items:
+                                            # Unwrap {func_ptr}
+                                            inner = self._unwrap_compound_literal(val.items[0].value)
+                                            if isinstance(inner, Identifier) and inner.name in self.known_functions:
+                                                elems[j] = inner.name
+                                            elif isinstance(inner, UnaryOp) and inner.op == "&" and isinstance(inner.operand, Identifier):
+                                                elems[j] = inner.operand.name
+                                        else:
+                                            cv = self._try_eval_const(val)
+                                            if cv is not None:
+                                                elems[j] = cv
+                                idx = end_idx + 1
+                            for val in elems:
+                                if val is None:
+                                    self.emit(f"    .quad 0")
+                                elif isinstance(val, str):
+                                    self.emit(f"    .quad {val}")
+                                else:
+                                    self.emit(f"    .quad {val}")
+                        else:
+                            elems = [0] * total_elems
+                            idx = 0
+                            for item in actual_init.items:
+                                if item.designator_index is not None:
+                                    idx = item.designator_index
+                                end_idx = idx
+                                if item.designator_end is not None:
+                                    end_idx = item.designator_end
+                                cv = self._try_eval_const(item.value)
+                                if cv is not None:
+                                    for j in range(idx, end_idx + 1):
+                                        if j < total_elems:
+                                            elems[j] = cv
+                                idx = end_idx + 1
+                            for val in elems:
+                                if elem_size <= 4:
+                                    self.emit(f"    .long {val}")
+                                else:
+                                    self.emit(f"    .quad {val}")
                 elif decl.type_spec.is_extern:
                     pass  # extern declaration — symbol provided by linker, don't emit
                 else:
@@ -337,87 +382,378 @@ class CodeGen:
 
         return "\n".join(self.output) + "\n"
 
-    def _emit_struct_init_data(self, sdef, init_list):
-        """Emit data section entries for a struct initializer."""
-        # Build a map of member values
-        values = {}
-        for i, item in enumerate(init_list.items):
-            if item.designator:
-                values[item.designator] = item.value
-            elif i < len(sdef.members):
-                values[sdef.members[i].name] = item.value
+    def _unwrap_compound_literal(self, expr):
+        """Unwrap CastExpr(InitList) -> InitList for compound literals."""
+        if isinstance(expr, CastExpr) and isinstance(expr.operand, InitList):
+            return expr.operand
+        return expr
 
-        offset = 0
-        for mem in sdef.members:
-            size = mem.type_spec.size_bytes()
-            # Alignment padding
-            align = min(size, 8)
-            if align > 0:
-                aligned = (offset + align - 1) & ~(align - 1)
-                if aligned > offset:
-                    self.emit(f"    .zero {aligned - offset}")
-                offset = aligned
+    def _get_member_total_size(self, ts):
+        """Get total size of a type including array dimensions."""
+        size = ts.size_bytes()
+        if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
+            first = ts.array_sizes[0]
+            if first is None:
+                return 0  # Flexible array
+            if isinstance(first, IntLiteral):
+                size *= first.value
+        return size
 
-            val = values.get(mem.name)
-            # Calculate actual member size (including array)
-            actual_size = size
-            if mem.type_spec.is_array() and mem.type_spec.array_sizes:
-                first = mem.type_spec.array_sizes[0]
-                if isinstance(first, IntLiteral):
-                    actual_size = size * first.value
+    def _build_data_bytes(self, sdef, init_list, is_union=False):
+        """Build a byte buffer + reloc list for a struct/union initializer.
+        Returns (bytes_buf, relocs) where relocs is [(offset, symbol_name), ...].
+        Handles brace elision, nested structs, unions, string literals, empty structs."""
+        total_size = sdef.size_bytes()
+        buf = bytearray(total_size)
+        relocs = []
 
-            if val and isinstance(val, InitList) and mem.type_spec.is_array():
-                # Array member initialized with {val1, val2, ...}
-                arr_count = 0
-                if mem.type_spec.array_sizes and mem.type_spec.array_sizes[0]:
-                    first = mem.type_spec.array_sizes[0]
+        items = init_list.items
+        item_idx = [0]  # mutable for nested consumption
+
+        def consume_item():
+            if item_idx[0] < len(items):
+                it = items[item_idx[0]]
+                item_idx[0] += 1
+                return it
+            return None
+
+        def peek_item():
+            if item_idx[0] < len(items):
+                return items[item_idx[0]]
+            return None
+
+        def store_byte(off, val):
+            if 0 <= off < len(buf):
+                buf[off] = val & 0xFF
+
+        def store_val(off, size, val):
+            """Store a little-endian integer value."""
+            val = val & ((1 << (size * 8)) - 1)
+            for i in range(size):
+                store_byte(off + i, (val >> (i * 8)) & 0xFF)
+
+        def fill_member(mem_offset, mem_ts, value):
+            """Fill a member at given offset with given value expression."""
+            value = self._unwrap_compound_literal(value)
+            mem_size = mem_ts.size_bytes()
+            actual_size = self._get_member_total_size(mem_ts)
+
+            if isinstance(value, StringLiteral) and mem_ts.is_array() and mem_size == 1:
+                # String literal for char array
+                for i, ch in enumerate(value.value):
+                    if mem_offset + i < total_size:
+                        store_byte(mem_offset + i, ord(ch))
+                # null terminator
+                null_off = mem_offset + len(value.value)
+                if null_off < total_size:
+                    store_byte(null_off, 0)
+                return
+
+            if isinstance(value, InitList) and mem_ts.struct_def and not mem_ts.is_pointer():
+                # Nested struct/union init
+                sub_buf, sub_relocs = self._build_data_bytes(
+                    mem_ts.struct_def, value, is_union=mem_ts.struct_def.is_union)
+                for i, b in enumerate(sub_buf):
+                    if mem_offset + i < total_size:
+                        buf[mem_offset + i] = b
+                for r_off, r_sym in sub_relocs:
+                    relocs.append((mem_offset + r_off, r_sym))
+                return
+
+            if isinstance(value, InitList) and mem_ts.is_array():
+                # Array init list
+                arr_elem_size = mem_size
+                arr_count = 1
+                if mem_ts.array_sizes and mem_ts.array_sizes[0]:
+                    first = mem_ts.array_sizes[0]
                     if isinstance(first, IntLiteral):
                         arr_count = first.value
-                elems = [0] * arr_count
-                for j, item in enumerate(val.items):
-                    cv = self._try_eval_const(item.value)
-                    if cv is not None and j < arr_count:
-                        elems[j] = cv
-                for ev in elems:
-                    if size <= 4:
-                        self.emit(f"    .long {ev}")
-                    else:
-                        self.emit(f"    .quad {ev}")
-            elif val and isinstance(val, InitList) and mem.type_spec.struct_def:
-                # Nested struct member
-                self._emit_struct_init_data(mem.type_spec.struct_def, val)
-            else:
-                # Unwrap {value} InitList for scalar members
-                unwrapped = val
-                if isinstance(unwrapped, InitList) and unwrapped.items and not mem.type_spec.struct_def:
-                    unwrapped = unwrapped.items[0].value
-                cv = self._try_eval_const(unwrapped) if unwrapped else None
-                if cv is not None:
-                    if size == 1:
-                        self.emit(f"    .byte {cv}")
-                    elif size == 2:
-                        self.emit(f"    .word {cv}")
-                    elif size <= 4:
-                        self.emit(f"    .long {cv}")
-                    else:
-                        self.emit(f"    .quad {cv}")
-                elif val and isinstance(val, StringLiteral):
-                    lbl = self.new_label("str")
-                    self.string_literals.append((lbl, val.value, val.wide))
-                    self.emit(f"    .quad {lbl}")
-                elif (val and isinstance(val, UnaryOp) and val.op == "&" and
-                      isinstance(val.operand, Identifier)):
-                    self.emit(f"    .quad {val.operand.name}")
-                elif val and isinstance(val, Identifier) and val.name in self.known_functions:
-                    self.emit(f"    .quad {val.name}")
-                else:
-                    self.emit(f"    .zero {actual_size}")
-            offset += actual_size
+                fill_array(mem_offset, mem_ts, value, arr_elem_size, arr_count)
+                return
 
-        # Pad to total struct size
-        total = sdef.size_bytes()
-        if offset < total:
-            self.emit(f"    .zero {total - offset}")
+            # Scalar value
+            # Unwrap {value} braces around scalar
+            unwrapped = value
+            while isinstance(unwrapped, InitList) and unwrapped.items:
+                unwrapped = unwrapped.items[0].value
+            unwrapped = self._unwrap_compound_literal(unwrapped)
+
+            cv = self._try_eval_const(unwrapped) if unwrapped else None
+            if cv is not None:
+                store_val(mem_offset, min(mem_size, actual_size), cv)
+            elif isinstance(unwrapped, StringLiteral):
+                # String literal as a pointer
+                lbl = self.new_label("str")
+                self.string_literals.append((lbl, unwrapped.value, unwrapped.wide))
+                relocs.append((mem_offset, lbl))
+            elif (isinstance(unwrapped, UnaryOp) and unwrapped.op == "&" and
+                  isinstance(unwrapped.operand, Identifier)):
+                relocs.append((mem_offset, unwrapped.operand.name))
+            elif isinstance(unwrapped, Identifier) and unwrapped.name in self.known_functions:
+                relocs.append((mem_offset, unwrapped.name))
+
+        def fill_array(arr_offset, arr_ts, init, elem_size, arr_count):
+            """Fill array from init list items."""
+            idx = 0
+            for item in init.items:
+                if item.designator_index is not None:
+                    idx = item.designator_index
+                end_idx = idx
+                if item.designator_end is not None:
+                    end_idx = item.designator_end
+                for j in range(idx, end_idx + 1):
+                    if j < arr_count:
+                        fill_scalar_or_val(arr_offset + j * elem_size, elem_size, item.value)
+                idx = end_idx + 1
+
+        def fill_scalar_or_val(off, size, value):
+            """Fill a scalar slot."""
+            value = self._unwrap_compound_literal(value)
+            # Unwrap braces
+            unwrapped = value
+            while isinstance(unwrapped, InitList) and unwrapped.items:
+                unwrapped = unwrapped.items[0].value
+            unwrapped = self._unwrap_compound_literal(unwrapped)
+            cv = self._try_eval_const(unwrapped) if unwrapped else None
+            if cv is not None:
+                store_val(off, size, cv)
+            elif isinstance(unwrapped, StringLiteral):
+                lbl = self.new_label("str")
+                self.string_literals.append((lbl, unwrapped.value, unwrapped.wide))
+                relocs.append((off, lbl))
+            elif (isinstance(unwrapped, UnaryOp) and unwrapped.op == "&" and
+                  isinstance(unwrapped.operand, Identifier)):
+                relocs.append((off, unwrapped.operand.name))
+            elif isinstance(unwrapped, Identifier) and unwrapped.name in self.known_functions:
+                relocs.append((off, unwrapped.name))
+
+        def get_member_offset(sdef_, name):
+            """Get offset of a member in a struct."""
+            return sdef_.member_offset(name)
+
+        def fill_struct_sequential(sdef_, base_off, items_ref, item_idx_ref):
+            """Fill struct members sequentially from items, handling brace elision."""
+            members = sdef_.members
+            mem_idx = 0
+
+            while mem_idx < len(members) or (item_idx_ref[0] < len(items_ref) and items_ref[item_idx_ref[0]].designator):
+                if mem_idx >= len(members):
+                    # Past end but next item has designator - handle it
+                    it = items_ref[item_idx_ref[0]]
+                    found = False
+                    for mi, m in enumerate(members):
+                        if m.name == it.designator:
+                            mem_idx = mi
+                            found = True
+                            break
+                        if m.name == "" and m.type_spec.struct_def:
+                            sub_off = m.type_spec.struct_def.member_offset(it.designator)
+                            if sub_off is not None:
+                                mem_idx = mi
+                                found = True
+                                break
+                    if not found:
+                        break
+                mem = members[mem_idx]
+                # Calculate member offset
+                mem_off = get_member_offset(sdef_, mem.name)
+                if mem_off is None:
+                    # Anonymous member - try to handle inline
+                    if mem.name == "" and mem.type_spec.struct_def:
+                        sub_sdef = mem.type_spec.struct_def
+                        # Compute offset of anonymous member manually
+                        off = 0
+                        for m2 in sdef_.members:
+                            al = sdef_._member_align(m2.type_spec)
+                            act_size = self._get_member_total_size(m2.type_spec)
+                            if al > 0:
+                                off = (off + al - 1) & ~(al - 1)
+                            if m2 is mem:
+                                break
+                            off += act_size
+                        # Check if current item is a braced InitList -> use directly
+                        it = peek_item_ref(items_ref, item_idx_ref)
+                        if it and isinstance(self._unwrap_compound_literal(it.value), InitList):
+                            consume_item_ref(items_ref, item_idx_ref)
+                            fill_member(base_off + off, mem.type_spec,
+                                       self._unwrap_compound_literal(it.value))
+                        else:
+                            # Brace elision: fill sub-members from parent items
+                            fill_struct_sequential(sub_sdef, base_off + off, items_ref, item_idx_ref)
+                        mem_idx += 1
+                        continue
+                    mem_idx += 1
+                    continue
+
+                abs_off = base_off + mem_off
+                mem_ts = mem.type_spec
+                actual_size = self._get_member_total_size(mem_ts)
+
+                # Empty struct member (size 0): skip it
+                if actual_size == 0:
+                    # Consume an item if available (empty struct init)
+                    it = peek_item_ref(items_ref, item_idx_ref)
+                    if it and isinstance(it.value, CastExpr) and isinstance(it.value.operand, InitList):
+                        consume_item_ref(items_ref, item_idx_ref)
+                    elif it and isinstance(it.value, InitList) and len(it.value.items) == 0:
+                        consume_item_ref(items_ref, item_idx_ref)
+                    mem_idx += 1
+                    continue
+
+                it = peek_item_ref(items_ref, item_idx_ref)
+                if it is None:
+                    break
+
+                # Check designator
+                if it.designator:
+                    # Jump to designated member
+                    found = False
+                    for mi, m in enumerate(members):
+                        if m.name == it.designator:
+                            mem_idx = mi
+                            mem = m
+                            mem_off = get_member_offset(sdef_, m.name)
+                            abs_off = base_off + mem_off
+                            mem_ts = m.type_spec
+                            actual_size = self._get_member_total_size(mem_ts)
+                            found = True
+                            break
+                        # Check anonymous sub-members
+                        if m.name == "" and m.type_spec.struct_def:
+                            sub_off = m.type_spec.struct_def.member_offset(it.designator)
+                            if sub_off is not None:
+                                # Found in anonymous member
+                                anon_mem_off = get_member_offset(sdef_, "")
+                                if anon_mem_off is None:
+                                    # compute manually
+                                    aoff = 0
+                                    for m2 in members:
+                                        es = m2.type_spec.size_bytes()
+                                        asz = self._get_member_total_size(m2.type_spec)
+                                        al = min(es, 8) if es > 0 else 1
+                                        if al > 0:
+                                            aoff = (aoff + al - 1) & ~(al - 1)
+                                        if m2 is m:
+                                            break
+                                        aoff += asz
+                                    anon_mem_off = aoff
+                                sub_ts = m.type_spec.struct_def.member_type(it.designator)
+                                consume_item_ref(items_ref, item_idx_ref)
+                                fill_member(base_off + anon_mem_off + sub_off, sub_ts, it.value)
+                                mem_idx = mi + 1
+                                found = True
+                                break
+                    if not found:
+                        consume_item_ref(items_ref, item_idx_ref)
+                        mem_idx += 1
+                        continue
+                    if it.designator and not (it.designator_path and len(it.designator_path) > 1):
+                        pass  # will handle below
+                    # Check for chained designator path like .a.j
+                    if it.designator_path and len(it.designator_path) > 1:
+                        # Navigate to nested member
+                        consume_item_ref(items_ref, item_idx_ref)
+                        curr_off = abs_off
+                        curr_sdef = mem_ts.struct_def
+                        for dp in it.designator_path[1:]:
+                            if curr_sdef:
+                                sub_off = curr_sdef.member_offset(dp)
+                                if sub_off is not None:
+                                    curr_off += sub_off
+                                    curr_ts = curr_sdef.member_type(dp)
+                                    curr_sdef = curr_ts.struct_def if curr_ts else None
+                        fill_member(curr_off, curr_ts if curr_ts else mem_ts, it.value)
+                        mem_idx += 1
+                        continue
+
+                # Consume the item
+                consume_item_ref(items_ref, item_idx_ref)
+                val = self._unwrap_compound_literal(it.value)
+
+                # Check if value is an InitList -> fills the member directly
+                if isinstance(val, InitList):
+                    fill_member(abs_off, mem_ts, val)
+                elif isinstance(val, StringLiteral) and mem_ts.is_array() and mem_ts.size_bytes() == 1:
+                    fill_member(abs_off, mem_ts, val)
+                elif mem_ts.struct_def and not mem_ts.is_pointer() and not isinstance(val, InitList):
+                    # Brace elision: fill nested struct by consuming more items
+                    # Put this item back and fill from the items
+                    item_idx_ref[0] -= 1
+                    sub_items_ref = items_ref
+                    fill_struct_sequential(mem_ts.struct_def, abs_off, sub_items_ref, item_idx_ref)
+                elif mem_ts.is_array() and not isinstance(val, InitList):
+                    # Brace elision for array: consume scalars
+                    elem_sz = mem_ts.size_bytes()
+                    arr_count = 1
+                    if mem_ts.array_sizes and mem_ts.array_sizes[0]:
+                        first = mem_ts.array_sizes[0]
+                        if isinstance(first, IntLiteral):
+                            arr_count = first.value
+                    # Put back and fill
+                    item_idx_ref[0] -= 1
+                    for ai in range(arr_count):
+                        ait = peek_item_ref(items_ref, item_idx_ref)
+                        if ait is None or ait.designator:
+                            break
+                        consume_item_ref(items_ref, item_idx_ref)
+                        cv = self._try_eval_const(ait.value)
+                        if cv is not None:
+                            store_val(abs_off + ai * elem_sz, elem_sz, cv)
+                else:
+                    # Scalar value
+                    fill_member(abs_off, mem_ts, val)
+
+                if sdef_.is_union:
+                    # Union: only initialize first member
+                    break
+
+                mem_idx += 1
+
+        def peek_item_ref(items_ref, idx_ref):
+            if idx_ref[0] < len(items_ref):
+                return items_ref[idx_ref[0]]
+            return None
+
+        def consume_item_ref(items_ref, idx_ref):
+            if idx_ref[0] < len(items_ref):
+                it = items_ref[idx_ref[0]]
+                idx_ref[0] += 1
+                return it
+            return None
+
+        fill_struct_sequential(sdef, 0, items, item_idx)
+
+        return buf, relocs
+
+    def _emit_struct_init_data(self, sdef, init_list):
+        """Emit data section entries for a struct initializer."""
+        init_list_unwrapped = init_list
+        if isinstance(init_list, CastExpr) and isinstance(init_list.operand, InitList):
+            init_list_unwrapped = init_list.operand
+        if not isinstance(init_list_unwrapped, InitList):
+            self.emit(f"    .zero {sdef.size_bytes()}")
+            return
+
+        buf, relocs = self._build_data_bytes(sdef, init_list_unwrapped, is_union=sdef.is_union)
+
+        # Emit byte-by-byte, coalescing zeros and handling relocs
+        reloc_offsets = {r[0]: r[1] for r in relocs}
+        i = 0
+        total = len(buf)
+        while i < total:
+            if i in reloc_offsets:
+                self.emit(f"    .quad {reloc_offsets[i]}")
+                i += 8
+            elif buf[i] == 0:
+                # Count consecutive zeros
+                j = i
+                while j < total and j not in reloc_offsets and buf[j] == 0:
+                    j += 1
+                self.emit(f"    .zero {j - i}")
+                i = j
+            else:
+                self.emit(f"    .byte {buf[i]}")
+                i += 1
 
     def _try_eval_const(self, expr) -> Optional[int]:
         """Try to evaluate an expression as a compile-time integer constant."""
@@ -464,7 +800,7 @@ class CodeGen:
             if expr.is_type:
                 ts = expr.operand
                 size = ts.size_bytes()
-                if ts.is_array() and ts.array_sizes:
+                if (ts.is_array() or (ts.is_ptr_array)) and ts.array_sizes:
                     first = ts.array_sizes[0]
                     if isinstance(first, IntLiteral):
                         size *= first.value
@@ -474,7 +810,7 @@ class CodeGen:
                 _, ts = self.get_var_location(expr.operand.name)
                 if ts:
                     size = ts.size_bytes()
-                    if ts.is_array() and ts.array_sizes:
+                    if (ts.is_array() or (ts.is_ptr_array)) and ts.array_sizes:
                         first = ts.array_sizes[0]
                         if isinstance(first, IntLiteral):
                             size *= first.value
@@ -615,7 +951,8 @@ class CodeGen:
             self.static_locals[decl.name] = mangled
             return
 
-        if decl.type_spec.is_array() and decl.type_spec.array_sizes:
+        _is_local_array = decl.type_spec.is_array() or (decl.type_spec.is_ptr_array)
+        if _is_local_array and decl.type_spec.array_sizes:
             first = decl.type_spec.array_sizes[0]
             # Infer array size from initializer if unsized
             if first is None and isinstance(decl.init, InitList):
@@ -675,9 +1012,10 @@ class CodeGen:
             self.locals[decl.name] = (self.stack_offset, decl.type_spec)
 
         if decl.init:
-            if isinstance(decl.init, InitList) and decl.type_spec.struct_def:
+            is_real_array = decl.type_spec.is_array() or (decl.type_spec.is_ptr_array)
+            if isinstance(decl.init, InitList) and decl.type_spec.struct_def and not is_real_array:
                 self.gen_struct_init(decl.name, decl.type_spec, decl.init)
-            elif isinstance(decl.init, InitList) and decl.type_spec.is_array():
+            elif isinstance(decl.init, InitList) and is_real_array:
                 self.gen_array_init(decl.name, decl.type_spec, decl.init)
             elif isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
                 # char s[] = "..." or wchar_t s[] = L"..."
@@ -719,50 +1057,428 @@ class CodeGen:
                 else:
                     self.emit(f"    movq %rax, {offset}(%rbp)")
 
+    def _emit_zero_fill(self, offset, size):
+        """Emit code to zero-fill a region on the stack."""
+        i = 0
+        while i + 8 <= size:
+            self.emit(f"    movq $0, {offset + i}(%rbp)")
+            i += 8
+        while i + 4 <= size:
+            self.emit(f"    movl $0, {offset + i}(%rbp)")
+            i += 4
+        while i < size:
+            self.emit(f"    movb $0, {offset + i}(%rbp)")
+            i += 1
+
+    def _emit_store(self, offset, size, reg="al"):
+        """Emit a store of the right size."""
+        if size == 1:
+            self.emit(f"    movb %al, {offset}(%rbp)")
+        elif size == 2:
+            self.emit(f"    movw %ax, {offset}(%rbp)")
+        elif size <= 4:
+            self.emit(f"    movl %eax, {offset}(%rbp)")
+        else:
+            self.emit(f"    movq %rax, {offset}(%rbp)")
+
+    def _emit_memcpy_stack(self, dst_offset, src_offset, size):
+        """Emit code to copy 'size' bytes from src_offset(%rbp) to dst_offset(%rbp)."""
+        i = 0
+        while i + 8 <= size:
+            self.emit(f"    movq {src_offset + i}(%rbp), %rax")
+            self.emit(f"    movq %rax, {dst_offset + i}(%rbp)")
+            i += 8
+        while i + 4 <= size:
+            self.emit(f"    movl {src_offset + i}(%rbp), %eax")
+            self.emit(f"    movl %eax, {dst_offset + i}(%rbp)")
+            i += 4
+        while i < size:
+            self.emit(f"    movb {src_offset + i}(%rbp), %al")
+            self.emit(f"    movb %al, {dst_offset + i}(%rbp)")
+            i += 1
+
+    def _emit_memcpy_from_addr(self, dst_offset, size):
+        """Emit code to copy 'size' bytes from address in %rax to dst_offset(%rbp).
+        Clobbers %rax, %rcx, %rdx."""
+        self.emit(f"    movq %rax, %rcx")  # save source address
+        i = 0
+        while i + 8 <= size:
+            self.emit(f"    movq {i}(%rcx), %rax")
+            self.emit(f"    movq %rax, {dst_offset + i}(%rbp)")
+            i += 8
+        while i + 4 <= size:
+            self.emit(f"    movl {i}(%rcx), %eax")
+            self.emit(f"    movl %eax, {dst_offset + i}(%rbp)")
+            i += 4
+        while i < size:
+            self.emit(f"    movb {i}(%rcx), %al")
+            self.emit(f"    movb %al, {dst_offset + i}(%rbp)")
+            i += 1
+
     def gen_struct_init(self, var_name: str, type_spec: TypeSpec, init: 'InitList'):
         """Generate code for struct initialization from { ... }."""
         sdef = type_spec.struct_def
         base_offset = self.locals[var_name][0]
+        struct_size = self._get_member_total_size(type_spec)
 
-        for i, item in enumerate(init.items):
-            if item.designator:
-                # .field = value
-                mem_offset = sdef.member_offset(item.designator)
-                mem_type = sdef.member_type(item.designator)
-            elif i < len(sdef.members):
-                # Positional init
-                mem_offset = sdef.member_offset(sdef.members[i].name)
-                mem_type = sdef.members[i].type_spec
-            else:
+        # Zero-fill the struct first
+        self._emit_zero_fill(base_offset, struct_size)
+
+        # Walk init items with brace elision
+        items = init.items
+        item_idx = [0]
+
+        self._gen_struct_init_sequential(sdef, base_offset, items, item_idx)
+
+    def _gen_struct_init_sequential(self, sdef, base_offset, items, item_idx):
+        """Generate code for struct init, consuming items sequentially with brace elision."""
+        members = sdef.members
+
+        def peek():
+            return items[item_idx[0]] if item_idx[0] < len(items) else None
+
+        def consume():
+            if item_idx[0] < len(items):
+                it = items[item_idx[0]]
+                item_idx[0] += 1
+                return it
+            return None
+
+        def compute_anon_offset(sdef_, mem_target):
+            """Compute offset of an anonymous member in a struct."""
+            off = 0
+            for m2 in sdef_.members:
+                al = sdef_._member_align(m2.type_spec)
+                act_size = self._get_member_total_size(m2.type_spec)
+                if al > 0:
+                    off = (off + al - 1) & ~(al - 1)
+                if m2 is mem_target:
+                    return off
+                off += act_size
+            return 0
+
+        mem_idx = 0
+        while mem_idx < len(members) or (item_idx[0] < len(items) and items[item_idx[0]].designator):
+            if mem_idx >= len(members):
+                # Past end but next item has designator
+                it = items[item_idx[0]]
+                found = False
+                for mi, m in enumerate(members):
+                    if m.name == it.designator:
+                        mem_idx = mi
+                        found = True
+                        break
+                    if m.name == "" and m.type_spec.struct_def:
+                        sub_off = m.type_spec.struct_def.member_offset(it.designator)
+                        if sub_off is not None:
+                            mem_idx = mi
+                            found = True
+                            break
+                if not found:
+                    break
+
+            mem = members[mem_idx]
+            mem_ts = mem.type_spec
+
+            # Anonymous struct/union member
+            if mem.name == "" and mem_ts.struct_def:
+                anon_off = compute_anon_offset(sdef, mem)
+                it = peek()
+                if it and isinstance(self._unwrap_compound_literal(it.value), InitList) and not it.designator:
+                    consume()
+                    self._gen_struct_init_sequential(
+                        mem_ts.struct_def, base_offset + anon_off,
+                        self._unwrap_compound_literal(it.value).items, [0])
+                elif it and it.designator:
+                    # Check if designator matches a sub-member of this anon struct
+                    sub_sdef = mem_ts.struct_def
+                    sub_off = sub_sdef.member_offset(it.designator)
+                    if sub_off is not None:
+                        # Consume and handle the designator within the anon struct
+                        consume()
+                        sub_ts = sub_sdef.member_type(it.designator)
+                        abs_off = base_offset + anon_off + sub_off
+                        self._gen_init_value_store(abs_off, sub_ts, it.value)
+                        mem_idx += 1
+                        continue
+                    else:
+                        mem_idx += 1
+                        continue
+                else:
+                    # Brace elision: fill sub-members from parent items
+                    self._gen_struct_init_sequential(
+                        mem_ts.struct_def, base_offset + anon_off, items, item_idx)
+                mem_idx += 1
                 continue
 
-            if mem_offset is None:
+            mem_off = sdef.member_offset(mem.name) if mem.name else None
+            if mem_off is None:
+                mem_idx += 1
                 continue
 
-            self.gen_expr(item.value)
-            abs_offset = base_offset + mem_offset
-            if mem_type and (mem_type.is_pointer() or mem_type.size_bytes() == 8):
-                self.emit(f"    movq %rax, {abs_offset}(%rbp)")
-            elif mem_type and mem_type.base == "char" and not mem_type.is_pointer():
-                self.emit(f"    movb %al, {abs_offset}(%rbp)")
+            abs_off = base_offset + mem_off
+            actual_size = self._get_member_total_size(mem_ts)
+
+            # Empty struct member
+            if actual_size == 0:
+                it = peek()
+                if it and (isinstance(it.value, CastExpr) and isinstance(it.value.operand, InitList)):
+                    consume()
+                elif it and isinstance(it.value, InitList) and len(it.value.items) == 0:
+                    consume()
+                mem_idx += 1
+                continue
+
+            it = peek()
+            if it is None:
+                break
+
+            # Designator handling
+            if it.designator:
+                found = False
+                for mi, m in enumerate(members):
+                    if m.name == it.designator:
+                        mem_idx = mi
+                        found = True
+                        break
+                    if m.name == "" and m.type_spec.struct_def:
+                        sub_off = m.type_spec.struct_def.member_offset(it.designator)
+                        if sub_off is not None:
+                            anon_off = compute_anon_offset(sdef, m)
+                            sub_ts = m.type_spec.struct_def.member_type(it.designator)
+                            consume()
+                            # Handle chained designator path
+                            if it.designator_path and len(it.designator_path) > 1:
+                                curr_off = base_offset + anon_off + sub_off
+                                curr_ts = sub_ts
+                                curr_sdef = sub_ts.struct_def if sub_ts else None
+                                for dp in it.designator_path[1:]:
+                                    if curr_sdef:
+                                        so = curr_sdef.member_offset(dp)
+                                        if so is not None:
+                                            curr_off += so
+                                            curr_ts = curr_sdef.member_type(dp)
+                                            curr_sdef = curr_ts.struct_def if curr_ts else None
+                                self._gen_init_value_store(curr_off, curr_ts, it.value)
+                            else:
+                                self._gen_init_value_store(base_offset + anon_off + sub_off, sub_ts, it.value)
+                            mem_idx = mi + 1
+                            found = True
+                            break
+                if not found:
+                    consume()
+                    mem_idx += 1
+                    continue
+                # Re-read member info after potential jump
+                mem = members[mem_idx]
+                mem_ts = mem.type_spec
+                mem_off = sdef.member_offset(mem.name)
+                abs_off = base_offset + mem_off
+                actual_size = self._get_member_total_size(mem_ts)
+
+                # Chained designator
+                if it.designator_path and len(it.designator_path) > 1:
+                    consume()
+                    curr_off = abs_off
+                    curr_ts = mem_ts
+                    curr_sdef = mem_ts.struct_def
+                    for dp in it.designator_path[1:]:
+                        if curr_sdef:
+                            sub_off = curr_sdef.member_offset(dp)
+                            if sub_off is not None:
+                                curr_off += sub_off
+                                curr_ts = curr_sdef.member_type(dp)
+                                curr_sdef = curr_ts.struct_def if curr_ts else None
+                    self._gen_init_value_store(curr_off, curr_ts, it.value)
+                    mem_idx += 1
+                    continue
+
+            # Consume the item
+            consume()
+            val = self._unwrap_compound_literal(it.value)
+
+            if isinstance(val, InitList):
+                if mem_ts.struct_def:
+                    self._gen_struct_init_sequential(
+                        mem_ts.struct_def, abs_off, val.items, [0])
+                elif mem_ts.is_array():
+                    self._gen_array_init_from_list(abs_off, mem_ts, val)
+                else:
+                    # Scalar with braces: unwrap
+                    self._gen_init_value_store(abs_off, mem_ts, val)
+            elif isinstance(val, StringLiteral) and mem_ts.is_array() and mem_ts.size_bytes() == 1:
+                # String literal for char array member
+                for ci, ch in enumerate(val.value):
+                    self.emit(f"    movb ${ord(ch)}, {abs_off + ci}(%rbp)")
+                self.emit(f"    movb $0, {abs_off + len(val.value)}(%rbp)")
+            elif mem_ts.struct_def and not mem_ts.is_pointer() and not isinstance(val, InitList):
+                # Brace elision or struct copy
+                # Check if it's an expression that evaluates to a struct
+                is_struct_expr = False
+                if isinstance(val, Identifier):
+                    loc, vts = self.get_var_location(val.name)
+                    if vts and vts.struct_def:
+                        if val.name in self.locals or val.name in self.params:
+                            src_off = (self.locals.get(val.name) or self.params.get(val.name))[0]
+                            self._emit_memcpy_stack(abs_off, src_off, actual_size)
+                            is_struct_expr = True
+                if not is_struct_expr:
+                    # Check if it's a struct-typed expression (e.g., *pls, (ls), w->t.s)
+                    expr_type = self.get_expr_type(val)
+                    if expr_type and expr_type.struct_def and not expr_type.is_pointer():
+                        # Generate address of the struct expression and memcpy
+                        # For CastExpr wrapping a struct lvalue, use the operand's address
+                        addr_expr = val
+                        if isinstance(val, CastExpr):
+                            addr_expr = val.operand
+                        try:
+                            self.gen_lvalue_addr(addr_expr)
+                            # rax now has address of source struct
+                            self._emit_memcpy_from_addr(abs_off, actual_size)
+                            is_struct_expr = True
+                        except Exception:
+                            pass  # Fall through to brace elision
+                if is_struct_expr:
+                    if sdef.is_union:
+                        break
+                    mem_idx += 1
+                    continue
+                # Brace elision: put item back and fill sub-struct
+                item_idx[0] -= 1
+                self._gen_struct_init_sequential(
+                    mem_ts.struct_def, abs_off, items, item_idx)
+            elif mem_ts.is_array() and not isinstance(val, InitList):
+                # Brace elision for array: put back and consume scalars
+                elem_sz = mem_ts.size_bytes()
+                item_idx[0] -= 1
+                arr_count = 1
+                if mem_ts.array_sizes and mem_ts.array_sizes[0]:
+                    first = mem_ts.array_sizes[0]
+                    if isinstance(first, IntLiteral):
+                        arr_count = first.value
+                for ai in range(arr_count):
+                    ait = peek()
+                    if ait is None or ait.designator:
+                        break
+                    consume()
+                    self.gen_expr(ait.value)
+                    off = abs_off + ai * elem_sz
+                    if elem_sz == 1:
+                        self.emit(f"    movb %al, {off}(%rbp)")
+                    elif elem_sz == 8:
+                        self.emit(f"    movq %rax, {off}(%rbp)")
+                    else:
+                        self.emit(f"    movl %eax, {off}(%rbp)")
             else:
-                self.emit(f"    movl %eax, {abs_offset}(%rbp)")
+                self._gen_init_value_store(abs_off, mem_ts, val)
+
+            if sdef.is_union:
+                break
+
+            mem_idx += 1
+
+    def _gen_init_value_store(self, offset, mem_ts, value):
+        """Generate code to store an init value at a given stack offset."""
+        value = self._unwrap_compound_literal(value)
+
+        # Unwrap braces around scalar
+        unwrapped = value
+        while isinstance(unwrapped, InitList) and unwrapped.items:
+            unwrapped = unwrapped.items[0].value
+        unwrapped = self._unwrap_compound_literal(unwrapped)
+
+        mem_size = mem_ts.size_bytes() if mem_ts else 4
+
+        if isinstance(unwrapped, StringLiteral) and mem_ts and mem_ts.is_array() and mem_size == 1:
+            # String literal for char array
+            for ci, ch in enumerate(unwrapped.value):
+                self.emit(f"    movb ${ord(ch)}, {offset + ci}(%rbp)")
+            self.emit(f"    movb $0, {offset + len(unwrapped.value)}(%rbp)")
+            return
+
+        self.gen_expr(unwrapped)
+        if mem_ts and (mem_ts.is_pointer() or mem_size == 8):
+            self.emit(f"    movq %rax, {offset}(%rbp)")
+        elif mem_ts and mem_size == 1:
+            self.emit(f"    movb %al, {offset}(%rbp)")
+        elif mem_ts and mem_size == 2:
+            self.emit(f"    movw %ax, {offset}(%rbp)")
+        else:
+            self.emit(f"    movl %eax, {offset}(%rbp)")
+
+    def _gen_array_init_from_list(self, base_offset, arr_ts, init_list):
+        """Generate code for array init from an InitList at a given stack offset."""
+        elem_size = arr_ts.size_bytes()
+        arr_count = 1
+        if arr_ts.array_sizes and arr_ts.array_sizes[0]:
+            first = arr_ts.array_sizes[0]
+            if isinstance(first, IntLiteral):
+                arr_count = first.value
+
+        idx = 0
+        for item in init_list.items:
+            if item.designator_index is not None:
+                idx = item.designator_index
+            end_idx = idx
+            if item.designator_end is not None:
+                end_idx = item.designator_end
+            for j in range(idx, end_idx + 1):
+                if j < arr_count:
+                    self.gen_expr(item.value)
+                    off = base_offset + j * elem_size
+                    if elem_size == 1:
+                        self.emit(f"    movb %al, {off}(%rbp)")
+                    elif elem_size == 8:
+                        self.emit(f"    movq %rax, {off}(%rbp)")
+                    else:
+                        self.emit(f"    movl %eax, {off}(%rbp)")
+            idx = end_idx + 1
 
     def gen_array_init(self, var_name: str, type_spec: TypeSpec, init: 'InitList'):
         """Generate code for array initialization from { ... }."""
         base_offset = self.locals[var_name][0]
         elem_size = type_spec.size_bytes()
+        # Zero-fill first
+        total_size = self._get_member_total_size(type_spec)
+        self._emit_zero_fill(base_offset, total_size)
 
-        for i, item in enumerate(init.items):
-            idx = item.designator_index if item.designator_index is not None else i
-            self.gen_expr(item.value)
-            offset = base_offset + idx * elem_size
-            if elem_size == 1:
-                self.emit(f"    movb %al, {offset}(%rbp)")
-            elif elem_size == 8:
-                self.emit(f"    movq %rax, {offset}(%rbp)")
-            else:
-                self.emit(f"    movl %eax, {offset}(%rbp)")
+        # Handle struct array or plain array
+        if type_spec.struct_def:
+            # Array of structs
+            sdef = type_spec.struct_def
+            struct_size = sdef.size_bytes()
+            idx = 0
+            for item in init.items:
+                if item.designator_index is not None:
+                    idx = item.designator_index
+                val = self._unwrap_compound_literal(item.value)
+                if isinstance(val, InitList):
+                    self._gen_struct_init_sequential(
+                        sdef, base_offset + idx * struct_size, val.items, [0])
+                else:
+                    # Single value wrapping
+                    self._gen_struct_init_sequential(
+                        sdef, base_offset + idx * struct_size,
+                        [InitItem(value=item.value)], [0])
+                idx += 1
+        else:
+            idx = 0
+            for item in init.items:
+                if item.designator_index is not None:
+                    idx = item.designator_index
+                end_idx = idx
+                if item.designator_end is not None:
+                    end_idx = item.designator_end
+                for j in range(idx, end_idx + 1):
+                    self.gen_expr(item.value)
+                    offset = base_offset + j * elem_size
+                    if elem_size == 1:
+                        self.emit(f"    movb %al, {offset}(%rbp)")
+                    elif elem_size == 8:
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
+                    else:
+                        self.emit(f"    movl %eax, {offset}(%rbp)")
+                idx = end_idx + 1
 
     def gen_if(self, stmt: IfStmt):
         else_label = self.new_label("else")
@@ -998,7 +1714,7 @@ class CodeGen:
             if expr.is_type:
                 ts = expr.operand
                 size = ts.size_bytes()
-                if ts.is_array() and ts.array_sizes:
+                if (ts.is_array() or (ts.is_ptr_array)) and ts.array_sizes:
                     first = ts.array_sizes[0]
                     if isinstance(first, IntLiteral):
                         size *= first.value
@@ -1007,7 +1723,7 @@ class CodeGen:
                 et = self.get_expr_type(expr.operand)
                 if et:
                     size = et.size_bytes()
-                    if et.is_array() and et.array_sizes:
+                    if (et.is_array() or (et.is_ptr_array)) and et.array_sizes:
                         first = et.array_sizes[0]
                         if isinstance(first, IntLiteral):
                             size *= first.value
@@ -1123,7 +1839,8 @@ class CodeGen:
         # Get array base address
         if isinstance(expr.array, Identifier):
             loc, ts = self.get_var_location(expr.array.name)
-            if ts and ts.is_array():
+            is_real_array = ts and (ts.is_array() or (ts.is_ptr_array))
+            if is_real_array:
                 # Array: base address
                 if expr.array.name in self.locals or expr.array.name in self.params:
                     offset = (self.locals.get(expr.array.name) or self.params.get(expr.array.name))[0]
@@ -1185,6 +1902,10 @@ class CodeGen:
                         for dim in ts.array_sizes[1:]:
                             if isinstance(dim, IntLiteral):
                                 elem_size *= dim.value
+                elif ts.is_ptr_array:
+                    # Array of pointers (e.g., void (*table[3])(void))
+                    # Element is a pointer, not dereferenced type
+                    elem_size = 8  # pointer size
                 else:
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
                                        is_unsigned=ts.is_unsigned)
@@ -1235,7 +1956,10 @@ class CodeGen:
             _, ts = self.get_var_location(expr.array.name)
             if ts:
                 # For pointer or array, element type is one level of indirection less
-                if ts.is_pointer() and ts.pointer_depth == 1:
+                if ts.is_ptr_array:
+                    # Array of pointers: element is a pointer (8 bytes)
+                    elem_size = 8
+                elif ts.is_pointer() and ts.pointer_depth == 1:
                     # Pointer to base type: element is the base type
                     if ts.base == "char":
                         elem_size = 1
@@ -1326,11 +2050,11 @@ class CodeGen:
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
                                     array_sizes=arr_type.array_sizes[1:])
-                elif arr_type.is_pointer() and arr_type.array_sizes:
-                    # Pointer to array: (*p)[4] indexed gives char[4]
-                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
+                elif arr_type.is_ptr_array:
+                    # Array of pointers (e.g., fptr table[3]): element is pointer type
+                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
-                                    array_sizes=arr_type.array_sizes)
+                                    is_unsigned=arr_type.is_unsigned)
                 elif arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def)
@@ -1365,10 +2089,14 @@ class CodeGen:
                                 pointer_depth=callee_type.pointer_depth - 1,
                                 struct_def=callee_type.struct_def,
                                 enum_def=callee_type.enum_def)
+        if isinstance(expr, UnaryOp) and expr.op in ("++", "--"):
+            return self.get_expr_type(expr.operand)
         if isinstance(expr, Assignment):
             return self.get_expr_type(expr.target)
         if isinstance(expr, CastExpr):
             return expr.target_type
+        if isinstance(expr, TernaryOp):
+            return self.get_expr_type(expr.true_expr)
         return None
 
     def _generic_types_match(self, controlling: TypeSpec, assoc: TypeSpec) -> bool:
@@ -1644,9 +2372,15 @@ class CodeGen:
             if inner_type and inner_type.pointer_depth > 1:
                 self.emit("    movq (%rax), %rax")
             elif inner_type and inner_type.base == "char" and inner_type.pointer_depth == 1:
-                self.emit("    movsbl (%rax), %eax")
+                if inner_type.is_unsigned:
+                    self.emit("    movzbl (%rax), %eax")
+                else:
+                    self.emit("    movsbl (%rax), %eax")
             elif inner_type and inner_type.base == "short" and inner_type.pointer_depth == 1:
-                self.emit("    movswl (%rax), %eax")
+                if inner_type.is_unsigned:
+                    self.emit("    movzwl (%rax), %eax")
+                else:
+                    self.emit("    movswl (%rax), %eax")
             elif inner_type and inner_type.pointer_depth == 1 and (inner_type.base in ("long", "long long") or inner_type.struct_def):
                 self.emit("    movq (%rax), %rax")
             else:

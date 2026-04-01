@@ -19,28 +19,47 @@ class StructDef:
         if ts.is_array() and ts.array_sizes:
             from jmcc.ast_nodes import IntLiteral  # avoid circular at module level
             first = ts.array_sizes[0]
+            if first is None:
+                return 0  # Flexible array member: size 0
             if isinstance(first, IntLiteral):
                 size *= first.value
         return size
 
+    def _member_align(self, ts):
+        """Get alignment of a type (element alignment for arrays, recursive for structs)."""
+        if ts.is_pointer():
+            return 8
+        if ts.struct_def:
+            return ts.struct_def.alignment()
+        # For arrays, alignment is element alignment
+        return min(ts.size_bytes(), 8) if ts.size_bytes() > 0 else 1
+
+    def alignment(self):
+        """Return the alignment of this struct/union."""
+        max_align = 1
+        for m in self.members:
+            ma = self._member_align(m.type_spec)
+            if ma > max_align:
+                max_align = ma
+        return max_align
+
     def size_bytes(self):
         if self.is_union:
-            return max((self._member_total_size(m.type_spec) for m in self.members), default=0)
+            raw = max((self._member_total_size(m.type_spec) for m in self.members), default=0)
+            # Round up to alignment
+            a = self.alignment()
+            if a > 1 and raw > 0:
+                raw = (raw + a - 1) & ~(a - 1)
+            return raw
         total = 0
         for m in self.members:
-            elem_size = m.type_spec.size_bytes()  # element size for alignment
+            align = self._member_align(m.type_spec)
             actual_size = self._member_total_size(m.type_spec)
-            # Align to element size
-            align = min(elem_size, 8)
             if align > 0:
                 total = (total + align - 1) & ~(align - 1)
             total += actual_size
-        # Align total to largest member alignment (not always 8)
-        max_align = 4  # minimum
-        for m in self.members:
-            ma = min(m.type_spec.size_bytes(), 8)
-            if ma > max_align:
-                max_align = ma
+        # Align total to struct alignment
+        max_align = self.alignment()
         if total > 0 and max_align > 1:
             total = (total + max_align - 1) & ~(max_align - 1)
         return total
@@ -58,9 +77,8 @@ class StructDef:
             return None
         offset = 0
         for m in self.members:
-            elem_size = m.type_spec.size_bytes()
+            align = self._member_align(m.type_spec)
             actual_size = self._member_total_size(m.type_spec)
-            align = min(elem_size, 8) if elem_size > 0 else 1
             if align > 0:
                 offset = (offset + align - 1) & ~(align - 1)
             if m.name == name:
@@ -112,6 +130,7 @@ class TypeSpec:
     is_unsigned: bool = False
     is_const: bool = False
     is_volatile: bool = False
+    is_ptr_array: bool = False  # True for "array of pointers" (e.g., fptr table[3])
     is_static: bool = False
     is_extern: bool = False
     array_sizes: Optional[List[Optional['Expr']]] = None  # None = unsized, e.g. int[]
@@ -303,6 +322,8 @@ class InitList(Expr):
 class InitItem:
     designator: Optional[str] = None  # field name for designated init, or None
     designator_index: Optional[int] = None  # array index for [n] = expr
+    designator_path: Optional[List[str]] = None  # chained designators: .a.j -> ["a", "j"]
+    designator_end: Optional[int] = None  # end index for range designator [start ... end]
     value: Optional[Expr] = None
 
 
