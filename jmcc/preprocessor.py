@@ -204,6 +204,67 @@ struct stat {
 int stat(const char *path, struct stat *buf);
 int fstat(int fd, struct stat *buf);
 """,
+        "signal.h": """
+#define SIGHUP 1
+#define SIGINT 2
+#define SIGQUIT 3
+#define SIGILL 4
+#define SIGABRT 6
+#define SIGFPE 8
+#define SIGKILL 9
+#define SIGSEGV 11
+#define SIGPIPE 13
+#define SIGALRM 14
+#define SIGTERM 15
+#define SIGUSR1 10
+#define SIGUSR2 12
+#define SIG_DFL ((void (*)(int))0)
+#define SIG_IGN ((void (*)(int))1)
+typedef void (*sighandler_t)(int);
+typedef unsigned long sigset_t;
+struct sigaction {
+    void (*sa_handler)(int);
+    sigset_t sa_mask;
+    int sa_flags;
+    void (*sa_restorer)(void);
+};
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+sighandler_t signal(int signum, sighandler_t handler);
+""",
+        "sys/time.h": """
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+int gettimeofday(struct timeval *tv, struct timezone *tz);
+""",
+        "netinet/in.h": """
+#define IPPROTO_TCP 6
+#define IPPROTO_UDP 17
+typedef unsigned short in_port_t;
+typedef unsigned int in_addr_t;
+struct in_addr { in_addr_t s_addr; };
+struct sockaddr_in {
+    unsigned short sin_family;
+    in_port_t sin_port;
+    struct in_addr sin_addr;
+    unsigned char sin_zero[8];
+};
+unsigned short htons(unsigned short hostshort);
+unsigned short ntohs(unsigned short netshort);
+unsigned int htonl(unsigned int hostlong);
+unsigned int ntohl(unsigned int netlong);
+""",
+        "values.h": """
+#define MININT (-2147483647-1)
+#define MAXINT 2147483647
+#define MINSHORT (-32768)
+#define MAXSHORT 32767
+""",
     }
 
     def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
