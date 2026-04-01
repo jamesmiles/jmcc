@@ -298,8 +298,12 @@ typedef unsigned long KeySym;
 typedef unsigned char KeyCode;
 typedef struct { int type; } XEvent;
 typedef struct { unsigned long pixel; } XColor;
+typedef struct _XGC *GC;
 typedef struct { int x, y; unsigned int width, height; } XWindowAttributes;
 typedef struct { int width, height; } XSizeHints;
+typedef struct { unsigned long visualid; int screen; int depth; int class; } Visual;
+typedef struct { Visual *visual; unsigned long visualid; int screen; int depth; int class; } XVisualInfo;
+typedef struct { int width, height; int xoffset; int format; char *data; int byte_order; int bitmap_unit; int bitmap_bit_order; int bitmap_pad; int depth; int bytes_per_line; int bits_per_pixel; } XImage;
 Display *XOpenDisplay(const char *name);
 int XCloseDisplay(Display *dpy);
 """,
