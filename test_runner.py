@@ -33,6 +33,8 @@ def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=Fals
         for phase_dir in sorted(Path(test_dir, "positive").glob("phase*")):
             for test_file in sorted(phase_dir.glob("*.c")):
                 metadata = parse_test_metadata(test_file)
+                if not metadata["name"]:
+                    continue  # Skip helper files (no // TEST: header)
                 if phase is not None and metadata["phase"] != phase:
                     continue
                 if filter_pattern and filter_pattern not in str(test_file):
