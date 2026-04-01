@@ -61,6 +61,21 @@ class Parser:
         TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER,
     }
 
+    def skip_attribute(self):
+        """Skip GCC __attribute__((...)) annotations."""
+        while (self.at(TokenType.IDENTIFIER) and
+               self.current().value in ("__attribute__", "__attribute")):
+            self.advance()  # __attribute__
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN):
+                        depth += 1
+                    elif self.match(TokenType.RPAREN):
+                        depth -= 1
+                    else:
+                        self.advance()
+
     def is_type_start(self) -> bool:
         if self.current().type in self.TYPE_SPECIFIERS:
             return True
@@ -106,6 +121,9 @@ class Parser:
                 self.advance()  # ignore for now
             elif t.type == TokenType.REGISTER:
                 self.advance()  # ignore for now
+            elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
+                self.skip_attribute()
+                continue
             elif t.type in (TokenType.STRUCT, TokenType.UNION):
                 is_union = t.type == TokenType.UNION
                 self.advance()
@@ -165,9 +183,10 @@ class Parser:
             else:
                 base = base_parts[-1]
 
-        # Skip trailing qualifiers before pointer (e.g., enum E const *)
+        # Skip trailing qualifiers/attributes before pointer (e.g., enum E const *)
         while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
             self.advance()
+        self.skip_attribute()  # int __attribute__((noinline)) *
 
         # Parse pointer levels
         pointer_depth = 0
@@ -178,20 +197,28 @@ class Parser:
                 pass
 
         # Function pointer type in cast/sizeof: void (*)(void), int (*)(int, int)
+        # Also handles int (__attribute__((x)) *)(void)
         # Only matches abstract fptr types (no name between * and ))
-        if (self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR and
-                pointer_depth == 0 and self.peek(2).type == TokenType.RPAREN):
+        if self.at(TokenType.LPAREN) and pointer_depth == 0:
+            saved_fptr = self.pos
             self.advance()  # (
-            self.advance()  # *
-            self.expect(TokenType.RPAREN, "')'")
-            # Skip param list
-            if self.match(TokenType.LPAREN):
-                depth = 1
-                while depth > 0 and not self.at(TokenType.EOF):
-                    if self.match(TokenType.LPAREN): depth += 1
-                    elif self.match(TokenType.RPAREN): depth -= 1
-                    else: self.advance()
-            pointer_depth = 1  # function pointer is a pointer
+            self.skip_attribute()
+            if self.at(TokenType.STAR):
+                self.advance()  # *
+                if self.at(TokenType.RPAREN):
+                    self.advance()  # )
+                    # Skip param list
+                    if self.match(TokenType.LPAREN):
+                        depth = 1
+                        while depth > 0 and not self.at(TokenType.EOF):
+                            if self.match(TokenType.LPAREN): depth += 1
+                            elif self.match(TokenType.RPAREN): depth -= 1
+                            else: self.advance()
+                    pointer_depth = 1  # function pointer is a pointer
+                else:
+                    self.pos = saved_fptr  # not a match, restore
+            else:
+                self.pos = saved_fptr  # not a match, restore
 
         return TypeSpec(
             base=base,
@@ -207,6 +234,7 @@ class Parser:
 
     def parse_struct_spec(self, is_union=False) -> StructDef:
         """Parse struct/union specifier: struct Name { members }"""
+        self.skip_attribute()  # union/struct __attribute__((packed)) Name {
         name = None
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
@@ -540,6 +568,16 @@ class Parser:
         # Save position
         saved = self.pos
         self.advance()  # skip (
+        # Skip __attribute__((...)) before type
+        while (self.at(TokenType.IDENTIFIER) and
+               self.current().value in ("__attribute__", "__attribute")):
+            self.advance()
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
         result = self.is_type_start()
         self.pos = saved
         return result
@@ -571,6 +609,13 @@ class Parser:
                     target_type = self.parse_type_spec()
                     self.expect(TokenType.RPAREN, "')'")
                     expr = BuiltinVaArg(ap=ap_expr, target_type=target_type, line=expr.line, col=expr.col)
+                elif isinstance(expr, Identifier) and expr.name == "__builtin_expect":
+                    # __builtin_expect(expr, val) — branch hint, just return expr
+                    result_expr = self.parse_assignment()
+                    self.expect(TokenType.COMMA, "','")
+                    self.parse_assignment()  # discard the hint value
+                    self.expect(TokenType.RPAREN, "')'")
+                    expr = result_expr
                 else:
                     # Function call
                     args = []
@@ -1135,6 +1180,7 @@ class Parser:
             self.error(f"expected declaration, got '{t.value}'")
 
         type_spec = self.parse_type_spec()
+        self.skip_attribute()  # void __attribute__((stdcall)) foo(void)
 
         # Global function pointer or function returning function pointer
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
@@ -1319,6 +1365,7 @@ class Parser:
     def parse_typedef(self) -> TypedefDecl:
         t = self.advance()  # typedef
         type_spec = self.parse_type_spec()
+        self.skip_attribute()  # } __attribute__((packed)) Name;
 
         # Function pointer typedef: typedef int (*name)(params);
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
@@ -1376,6 +1423,7 @@ class Parser:
                     params.append(self.parse_param())
 
         self.expect(TokenType.RPAREN, "')'")
+        self.skip_attribute()  # void foo(void) __attribute__((stdcall));
 
         # Function body or declaration
         if self.at(TokenType.LBRACE):
