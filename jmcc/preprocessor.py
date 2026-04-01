@@ -230,6 +230,9 @@ struct sigaction {
 };
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 sighandler_t signal(int signum, sighandler_t handler);
+#define SA_RESTART 0x10000000
+#define SA_NODEFER 0x40000000
+#define SA_RESETHAND 0x80000000
 """,
         "sys/time.h": """
 struct timeval {
@@ -258,6 +261,20 @@ unsigned short htons(unsigned short hostshort);
 unsigned short ntohs(unsigned short netshort);
 unsigned int htonl(unsigned int hostlong);
 unsigned int ntohl(unsigned int netlong);
+""",
+        "sys/socket.h": """
+#define SOCK_STREAM 1
+#define SOCK_DGRAM 2
+#define AF_INET 2
+#define PF_INET 2
+#define SOL_SOCKET 1
+#define SO_BROADCAST 6
+typedef unsigned int socklen_t;
+struct sockaddr { unsigned short sa_family; char sa_data[14]; };
+int socket(int domain, int type, int protocol);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int sendto(int sockfd, const void *buf, unsigned long len, int flags, const struct sockaddr *dest, socklen_t addrlen);
+int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 """,
         "values.h": """
 #define MININT (-2147483647-1)
