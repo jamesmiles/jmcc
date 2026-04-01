@@ -378,6 +378,29 @@ struct hostent {
 };
 struct hostent *gethostbyname(const char *name);
 """,
+        "sys/ipc.h": """
+typedef int key_t;
+#define IPC_PRIVATE ((key_t)0)
+#define IPC_CREAT 512
+#define IPC_EXCL 1024
+#define IPC_RMID 0
+""",
+        "sys/shm.h": """
+#define SHM_RDONLY 010000
+struct shmid_ds {
+    long shm_segsz;
+    long shm_atime;
+    long shm_dtime;
+    long shm_ctime;
+    unsigned short shm_cpid;
+    unsigned short shm_lpid;
+    unsigned short shm_nattch;
+};
+int shmget(int key, unsigned long size, int shmflg);
+void *shmat(int shmid, const void *shmaddr, int shmflg);
+int shmdt(const void *shmaddr);
+int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+""",
         "errno.h": """
 extern int errno;
 #define EWOULDBLOCK 11
