@@ -313,6 +313,42 @@ typedef struct { int width, height; } XSizeHints;
 typedef struct { unsigned long visualid; int screen; int depth; int class; } Visual;
 typedef struct { Visual *visual; unsigned long visualid; int screen; int depth; int class; } XVisualInfo;
 typedef struct { int width, height; int xoffset; int format; char *data; int byte_order; int bitmap_unit; int bitmap_bit_order; int bitmap_pad; int depth; int bytes_per_line; int bits_per_pixel; } XImage;
+#define KeyPress 2
+#define KeyRelease 3
+#define ButtonPress 4
+#define ButtonRelease 5
+#define MotionNotify 6
+#define Expose 12
+#define ConfigureNotify 22
+#define KeyPressMask (1L<<0)
+#define KeyReleaseMask (1L<<1)
+#define ButtonPressMask (1L<<2)
+#define ButtonReleaseMask (1L<<3)
+#define PointerMotionMask (1L<<6)
+#define ExposureMask (1L<<15)
+#define StructureNotifyMask (1L<<17)
+#define FocusChangeMask (1L<<21)
+#define Button1 1
+#define Button2 2
+#define Button3 3
+#define Button1Mask (1<<8)
+#define Button2Mask (1<<9)
+#define Button3Mask (1<<10)
+#define CWBorderPixel (1L<<3)
+#define CWColormap (1L<<13)
+#define CWEventMask (1L<<11)
+#define InputOutput 1
+#define GCGraphicsExposures (1L<<16)
+#define GCForeground (1L<<2)
+#define GCBackground (1L<<3)
+#define AllocAll 1
+#define AllocNone 0
+#define ZPixmap 2
+#define GrabModeAsync 1
+#define CurrentTime 0L
+#define TrueColor 4
+#define True 1
+#define False 0
 Display *XOpenDisplay(const char *name);
 int XCloseDisplay(Display *dpy);
 """,
@@ -392,6 +428,7 @@ typedef int key_t;
 #define IPC_CREAT 512
 #define IPC_EXCL 1024
 #define IPC_RMID 0
+#define IPC_STAT 2
 """,
         "sys/shm.h": """
 #define SHM_RDONLY 010000
