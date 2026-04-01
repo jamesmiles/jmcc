@@ -282,6 +282,16 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int sendto(int sockfd, const void *buf, unsigned long len, int flags, const struct sockaddr *dest, socklen_t addrlen);
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 """,
+        "netdb.h": """
+struct hostent {
+    char *h_name;
+    char **h_aliases;
+    int h_addrtype;
+    int h_length;
+    char **h_addr_list;
+};
+struct hostent *gethostbyname(const char *name);
+""",
         "errno.h": """
 extern int errno;
 #define EWOULDBLOCK 11
