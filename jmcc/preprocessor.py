@@ -145,10 +145,6 @@ typedef unsigned int wint_t;
         "assert.h": """
 #define assert(x) ((void)0)
 """,
-        "errno.h": """
-extern int errno;
-#define ERANGE 34
-""",
         "math.h": """
 double sin(double);
 double cos(double);
@@ -285,6 +281,14 @@ int socket(int domain, int type, int protocol);
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int sendto(int sockfd, const void *buf, unsigned long len, int flags, const struct sockaddr *dest, socklen_t addrlen);
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
+""",
+        "errno.h": """
+extern int errno;
+#define EWOULDBLOCK 11
+#define EAGAIN 11
+#define ECONNREFUSED 111
+#define ECONNRESET 104
+#define ERANGE 34
 """,
         "values.h": """
 #define MININT (-2147483647-1)
