@@ -243,13 +243,23 @@ struct timezone {
     int tz_minuteswest;
     int tz_dsttime;
 };
+struct itimerval {
+    struct timeval it_interval;
+    struct timeval it_value;
+};
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+int setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value);
+#define ITIMER_REAL 0
+#define ITIMER_VIRTUAL 1
+#define ITIMER_PROF 2
 """,
         "netinet/in.h": """
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 typedef unsigned short in_port_t;
 typedef unsigned int in_addr_t;
+#define INADDR_ANY ((in_addr_t)0)
+#define INADDR_BROADCAST ((in_addr_t)0xffffffff)
 struct in_addr { in_addr_t s_addr; };
 struct sockaddr_in {
     unsigned short sin_family;
