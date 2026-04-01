@@ -15,6 +15,7 @@ class Parser:
         self.enum_defs: dict = {}   # name -> EnumDef
         self.enum_values: dict = {} # enumerator name -> int value
         self.typedefs: dict = {}    # typedef name -> TypeSpec
+        self.declared_vars: set = set()  # variable names that shadow enum constants
         self._in_func_args = False
 
     def error(self, msg, token=None):
@@ -738,8 +739,8 @@ class Parser:
                                     line=t.line, col=t.col)
 
         if self.match(TokenType.IDENTIFIER):
-            # Check if this is an enum constant
-            if t.value in self.enum_values:
+            # Check if this is an enum constant (not shadowed by a local variable)
+            if t.value in self.enum_values and t.value not in self.declared_vars:
                 return IntLiteral(value=self.enum_values[t.value], line=t.line, col=t.col)
             return Identifier(name=t.value, line=t.line, col=t.col)
 
@@ -1124,6 +1125,8 @@ class Parser:
             else:
                 init = self.parse_assignment()
 
+        if name and name != "__skip__":
+            self.declared_vars.add(name)
         return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
 
     def parse_var_decl_with_type(self, type_spec) -> Stmt:

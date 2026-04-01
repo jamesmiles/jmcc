@@ -3,7 +3,7 @@
 // EXPECTED_EXIT: 0
 // EXPECTED_STDOUT: ok=0
 // STDOUT: ok=1
-// STDOUT: result=0
+// STDOUT: result=2
 // ENVIRONMENT: hosted
 // PHASE: 5
 
