@@ -272,13 +272,16 @@ class Parser:
                 elif self.at(TokenType.IDENTIFIER):
                     mem_name = self.advance().value
 
-                # Array member
-                if self.match(TokenType.LBRACKET):
-                    if self.at(TokenType.RBRACKET):
-                        mem_type.array_sizes = [None]
-                    else:
-                        mem_type.array_sizes = [self.parse_expr()]
-                    self.expect(TokenType.RBRACKET, "']'")
+                # Array member (including multi-dimensional: short bbox[2][4])
+                if self.at(TokenType.LBRACKET):
+                    arr_sizes = []
+                    while self.match(TokenType.LBRACKET):
+                        if self.at(TokenType.RBRACKET):
+                            arr_sizes.append(None)
+                        else:
+                            arr_sizes.append(self.parse_expr())
+                        self.expect(TokenType.RBRACKET, "']'")
+                    mem_type.array_sizes = arr_sizes
 
                 # Bit-field width: int x : 8;
                 if self.match(TokenType.COLON):

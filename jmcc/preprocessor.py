@@ -336,6 +336,14 @@ double ceil(double);
             name = match.group(1)
             params = [p.strip() for p in match.group(2).split(',') if p.strip()]
             body = match.group(3).strip()
+            # Strip trailing // comments from body
+            in_str = False
+            for ci in range(len(body)):
+                if body[ci] == '"' and (ci == 0 or body[ci-1] != '\\'):
+                    in_str = not in_str
+                elif not in_str and body[ci:ci+2] == '//':
+                    body = body[:ci].rstrip()
+                    break
             # Handle variadic macros: ... as last param
             is_variadic = False
             if params and params[-1] == '...':
@@ -352,6 +360,14 @@ double ceil(double);
         parts = rest.split(None, 1)
         name = parts[0]
         body = parts[1].strip() if len(parts) > 1 else ""
+        # Strip trailing // comments (outside string literals)
+        in_str = False
+        for ci in range(len(body)):
+            if body[ci] == '"' and (ci == 0 or body[ci-1] != '\\'):
+                in_str = not in_str
+            elif not in_str and body[ci:ci+2] == '//':
+                body = body[:ci].rstrip()
+                break
         self.macros[name] = Macro(name, body=body)
 
     def _handle_include(self, line: str, current_file: str) -> Optional[str]:

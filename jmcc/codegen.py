@@ -2155,19 +2155,25 @@ class CodeGen:
             while isinstance(root, ArrayAccess):
                 root = root.array
                 depth += 1
+            ts = None
             if isinstance(root, Identifier):
                 _, ts = self.get_var_location(root.name)
-                if ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) > depth:
-                    # Element size is product of remaining dimensions * base size
-                    elem_size = ts.size_bytes()
-                    for dim in ts.array_sizes[depth:]:
-                        if isinstance(dim, IntLiteral):
-                            elem_size *= dim.value
-                elif ts and ts.is_pointer() and ts.array_sizes:
-                    # Pointer-to-array: inner element is the base type
-                    elem_size = TypeSpec(base=ts.base).size_bytes()
-                elif ts:
-                    elem_size = ts.size_bytes()  # base element size
+            elif isinstance(root, MemberAccess):
+                ts = self.get_expr_type(root)
+            if ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) > depth:
+                # Element size is product of remaining dimensions * base size
+                elem_size = ts.size_bytes()
+                for dim in ts.array_sizes[depth:]:
+                    if isinstance(dim, IntLiteral):
+                        elem_size *= dim.value
+            elif ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) == depth:
+                # Innermost dimension — element is the base type
+                elem_size = ts.size_bytes()
+            elif ts and ts.is_pointer() and ts.array_sizes:
+                # Pointer-to-array: inner element is the base type
+                elem_size = TypeSpec(base=ts.base).size_bytes()
+            elif ts:
+                elem_size = ts.size_bytes()  # base element size
         elif isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
@@ -2202,6 +2208,11 @@ class CodeGen:
             arr_type = self.get_expr_type(expr.array)
             if arr_type and arr_type.is_array():
                 elem_size = arr_type.size_bytes()
+                # Multi-dim: stride includes inner dimensions
+                if arr_type.array_sizes and len(arr_type.array_sizes) > 1:
+                    for dim in arr_type.array_sizes[1:]:
+                        if isinstance(dim, IntLiteral):
+                            elem_size *= dim.value
             elif arr_type and arr_type.is_pointer():
                 pointed = TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
                                    struct_def=arr_type.struct_def)
