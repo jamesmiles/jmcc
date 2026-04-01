@@ -4,6 +4,7 @@
 // EXPECTED_STDOUT: ok
 // ENVIRONMENT: hosted
 // PHASE: 5
+// DEFINES: NORMALUNIX LINUX
 
 int printf(const char *fmt, ...);
 

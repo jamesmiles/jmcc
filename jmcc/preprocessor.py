@@ -282,6 +282,27 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int sendto(int sockfd, const void *buf, unsigned long len, int flags, const struct sockaddr *dest, socklen_t addrlen);
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 """,
+        "sys/ioctl.h": """
+#define FIONBIO 0x5421
+#define FIONREAD 0x541B
+""",
+        "X11/Xlib.h": """
+typedef struct _XDisplay Display;
+typedef unsigned long Window;
+typedef unsigned long Drawable;
+typedef unsigned long Pixmap;
+typedef unsigned long Colormap;
+typedef unsigned long Atom;
+typedef unsigned long Time;
+typedef unsigned long KeySym;
+typedef unsigned char KeyCode;
+typedef struct { int type; } XEvent;
+typedef struct { unsigned long pixel; } XColor;
+typedef struct { int x, y; unsigned int width, height; } XWindowAttributes;
+typedef struct { int width, height; } XSizeHints;
+Display *XOpenDisplay(const char *name);
+int XCloseDisplay(Display *dpy);
+""",
         "netdb.h": """
 struct hostent {
     char *h_name;

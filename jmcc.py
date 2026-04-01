@@ -7,11 +7,11 @@ import argparse
 from jmcc.lexer import Lexer
 from jmcc.parser import Parser
 from jmcc.codegen import CodeGen
-from jmcc.preprocessor import Preprocessor
+from jmcc.preprocessor import Preprocessor, Macro
 from jmcc.errors import JMCCError
 
 
-def compile_file(source_path: str, output_path: str) -> bool:
+def compile_file(source_path: str, output_path: str, defines: list = None) -> bool:
     """Compile a C source file to x86-64 assembly."""
     try:
         with open(source_path, "r") as f:
@@ -24,6 +24,13 @@ def compile_file(source_path: str, output_path: str) -> bool:
         # Preprocessing
         include_paths = [os.path.dirname(os.path.abspath(source_path))]
         pp = Preprocessor(filename=source_path, include_paths=include_paths)
+        # Apply -D defines
+        for d in (defines or []):
+            if '=' in d:
+                name, value = d.split('=', 1)
+                pp.macros[name] = Macro(name, body=value)
+            else:
+                pp.macros[d] = Macro(d, body="1")
         source = pp.preprocess(source, filename=source_path)
 
         # Lexing
@@ -54,9 +61,11 @@ def main():
     parser.add_argument("input", help="Input C source file")
     parser.add_argument("-o", "--output", default="output.s",
                         help="Output assembly file (default: output.s)")
+    parser.add_argument("-D", action="append", default=[], dest="defines",
+                        help="Define preprocessor macro (-DNAME or -DNAME=VALUE)")
     args = parser.parse_args()
 
-    success = compile_file(args.input, args.output)
+    success = compile_file(args.input, args.output, defines=args.defines)
     sys.exit(0 if success else 1)
 
 

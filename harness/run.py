@@ -150,10 +150,13 @@ def compile_with_reference(source_path, compiler, output_path, std="c11"):
     }
 
 
-def compile_with_jmcc(source_path, output_asm_path):
+def compile_with_jmcc(source_path, output_asm_path, defines=None):
     """Compile a C file with JMCC (runs on host, Python)."""
+    cmd = [sys.executable, str(PROJECT_DIR / "jmcc.py"), source_path, "-o", output_asm_path]
+    for d in (defines or []):
+        cmd.extend(["-D", d])
     result = subprocess.run(
-        [sys.executable, str(PROJECT_DIR / "jmcc.py"), source_path, "-o", output_asm_path],
+        cmd,
         capture_output=True,
         text=True,
         timeout=TIMEOUT_SECONDS
@@ -253,6 +256,7 @@ def parse_test_metadata(source_path):
         "error_pattern": "",
         "standard_ref": "",
         "multi_file": [],
+        "defines": [],
     }
 
     stdout_lines = []
@@ -302,6 +306,10 @@ def parse_test_metadata(source_path):
             elif comment.startswith("STANDARD_REF:"):
                 metadata["standard_ref"] = comment[13:].strip()
                 in_stdout = False
+            elif comment.startswith("DEFINES:"):
+                defs = comment[8:].strip()
+                metadata["defines"] = [d.strip() for d in defs.replace(",", " ").split() if d.strip()]
+                in_stdout = False
             elif comment.startswith("MULTI_FILE:"):
                 files = comment[11:].strip()
                 metadata["multi_file"] = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
@@ -341,7 +349,7 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
         bin_path = str(output_dir / f"{test_name}")
 
         # Compile with JMCC
-        comp = compile_with_jmcc(source_path, asm_path)
+        comp = compile_with_jmcc(source_path, asm_path, defines=metadata.get("defines"))
 
         if metadata["expect_compile_fail"]:
             if not comp["success"]:
