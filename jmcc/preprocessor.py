@@ -287,7 +287,7 @@ int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockadd
 #define FIONREAD 0x541B
 """,
         "X11/Xlib.h": """
-typedef struct _XDisplay Display;
+typedef struct _XDisplay { int default_screen; int nscreens; void *screens; } Display;
 typedef unsigned long Window;
 typedef unsigned long Drawable;
 typedef unsigned long Pixmap;
@@ -346,12 +346,21 @@ typedef struct { int width, height; int xoffset; int format; char *data; int byt
 #define ZPixmap 2
 #define GrabModeAsync 1
 #define CurrentTime 0L
+#define GCFunction (1L<<0)
 #define GXclear 0x0
 #define GXcopy 0x3
 #define None 0L
 #define TrueColor 4
 #define True 1
 #define False 0
+#define DefaultScreen(dpy) ((dpy) ? (dpy)->default_screen : 0)
+#define RootWindow(dpy, scr) ((unsigned long)0)
+#define BlackPixel(dpy, scr) ((unsigned long)0)
+#define DefaultVisual(dpy, scr) ((Visual *)0)
+#define DefaultColormap(dpy, scr) ((Colormap)0)
+#define DefaultDepth(dpy, scr) 24
+#define DisplayWidth(dpy, scr) 320
+#define DisplayHeight(dpy, scr) 200
 Display *XOpenDisplay(const char *name);
 int XCloseDisplay(Display *dpy);
 """,
