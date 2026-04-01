@@ -307,6 +307,14 @@ typedef struct { int width, height; int xoffset; int format; char *data; int byt
 Display *XOpenDisplay(const char *name);
 int XCloseDisplay(Display *dpy);
 """,
+        "X11/extensions/XShm.h": """
+typedef struct {
+    unsigned long shmseg;
+    int shmid;
+    char *shmaddr;
+    int readOnly;
+} XShmSegmentInfo;
+""",
         "netdb.h": """
 struct hostent {
     char *h_name;
