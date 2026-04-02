@@ -306,7 +306,7 @@ typedef struct { int type; unsigned long serial; int send_event; Display *displa
 typedef union { int type; XAnyEvent xany; XKeyEvent xkey; XButtonEvent xbutton; XMotionEvent xmotion; XExposeEvent xexpose; XConfigureEvent xconfigure; } XEvent;
 typedef struct { int function; unsigned long foreground; unsigned long background; } XGCValues;
 typedef struct { unsigned long event_mask; Colormap colormap; } XSetWindowAttributes;
-typedef struct { unsigned long pixel; } XColor;
+typedef struct { unsigned long pixel; unsigned short red; unsigned short green; unsigned short blue; char flags; } XColor;
 typedef struct _XGC *GC;
 typedef struct { int x, y; unsigned int width, height; } XWindowAttributes;
 typedef struct { int width, height; } XSizeHints;
