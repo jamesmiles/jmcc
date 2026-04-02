@@ -350,7 +350,11 @@ typedef struct { int width, height; int xoffset; int format; char *data; int byt
 #define GXclear 0x0
 #define GXcopy 0x3
 #define None 0L
+#define PseudoColor 3
 #define TrueColor 4
+#define DoRed (1<<0)
+#define DoGreen (1<<1)
+#define DoBlue (1<<2)
 #define True 1
 #define False 0
 #define DefaultScreen(dpy) ((dpy) ? (dpy)->default_screen : 0)
