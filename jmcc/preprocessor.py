@@ -440,6 +440,13 @@ struct hostent *gethostbyname(const char *name);
 """,
         "sys/ipc.h": """
 typedef int key_t;
+struct ipc_perm {
+    int cuid;
+    int cgid;
+    int uid;
+    int gid;
+    unsigned short mode;
+};
 #define IPC_PRIVATE ((key_t)0)
 #define IPC_CREAT 512
 #define IPC_EXCL 1024
@@ -449,6 +456,7 @@ typedef int key_t;
         "sys/shm.h": """
 #define SHM_RDONLY 010000
 struct shmid_ds {
+    struct ipc_perm shm_perm;
     long shm_segsz;
     long shm_atime;
     long shm_dtime;
