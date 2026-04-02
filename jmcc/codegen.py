@@ -566,6 +566,22 @@ class CodeGen:
             elif (isinstance(unwrapped, UnaryOp) and unwrapped.op == "&" and
                   isinstance(unwrapped.operand, Identifier)):
                 relocs.append((mem_offset, unwrapped.operand.name))
+            elif (isinstance(unwrapped, UnaryOp) and unwrapped.op == "&" and
+                  isinstance(unwrapped.operand, ArrayAccess) and
+                  isinstance(unwrapped.operand.array, Identifier)):
+                # &array[index] — emit as symbol + offset
+                arr_name = unwrapped.operand.array.name
+                idx_val = self._try_eval_const(unwrapped.operand.index)
+                if idx_val is not None and idx_val == 0:
+                    relocs.append((mem_offset, arr_name))
+                elif idx_val is not None:
+                    # Need symbol+offset: emit as reloc with addend
+                    # Get element size from the global var declaration
+                    elem_size = 4  # default to int
+                    if arr_name in self.global_vars:
+                        gdecl = self.global_vars[arr_name]
+                        elem_size = gdecl.type_spec.size_bytes()
+                    relocs.append((mem_offset, f"{arr_name}+{idx_val * elem_size}"))
             elif isinstance(unwrapped, Identifier) and unwrapped.name in self.known_functions:
                 relocs.append((mem_offset, unwrapped.name))
 
