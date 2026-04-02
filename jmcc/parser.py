@@ -1288,7 +1288,8 @@ class Parser:
                 fptr_type = TypeSpec(base=type_spec.base,
                     pointer_depth=type_spec.pointer_depth + 1,
                     struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
-                    is_unsigned=type_spec.is_unsigned)
+                    is_unsigned=type_spec.is_unsigned,
+                    is_extern=type_spec.is_extern, is_static=type_spec.is_static)
                 init = None
                 if self.match(TokenType.ASSIGN):
                     init = self.parse_expr()
