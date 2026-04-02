@@ -633,28 +633,24 @@ extern int errno;
                 # Join continuation lines if macro args span multiple lines
                 joined = line
                 while i + 1 < len(lines):
-                    # Check for unbalanced parens (macro call split across lines)
-                    # Strip // comments before counting so unmatched parens
-                    # inside comments don't trigger the multi-line joiner.
+                    # Count parens on the joined text with comments stripped
+                    code_only = self._strip_line_comments(joined)
                     depth = 0
                     in_s = False
                     in_block = False
                     skip_until = -1
-                    for ci, ch in enumerate(joined):
+                    for ci, ch in enumerate(code_only):
                         if ci < skip_until:
                             continue
                         if in_block:
-                            if ch == '*' and ci + 1 < len(joined) and joined[ci + 1] == '/':
+                            if ch == '*' and ci + 1 < len(code_only) and code_only[ci + 1] == '/':
                                 in_block = False
                             continue
-                        if ch == '/' and ci + 1 < len(joined) and joined[ci + 1] == '/':
-                            break  # rest is a line comment — skip
-                        if ch == '/' and ci + 1 < len(joined) and joined[ci + 1] == '*':
+                        if ch == '/' and ci + 1 < len(code_only) and code_only[ci + 1] == '*':
                             in_block = True
                             continue
                         if ch == "'" and not in_s:
-                            # Skip char literal contents (e.g. '(' or '\\')
-                            end = joined.find("'", ci + 1)
+                            end = code_only.find("'", ci + 1)
                             if end >= 0:
                                 skip_until = end + 1
                             continue
@@ -664,7 +660,9 @@ extern int errno;
                         elif not in_s and ch == ')': depth -= 1
                     if depth > 0:
                         i += 1
-                        joined += " " + lines[i].strip()
+                        # Strip // comment from the line before joining
+                        next_code = self._strip_line_comments(lines[i].strip())
+                        joined += " " + next_code
                         output.append("")  # placeholder for joined line
                     else:
                         break
@@ -691,6 +689,27 @@ extern int errno;
             elif ch == '"' and in_s:
                 in_s = False
         return -1
+
+    @staticmethod
+    def _strip_line_comments(line: str) -> str:
+        """Strip // comments from a line, respecting string and char literals."""
+        in_s = False
+        skip_until = -1
+        for ci, ch in enumerate(line):
+            if ci < skip_until:
+                continue
+            if ch == "'" and not in_s:
+                end = line.find("'", ci + 1)
+                if end >= 0:
+                    skip_until = end + 1
+                continue
+            if ch == '"' and not in_s:
+                in_s = True
+            elif ch == '"' and in_s:
+                in_s = False
+            elif ch == '/' and not in_s and ci + 1 < len(line) and line[ci + 1] == '/':
+                return line[:ci].rstrip()
+        return line
 
     def _parse_directive(self, line: str) -> List[str]:
         """Parse a preprocessor directive into parts."""
