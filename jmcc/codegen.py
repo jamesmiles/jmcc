@@ -2217,7 +2217,7 @@ class CodeGen:
                     # Element is a pointer, not dereferenced type
                     elem_size = 8  # pointer size
                 else:
-                    if ts.is_pointer() and ts.struct_def:
+                    if ts.is_pointer() and ts.struct_def and ts.pointer_depth == 1:
                         # Pointer to struct: element size is the struct size
                         elem_size = ts.struct_def.size_bytes()
                     else:
