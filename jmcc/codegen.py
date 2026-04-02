@@ -2117,6 +2117,16 @@ class CodeGen:
         elif ts and (ts.is_pointer() or ts.size_bytes() == 8 or
                      ts.base in ("float", "double", "long double")):
             self.emit(f"    movq {loc}, %rax")
+        elif ts and ts.size_bytes() == 2:
+            if ts.is_unsigned:
+                self.emit(f"    movzwl {loc}, %eax")
+            else:
+                self.emit(f"    movswl {loc}, %eax")
+        elif ts and ts.size_bytes() == 1:
+            if ts.is_unsigned or ts.base == "char":
+                self.emit(f"    movzbl {loc}, %eax")
+            else:
+                self.emit(f"    movsbl {loc}, %eax")
         else:
             self.emit(f"    movl {loc}, %eax")
 
@@ -2884,12 +2894,16 @@ class CodeGen:
             if target_type:
                 if target_is_float or target_type.is_pointer() or target_type.size_bytes() == 8:
                     store_size = 8
+                elif target_type.size_bytes() == 2:
+                    store_size = 2
                 elif target_type.base == "char" and not target_type.is_pointer():
                     store_size = 1
             elif isinstance(expr.target, Identifier):
                 _, ts = self.get_var_location(expr.target.name)
                 if ts and (ts.is_pointer() or ts.size_bytes() == 8):
                     store_size = 8
+                elif ts and ts.size_bytes() == 2:
+                    store_size = 2
                 elif ts and ts.base == "char":
                     store_size = 1
 
