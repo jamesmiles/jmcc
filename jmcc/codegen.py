@@ -521,6 +521,9 @@ class CodeGen:
             while isinstance(unwrapped, InitList) and unwrapped.items:
                 unwrapped = unwrapped.items[0].value
             unwrapped = self._unwrap_compound_literal(unwrapped)
+            # Unwrap casts (e.g. (int *) &var)
+            while isinstance(unwrapped, CastExpr):
+                unwrapped = unwrapped.operand
 
             cv = self._try_eval_const(unwrapped) if unwrapped else None
             if cv is not None:
