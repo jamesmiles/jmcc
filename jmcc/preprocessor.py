@@ -35,32 +35,7 @@ typedef int wchar_t;
 #define NULL ((void*)0)
 #define offsetof(type, member) __builtin_offsetof(type, member)
 """,
-        "stdint.h": """
-typedef signed char int8_t;
-typedef short int16_t;
-typedef int int32_t;
-typedef long int64_t;
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int uint32_t;
-typedef unsigned long uint64_t;
-typedef long intptr_t;
-typedef unsigned long uintptr_t;
-typedef long intmax_t;
-typedef unsigned long uintmax_t;
-#define INT8_MIN (-128)
-#define INT8_MAX 127
-#define INT16_MIN (-32768)
-#define INT16_MAX 32767
-#define INT32_MIN (-2147483647-1)
-#define INT32_MAX 2147483647
-#define INT64_MIN (-9223372036854775807L-1)
-#define INT64_MAX 9223372036854775807L
-#define UINT8_MAX 255
-#define UINT16_MAX 65535
-#define UINT32_MAX 4294967295U
-#define UINT64_MAX 18446744073709551615UL
-""",
+        # stdint.h — use real system header
         "stdbool.h": """
 #define bool _Bool
 #define true 1
@@ -73,26 +48,7 @@ typedef void *va_list;
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
 #define va_copy(dest, src) __builtin_va_copy(dest, src)
 """,
-        "limits.h": """
-#define CHAR_BIT 8
-#define SCHAR_MIN (-128)
-#define SCHAR_MAX 127
-#define UCHAR_MAX 255
-#define CHAR_MIN (-128)
-#define CHAR_MAX 127
-#define SHRT_MIN (-32768)
-#define SHRT_MAX 32767
-#define USHRT_MAX 65535
-#define INT_MIN (-2147483647-1)
-#define INT_MAX 2147483647
-#define UINT_MAX 4294967295U
-#define LONG_MIN (-9223372036854775807L-1)
-#define LONG_MAX 9223372036854775807L
-#define ULONG_MAX 18446744073709551615UL
-#define LLONG_MIN (-9223372036854775807LL-1)
-#define LLONG_MAX 9223372036854775807LL
-#define ULLONG_MAX 18446744073709551615ULL
-""",
+        # limits.h — use real system header
         "stdnoreturn.h": """
 #define noreturn _Noreturn
 """,
@@ -109,6 +65,7 @@ typedef void *va_list;
 #define DBL_MAX 1.7976931348623157e+308
 #define DBL_EPSILON 2.2204460492503131e-16
 """,
+        # stdio.h — real header has function-type typedefs parser can't handle yet
         "stdio.h": """
 #ifndef _JMCC_STDIO_H
 #define _JMCC_STDIO_H
@@ -130,18 +87,8 @@ extern FILE *stderr;
 #define RAND_MAX 2147483647
 #endif
 """,
-        "string.h": """
-""",
-        "wchar.h": """
-#ifndef _JMCC_WCHAR_H
-#define _JMCC_WCHAR_H
-typedef int wchar_t;
-typedef unsigned int wint_t;
-#define WEOF ((wint_t)-1)
-#endif
-""",
-        "ctype.h": """
-""",
+        "string.h": "",
+        "ctype.h": "",
         "assert.h": """
 #define assert(x) ((void)0)
 """,
@@ -156,6 +103,16 @@ double log(double);
 double exp(double);
 double floor(double);
 double ceil(double);
+""",
+        # POSIX headers — keep stubs for now (real headers cause recursion
+        # in macro expansion and parser failures with complex typedefs)
+        "wchar.h": """
+#ifndef _JMCC_WCHAR_H
+#define _JMCC_WCHAR_H
+typedef int wchar_t;
+typedef unsigned int wint_t;
+#define WEOF ((wint_t)-1)
+#endif
 """,
         "unistd.h": """
 #define R_OK 4
@@ -286,15 +243,6 @@ int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockadd
 #define FIONBIO 0x5421
 #define FIONREAD 0x541B
 """,
-        # X11/Xlib.h, X11/Xutil.h, X11/keysym.h — use real system headers
-        "X11/extensions/XShm.h": """
-typedef struct {
-    unsigned long shmseg;
-    int shmid;
-    char *shmaddr;
-    int readOnly;
-} XShmSegmentInfo;
-""",
         "netdb.h": """
 struct hostent {
     char *h_name;
@@ -305,13 +253,31 @@ struct hostent {
 };
 struct hostent *gethostbyname(const char *name);
 """,
-        # sys/ipc.h, sys/shm.h, errno.h — use real system headers
         "values.h": """
 #define MININT (-2147483647-1)
 #define MAXINT 2147483647
 #define MINSHORT (-32768)
 #define MAXSHORT 32767
 """,
+        # X11/Xlib.h, X11/Xutil.h, X11/keysym.h — use real system headers
+        "X11/extensions/XShm.h": """
+typedef struct {
+    unsigned long shmseg;
+    int shmid;
+    char *shmaddr;
+    int readOnly;
+} XShmSegmentInfo;
+#define ShmCompletion 0
+""",
+        "arpa/inet.h": """
+#include <netinet/in.h>
+in_addr_t inet_addr(const char *cp);
+char *inet_ntoa(struct in_addr in);
+int inet_aton(const char *cp, struct in_addr *inp);
+""",
+        # netdb.h — use real system header
+        # sys/ipc.h, sys/shm.h, errno.h — use real system headers
+        # values.h — use real system header
     }
 
     # System include search paths (appended after user-specified paths)
