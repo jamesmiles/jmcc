@@ -286,140 +286,7 @@ int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockadd
 #define FIONBIO 0x5421
 #define FIONREAD 0x541B
 """,
-        "X11/Xlib.h": """
-typedef struct _XDisplay { int default_screen; int nscreens; void *screens; } Display;
-typedef unsigned long Window;
-typedef unsigned long Drawable;
-typedef unsigned long Pixmap;
-typedef unsigned long Colormap;
-typedef unsigned long Atom;
-typedef unsigned long Time;
-typedef unsigned long KeySym;
-typedef unsigned long Cursor;
-typedef unsigned char KeyCode;
-typedef struct { int type; unsigned long serial; int send_event; Display *display; Window window; } XAnyEvent;
-typedef struct { int type; unsigned long serial; int send_event; Display *display; Window window; Window root; Window subwindow; Time time; int x; int y; int x_root; int y_root; unsigned int state; unsigned int keycode; int same_screen; } XKeyEvent;
-typedef struct { int type; unsigned long serial; int send_event; Display *display; Window window; Window root; Window subwindow; Time time; int x; int y; int x_root; int y_root; unsigned int state; unsigned int button; int same_screen; } XButtonEvent;
-typedef struct { int type; unsigned long serial; int send_event; Display *display; Window window; Window root; Window subwindow; Time time; int x; int y; int x_root; int y_root; unsigned int state; char is_hint; int same_screen; } XMotionEvent;
-typedef struct { int type; unsigned long serial; int send_event; Display *display; Window window; int x; int y; int width; int height; int count; } XExposeEvent;
-typedef struct { int type; unsigned long serial; int send_event; Display *display; Window window; int width; int height; } XConfigureEvent;
-typedef union { int type; XAnyEvent xany; XKeyEvent xkey; XButtonEvent xbutton; XMotionEvent xmotion; XExposeEvent xexpose; XConfigureEvent xconfigure; } XEvent;
-typedef struct { int function; unsigned long foreground; unsigned long background; } XGCValues;
-typedef struct { unsigned long event_mask; Colormap colormap; } XSetWindowAttributes;
-typedef struct { unsigned long pixel; unsigned short red; unsigned short green; unsigned short blue; char flags; } XColor;
-typedef struct _XGC *GC;
-typedef struct { int x, y; unsigned int width, height; } XWindowAttributes;
-typedef struct { int width, height; } XSizeHints;
-typedef struct { unsigned long visualid; int screen; int depth; int class; } Visual;
-typedef struct { Visual *visual; unsigned long visualid; int screen; int depth; int class; } XVisualInfo;
-typedef struct { int width, height; int xoffset; int format; char *data; int byte_order; int bitmap_unit; int bitmap_bit_order; int bitmap_pad; int depth; int bytes_per_line; int bits_per_pixel; } XImage;
-#define KeyPress 2
-#define KeyRelease 3
-#define ButtonPress 4
-#define ButtonRelease 5
-#define MotionNotify 6
-#define Expose 12
-#define ConfigureNotify 22
-#define KeyPressMask (1L<<0)
-#define KeyReleaseMask (1L<<1)
-#define ButtonPressMask (1L<<2)
-#define ButtonReleaseMask (1L<<3)
-#define PointerMotionMask (1L<<6)
-#define ExposureMask (1L<<15)
-#define StructureNotifyMask (1L<<17)
-#define FocusChangeMask (1L<<21)
-#define Button1 1
-#define Button2 2
-#define Button3 3
-#define Button1Mask (1<<8)
-#define Button2Mask (1<<9)
-#define Button3Mask (1<<10)
-#define CWBorderPixel (1L<<3)
-#define CWColormap (1L<<13)
-#define CWEventMask (1L<<11)
-#define InputOutput 1
-#define GCGraphicsExposures (1L<<16)
-#define GCForeground (1L<<2)
-#define GCBackground (1L<<3)
-#define AllocAll 1
-#define AllocNone 0
-#define ZPixmap 2
-#define GrabModeAsync 1
-#define CurrentTime 0L
-#define GCFunction (1L<<0)
-#define GXclear 0x0
-#define GXcopy 0x3
-#define None 0L
-#define PseudoColor 3
-#define TrueColor 4
-#define DoRed (1<<0)
-#define DoGreen (1<<1)
-#define DoBlue (1<<2)
-#define True 1
-#define False 0
-#define DefaultScreen(dpy) ((dpy) ? (dpy)->default_screen : 0)
-#define RootWindow(dpy, scr) ((unsigned long)0)
-#define BlackPixel(dpy, scr) ((unsigned long)0)
-#define DefaultVisual(dpy, scr) ((Visual *)0)
-#define DefaultColormap(dpy, scr) ((Colormap)0)
-#define DefaultDepth(dpy, scr) 24
-#define DisplayWidth(dpy, scr) 320
-#define DisplayHeight(dpy, scr) 200
-Display *XOpenDisplay(const char *name);
-int XCloseDisplay(Display *dpy);
-""",
-        "X11/Xutil.h": """
-/* XSizeHints and XVisualInfo already in Xlib.h */
-""",
-        "X11/keysym.h": """
-#define XK_BackSpace 0xff08
-#define XK_Tab 0xff09
-#define XK_Return 0xff0d
-#define XK_Escape 0xff1b
-#define XK_Delete 0xffff
-#define XK_Home 0xff50
-#define XK_Left 0xff51
-#define XK_Up 0xff52
-#define XK_Right 0xff53
-#define XK_Down 0xff54
-#define XK_Prior 0xff55
-#define XK_Next 0xff56
-#define XK_End 0xff57
-#define XK_Insert 0xff63
-#define XK_F1 0xffbe
-#define XK_F2 0xffbf
-#define XK_F3 0xffc0
-#define XK_F4 0xffc1
-#define XK_F5 0xffc2
-#define XK_F6 0xffc3
-#define XK_F7 0xffc4
-#define XK_F8 0xffc5
-#define XK_F9 0xffc6
-#define XK_F10 0xffc7
-#define XK_F11 0xffc8
-#define XK_F12 0xffc9
-#define XK_KP_0 0xffb0
-#define XK_KP_Enter 0xff8d
-#define XK_KP_Add 0xffab
-#define XK_KP_Subtract 0xffad
-#define XK_KP_Equal 0xffbd
-#define XK_Num_Lock 0xff7f
-#define XK_Caps_Lock 0xffe5
-#define XK_Scroll_Lock 0xff14
-#define XK_Shift_R 0xffe2
-#define XK_Shift_L 0xffe1
-#define XK_Control_R 0xffe4
-#define XK_Control_L 0xffe3
-#define XK_Alt_R 0xffea
-#define XK_Alt_L 0xffe9
-#define XK_Meta_R 0xffe8
-#define XK_Meta_L 0xffe7
-#define XK_Pause 0xff13
-#define XK_space 0x0020
-#define XK_equal 0x003d
-#define XK_minus 0x002d
-#define XK_asciitilde 0x007e
-""",
+        # X11/Xlib.h, X11/Xutil.h, X11/keysym.h — use real system headers
         "X11/extensions/XShm.h": """
 typedef struct {
     unsigned long shmseg;
@@ -438,46 +305,7 @@ struct hostent {
 };
 struct hostent *gethostbyname(const char *name);
 """,
-        "sys/ipc.h": """
-typedef int key_t;
-struct ipc_perm {
-    int cuid;
-    int cgid;
-    int uid;
-    int gid;
-    unsigned short mode;
-};
-#define IPC_PRIVATE ((key_t)0)
-#define IPC_CREAT 512
-#define IPC_EXCL 1024
-#define IPC_RMID 0
-#define IPC_STAT 2
-""",
-        "sys/shm.h": """
-#define SHM_RDONLY 010000
-struct shmid_ds {
-    struct ipc_perm shm_perm;
-    long shm_segsz;
-    long shm_atime;
-    long shm_dtime;
-    long shm_ctime;
-    unsigned short shm_cpid;
-    unsigned short shm_lpid;
-    unsigned short shm_nattch;
-};
-int shmget(int key, unsigned long size, int shmflg);
-void *shmat(int shmid, const void *shmaddr, int shmflg);
-int shmdt(const void *shmaddr);
-int shmctl(int shmid, int cmd, struct shmid_ds *buf);
-""",
-        "errno.h": """
-extern int errno;
-#define EWOULDBLOCK 11
-#define EAGAIN 11
-#define ECONNREFUSED 111
-#define ECONNRESET 104
-#define ERANGE 34
-""",
+        # sys/ipc.h, sys/shm.h, errno.h — use real system headers
         "values.h": """
 #define MININT (-2147483647-1)
 #define MAXINT 2147483647
@@ -486,9 +314,17 @@ extern int errno;
 """,
     }
 
+    # System include search paths (appended after user-specified paths)
+    SYSTEM_INCLUDE_PATHS = [
+        "/usr/include/x86_64-linux-gnu",
+        "/usr/include",
+    ]
+
     def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
         self.filename = filename
-        self.include_paths = include_paths or []
+        self.include_paths = (include_paths or []) + [
+            p for p in self.SYSTEM_INCLUDE_PATHS if os.path.isdir(p)
+        ]
         self.macros: Dict[str, 'Macro'] = {}
         self.macro_stack: Dict[str, List] = {}  # name -> stack of saved Macro objects
         self.included_files: Set[str] = set()
@@ -504,15 +340,109 @@ extern int errno;
         self.macros["__JMCC__"] = Macro("__JMCC__", body="1")
         self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
         self.macros["__linux__"] = Macro("__linux__", body="1")
+        self.macros["__unix__"] = Macro("__unix__", body="1")
         self.macros["NULL"] = Macro("NULL", body="((void*)0)")
         self.macros["EOF"] = Macro("EOF", body="(-1)")
         self.macros["__LP64__"] = Macro("__LP64__", body="1")
+        # Size/byte-order macros needed by glibc headers
+        self.macros["__BYTE_ORDER__"] = Macro("__BYTE_ORDER__", body="1234")
+        self.macros["__ORDER_LITTLE_ENDIAN__"] = Macro("__ORDER_LITTLE_ENDIAN__", body="1234")
+        self.macros["__ORDER_BIG_ENDIAN__"] = Macro("__ORDER_BIG_ENDIAN__", body="4321")
+        self.macros["__SIZEOF_INT__"] = Macro("__SIZEOF_INT__", body="4")
+        self.macros["__SIZEOF_LONG__"] = Macro("__SIZEOF_LONG__", body="8")
+        self.macros["__SIZEOF_POINTER__"] = Macro("__SIZEOF_POINTER__", body="8")
+        self.macros["__SIZEOF_SHORT__"] = Macro("__SIZEOF_SHORT__", body="2")
+        self.macros["__SIZEOF_LONG_LONG__"] = Macro("__SIZEOF_LONG_LONG__", body="8")
+        self.macros["__CHAR_BIT__"] = Macro("__CHAR_BIT__", body="8")
+        self.macros["__SIZE_TYPE__"] = Macro("__SIZE_TYPE__", body="unsigned long")
+        self.macros["__PTRDIFF_TYPE__"] = Macro("__PTRDIFF_TYPE__", body="long")
+        self.macros["__WCHAR_TYPE__"] = Macro("__WCHAR_TYPE__", body="int")
+        self.macros["__WINT_TYPE__"] = Macro("__WINT_TYPE__", body="unsigned int")
+        self.macros["__INT_MAX__"] = Macro("__INT_MAX__", body="2147483647")
+        self.macros["__LONG_MAX__"] = Macro("__LONG_MAX__", body="9223372036854775807L")
+        self.macros["__SHRT_MAX__"] = Macro("__SHRT_MAX__", body="32767")
+        # GNU extension keywords — define as standard equivalents or empty
+        # (not defining __GNUC__ means cdefs.h takes the simple path)
+        self.macros["__volatile__"] = Macro("__volatile__", body="volatile")
+        self.macros["__const__"] = Macro("__const__", body="const")
+        self.macros["__signed__"] = Macro("__signed__", body="signed")
+        self.macros["__inline__"] = Macro("__inline__", body="inline")
+        self.macros["__inline"] = Macro("__inline", body="inline")
+
+    @staticmethod
+    def _strip_comments(source: str) -> str:
+        """Strip C comments from source (translation phase 3).
+
+        Replaces /* ... */ with spaces (preserving newlines) and
+        // ... with nothing.  Respects string and char literals.
+        """
+        result = []
+        i = 0
+        n = len(source)
+        in_string = False
+        in_char = False
+        while i < n:
+            c = source[i]
+            # String literal
+            if c == '"' and not in_char:
+                if in_string:
+                    result.append(c)
+                    in_string = False
+                else:
+                    in_string = True
+                    result.append(c)
+                i += 1
+                continue
+            # Char literal
+            if c == "'" and not in_string:
+                if in_char:
+                    result.append(c)
+                    in_char = False
+                else:
+                    in_char = True
+                    result.append(c)
+                i += 1
+                continue
+            # Escape sequences inside strings/chars
+            if (in_string or in_char) and c == '\\' and i + 1 < n:
+                result.append(c)
+                result.append(source[i + 1])
+                i += 2
+                continue
+            # Inside string or char — pass through
+            if in_string or in_char:
+                result.append(c)
+                i += 1
+                continue
+            # Block comment /* ... */
+            if c == '/' and i + 1 < n and source[i + 1] == '*':
+                i += 2
+                result.append(' ')  # replace comment with single space
+                while i < n:
+                    if source[i] == '\n':
+                        result.append('\n')  # preserve line numbers
+                    elif source[i] == '*' and i + 1 < n and source[i + 1] == '/':
+                        i += 2
+                        break
+                    i += 1
+                continue
+            # Line comment // ...
+            if c == '/' and i + 1 < n and source[i + 1] == '/':
+                i += 2
+                while i < n and source[i] != '\n':
+                    i += 1
+                continue
+            result.append(c)
+            i += 1
+        return ''.join(result)
 
     def preprocess(self, source: str, filename: str = None) -> str:
         if filename:
             self.filename = filename
         # Phase 2: splice lines (backslash-newline removal)
         source = source.replace('\\\n', '')
+        # Phase 3: strip comments
+        source = self._strip_comments(source)
         lines = source.split('\n')
         output = []
         self._process_lines(lines, output, filename or self.filename)
@@ -524,29 +454,11 @@ extern int errno;
             if_stack = []
 
         i = 0
-        in_block_comment = False
+        line_offset = 0  # adjustment from #line directives
         while i < len(lines):
             line = lines[i]
             stripped = line.strip()
-
-            # Track block comment state across lines
-            if in_block_comment:
-                end_pos = line.find('*/')
-                if end_pos >= 0:
-                    in_block_comment = False
-                    # Keep the line (may have code after */)
-                else:
-                    output.append(line)
-                    i += 1
-                    continue
-            # Check if line starts a block comment (not on a preprocessor line)
-            if not stripped.startswith('#'):
-                bc_start = self._find_block_comment_start(line)
-                if bc_start >= 0 and '*/' not in line[bc_start + 2:]:
-                    in_block_comment = True
-                    output.append(line)
-                    i += 1
-                    continue
+            self._current_line = i + 1 + line_offset
 
             # Check if we're in a disabled #if branch
             active = all(frame["active"] for frame in if_stack)
@@ -637,32 +549,31 @@ extern int errno;
                                 del self.macros[mname]
                     output.append("")
                 elif cmd == "line":
+                    # #line NUMBER sets the current line number
+                    if len(directive) > 1:
+                        line_expr = self._expand_macros(' '.join(directive[1:2]))
+                        try:
+                            target_line = int(line_expr)
+                            line_offset = target_line - (i + 2)  # +2: next line is i+1, 1-based
+                        except ValueError:
+                            pass
                     output.append("")
                 else:
                     output.append("")
             elif active:
                 # Regular line — expand macros
                 # Join continuation lines if macro args span multiple lines
+                # (Comments already stripped in phase 3)
                 joined = line
                 while i + 1 < len(lines):
-                    # Count parens on the joined text with comments stripped
-                    code_only = self._strip_line_comments(joined)
                     depth = 0
                     in_s = False
-                    in_block = False
                     skip_until = -1
-                    for ci, ch in enumerate(code_only):
+                    for ci, ch in enumerate(joined):
                         if ci < skip_until:
                             continue
-                        if in_block:
-                            if ch == '*' and ci + 1 < len(code_only) and code_only[ci + 1] == '/':
-                                in_block = False
-                            continue
-                        if ch == '/' and ci + 1 < len(code_only) and code_only[ci + 1] == '*':
-                            in_block = True
-                            continue
                         if ch == "'" and not in_s:
-                            end = code_only.find("'", ci + 1)
+                            end = joined.find("'", ci + 1)
                             if end >= 0:
                                 skip_until = end + 1
                             continue
@@ -671,14 +582,15 @@ extern int errno;
                         elif not in_s and ch == '(': depth += 1
                         elif not in_s and ch == ')': depth -= 1
                     if depth > 0:
+                        # Don't join across preprocessor directives
+                        if i + 1 < len(lines) and lines[i + 1].strip().startswith('#'):
+                            break
                         i += 1
-                        # Strip // comment from the line before joining
-                        next_code = self._strip_line_comments(lines[i].strip())
-                        joined += " " + next_code
+                        joined += " " + lines[i].strip()
                         output.append("")  # placeholder for joined line
                     else:
                         break
-                self._current_line = i + 1
+                self._current_line = i + 1 + line_offset
                 self._current_file = filename
                 expanded = self._expand_macros(joined)
                 output.append(expanded)
@@ -686,42 +598,6 @@ extern int errno;
                 output.append("")
 
             i += 1
-
-    @staticmethod
-    def _find_block_comment_start(line: str) -> int:
-        """Return index of /* that is not inside a string or // comment, or -1."""
-        in_s = False
-        for ci, ch in enumerate(line):
-            if ch == '/' and ci + 1 < len(line) and line[ci + 1] == '/' and not in_s:
-                return -1  # line comment first
-            if ch == '/' and ci + 1 < len(line) and line[ci + 1] == '*' and not in_s:
-                return ci
-            if ch == '"' and not in_s:
-                in_s = True
-            elif ch == '"' and in_s:
-                in_s = False
-        return -1
-
-    @staticmethod
-    def _strip_line_comments(line: str) -> str:
-        """Strip // comments from a line, respecting string and char literals."""
-        in_s = False
-        skip_until = -1
-        for ci, ch in enumerate(line):
-            if ci < skip_until:
-                continue
-            if ch == "'" and not in_s:
-                end = line.find("'", ci + 1)
-                if end >= 0:
-                    skip_until = end + 1
-                continue
-            if ch == '"' and not in_s:
-                in_s = True
-            elif ch == '"' and in_s:
-                in_s = False
-            elif ch == '/' and not in_s and ci + 1 < len(line) and line[ci + 1] == '/':
-                return line[:ci].rstrip()
-        return line
 
     def _parse_directive(self, line: str) -> List[str]:
         """Parse a preprocessor directive into parts."""
@@ -751,14 +627,6 @@ extern int errno;
             name = match.group(1)
             params = [p.strip() for p in match.group(2).split(',') if p.strip()]
             body = match.group(3).strip()
-            # Strip trailing // comments from body
-            in_str = False
-            for ci in range(len(body)):
-                if body[ci] == '"' and (ci == 0 or body[ci-1] != '\\'):
-                    in_str = not in_str
-                elif not in_str and body[ci:ci+2] == '//':
-                    body = body[:ci].rstrip()
-                    break
             # Handle variadic macros: ... as last param
             is_variadic = False
             if params and params[-1] == '...':
@@ -775,15 +643,31 @@ extern int errno;
         parts = rest.split(None, 1)
         name = parts[0]
         body = parts[1].strip() if len(parts) > 1 else ""
-        # Strip trailing // comments (outside string literals)
-        in_str = False
-        for ci in range(len(body)):
-            if body[ci] == '"' and (ci == 0 or body[ci-1] != '\\'):
-                in_str = not in_str
-            elif not in_str and body[ci:ci+2] == '//':
-                body = body[:ci].rstrip()
-                break
         self.macros[name] = Macro(name, body=body)
+
+    # Compatibility shims appended after real system headers are loaded.
+    # These override macros that are unsafe for our test patterns (e.g. NULL display).
+    HEADER_SHIMS = {
+        "X11/Xlib.h": """
+#include <X11/Xutil.h>
+#undef DefaultScreen
+#undef RootWindow
+#undef BlackPixel
+#undef DefaultVisual
+#undef DefaultColormap
+#undef DefaultDepth
+#undef DisplayWidth
+#undef DisplayHeight
+#define DefaultScreen(dpy) ((dpy) ? (int)(((_XPrivDisplay)(dpy))->default_screen) : 0)
+#define RootWindow(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).root) : (unsigned long)0)
+#define BlackPixel(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).black_pixel) : (unsigned long)0)
+#define DefaultVisual(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).root_visual) : (Visual *)0)
+#define DefaultColormap(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).cmap) : (Colormap)0)
+#define DefaultDepth(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).root_depth) : 24)
+#define DisplayWidth(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).width) : 320)
+#define DisplayHeight(dpy, scr) ((dpy) ? ((((_XPrivDisplay)(dpy))->screens[scr]).height) : 200)
+""",
+    }
 
     def _handle_include(self, line: str, current_file: str) -> Optional[str]:
         """Handle #include directive, return included content."""
@@ -799,26 +683,30 @@ extern int errno;
         if inc_name in self.BUILTIN_HEADERS:
             return self.BUILTIN_HEADERS[inc_name]
 
+        def _load_file(full):
+            if full in self.included_files:
+                return ""
+            self.included_files.add(full)
+            with open(full) as f:
+                content = f.read().replace('\\\n', '')
+                content = self._strip_comments(content)
+            # Append shim if one exists for this header
+            if inc_name in self.HEADER_SHIMS:
+                content += '\n' + self.HEADER_SHIMS[inc_name]
+            return content
+
         # For quoted includes, search relative to current file
         if current_file and current_file != "<stdin>":
             dir_path = os.path.dirname(current_file)
             full = os.path.join(dir_path, inc_name)
             if os.path.exists(full):
-                if full in self.included_files:
-                    return ""  # already included
-                self.included_files.add(full)
-                with open(full) as f:
-                    return f.read().replace('\\\n', '')
+                return _load_file(full)
 
         # Search include paths
         for path in self.include_paths:
             full = os.path.join(path, inc_name)
             if os.path.exists(full):
-                if full in self.included_files:
-                    return ""
-                self.included_files.add(full)
-                with open(full) as f:
-                    return f.read().replace('\\\n', '')
+                return _load_file(full)
 
         return ""
 
@@ -971,14 +859,218 @@ extern int errno;
         # Replace remaining identifiers with 0 (per C standard)
         expr = re.sub(r'\b[a-zA-Z_]\w*\b', '0', expr)
 
-        # Simple evaluation
         try:
-            # Safe eval with only integer ops
-            expr = expr.replace('&&', ' and ').replace('||', ' or ').replace('!', ' not ')
-            result = eval(expr, {"__builtins__": {}}, {})
-            return bool(result)
+            return bool(self._eval_c_expr(expr))
         except Exception:
             return False
+
+    def _eval_c_expr(self, expr: str) -> int:
+        """Evaluate a C integer constant expression (for #if)."""
+        # Tokenize: integers (hex, octal, decimal with optional suffix),
+        # operators, parens
+        tokens = []
+        i = 0
+        expr = expr.strip()
+        while i < len(expr):
+            if expr[i].isspace():
+                i += 1
+                continue
+            # Integer literal
+            if expr[i].isdigit():
+                j = i
+                if expr[i] == '0' and i + 1 < len(expr) and expr[i + 1] in 'xX':
+                    j = i + 2
+                    while j < len(expr) and (expr[j] in '0123456789abcdefABCDEF'):
+                        j += 1
+                elif expr[i] == '0' and i + 1 < len(expr) and expr[i + 1].isdigit():
+                    j = i + 1
+                    while j < len(expr) and expr[j] in '01234567':
+                        j += 1
+                else:
+                    while j < len(expr) and expr[j].isdigit():
+                        j += 1
+                num_str = expr[i:j]
+                # Skip suffix
+                while j < len(expr) and expr[j] in 'uUlL':
+                    j += 1
+                tokens.append(('NUM', int(num_str, 0)))
+                i = j
+                continue
+            # Char literal
+            if expr[i] == "'":
+                j = i + 1
+                if j < len(expr) and expr[j] == '\\':
+                    j += 2
+                else:
+                    j += 1
+                if j < len(expr) and expr[j] == "'":
+                    ch = expr[i + 1:j]
+                    if ch.startswith('\\'):
+                        esc = {'n': 10, 't': 9, 'r': 13, '0': 0, '\\': 92, "'": 39, '"': 34}
+                        val = esc.get(ch[1], ord(ch[1]))
+                    else:
+                        val = ord(ch)
+                    tokens.append(('NUM', val))
+                    i = j + 1
+                    continue
+            # Two-char operators
+            if i + 1 < len(expr):
+                two = expr[i:i + 2]
+                if two in ('||', '&&', '==', '!=', '<=', '>=', '<<', '>>'):
+                    tokens.append(('OP', two))
+                    i += 2
+                    continue
+            # Single char operators/parens
+            if expr[i] in '+-*/%<>!~^|&?:()':
+                tokens.append(('OP', expr[i]))
+                i += 1
+                continue
+            # Unknown identifier (should be 0 per C standard, already replaced)
+            if expr[i].isalpha() or expr[i] == '_':
+                j = i
+                while j < len(expr) and (expr[j].isalnum() or expr[j] == '_'):
+                    j += 1
+                tokens.append(('NUM', 0))
+                i = j
+                continue
+            i += 1
+
+        pos = [0]
+
+        def peek():
+            return tokens[pos[0]] if pos[0] < len(tokens) else ('END', None)
+
+        def advance():
+            t = peek()
+            pos[0] += 1
+            return t
+
+        def expect_op(op):
+            t = advance()
+            if t != ('OP', op):
+                raise ValueError(f"expected {op}")
+
+        # Recursive descent with standard C precedence
+        def parse_ternary():
+            val = parse_or()
+            if peek() == ('OP', '?'):
+                advance()
+                then_val = parse_ternary()
+                expect_op(':')
+                else_val = parse_ternary()
+                return then_val if val else else_val
+            return val
+
+        def parse_or():
+            val = parse_and()
+            while peek() == ('OP', '||'):
+                advance()
+                rhs = parse_and()
+                val = 1 if (val or rhs) else 0
+            return val
+
+        def parse_and():
+            val = parse_bitor()
+            while peek() == ('OP', '&&'):
+                advance()
+                rhs = parse_bitor()
+                val = 1 if (val and rhs) else 0
+            return val
+
+        def parse_bitor():
+            val = parse_bitxor()
+            while peek() == ('OP', '|'):
+                advance()
+                val |= parse_bitxor()
+            return val
+
+        def parse_bitxor():
+            val = parse_bitand()
+            while peek() == ('OP', '^'):
+                advance()
+                val ^= parse_bitand()
+            return val
+
+        def parse_bitand():
+            val = parse_equality()
+            while peek() == ('OP', '&'):
+                advance()
+                val &= parse_equality()
+            return val
+
+        def parse_equality():
+            val = parse_relational()
+            while peek()[1] in ('==', '!='):
+                op = advance()[1]
+                rhs = parse_relational()
+                val = int(val == rhs) if op == '==' else int(val != rhs)
+            return val
+
+        def parse_relational():
+            val = parse_shift()
+            while peek()[1] in ('<', '>', '<=', '>='):
+                op = advance()[1]
+                rhs = parse_shift()
+                if op == '<': val = int(val < rhs)
+                elif op == '>': val = int(val > rhs)
+                elif op == '<=': val = int(val <= rhs)
+                elif op == '>=': val = int(val >= rhs)
+            return val
+
+        def parse_shift():
+            val = parse_additive()
+            while peek()[1] in ('<<', '>>'):
+                op = advance()[1]
+                rhs = parse_additive()
+                val = (val << rhs) if op == '<<' else (val >> rhs)
+            return val
+
+        def parse_additive():
+            val = parse_multiplicative()
+            while peek()[1] in ('+', '-'):
+                op = advance()[1]
+                rhs = parse_multiplicative()
+                val = (val + rhs) if op == '+' else (val - rhs)
+            return val
+
+        def parse_multiplicative():
+            val = parse_unary()
+            while peek()[1] in ('*', '/', '%'):
+                op = advance()[1]
+                rhs = parse_unary()
+                if op == '*': val = val * rhs
+                elif op == '/': val = val // rhs if rhs != 0 else 0
+                elif op == '%': val = val % rhs if rhs != 0 else 0
+            return val
+
+        def parse_unary():
+            if peek() == ('OP', '!'):
+                advance()
+                return int(not parse_unary())
+            if peek() == ('OP', '-'):
+                advance()
+                return -parse_unary()
+            if peek() == ('OP', '+'):
+                advance()
+                return parse_unary()
+            if peek() == ('OP', '~'):
+                advance()
+                return ~parse_unary()
+            return parse_primary()
+
+        def parse_primary():
+            if peek() == ('OP', '('):
+                advance()
+                val = parse_ternary()
+                if peek() == ('OP', ')'):
+                    advance()
+                return val
+            t = advance()
+            if t[0] == 'NUM':
+                return t[1]
+            return 0
+
+        return parse_ternary()
 
 
 class Macro:

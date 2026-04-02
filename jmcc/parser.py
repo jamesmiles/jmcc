@@ -144,10 +144,13 @@ class Parser:
                 td = self.typedefs[t.value]
                 self.advance()
                 # Parse pointer levels on top of typedef
+                # Skip qualifiers before * (e.g., XColor const *)
+                while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                    pass
                 pointer_depth = td.pointer_depth
                 while self.match(TokenType.STAR):
                     pointer_depth += 1
-                    while self.match(TokenType.CONST, TokenType.VOLATILE):
+                    while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                         pass
                 return TypeSpec(
                     base=td.base, pointer_depth=pointer_depth,
@@ -1447,8 +1450,18 @@ class Parser:
             else:
                 type_spec.array_sizes = [self.parse_expr()]
             self.expect(TokenType.RBRACKET, "']'")
-        self.expect(TokenType.SEMICOLON, "';'")
         self.typedefs[name] = type_spec
+        # Handle comma-separated typedef names: typedef struct X *A, *B;
+        while self.match(TokenType.COMMA):
+            extra_ptrs = 0
+            while self.match(TokenType.STAR):
+                extra_ptrs += 1
+            extra_name = self.expect(TokenType.IDENTIFIER, "typedef name").value
+            from copy import copy
+            extra_ts = copy(type_spec)
+            extra_ts.pointer_depth += extra_ptrs
+            self.typedefs[extra_name] = extra_ts
+        self.expect(TokenType.SEMICOLON, "';'")
         return TypedefDecl(type_spec=type_spec, name=name, line=t.line, col=t.col)
 
     def parse_func_decl(self, return_type: TypeSpec, name: str, start_token: Token) -> FuncDecl:
