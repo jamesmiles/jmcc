@@ -2094,8 +2094,8 @@ class CodeGen:
         if loc is None:
             self.error(f"undeclared variable '{name}'", line, col)
 
-        if ts and ts.is_array():
-            # Array: load address
+        if ts and (ts.is_array() or ts.is_ptr_array):
+            # Array: load address (array-to-pointer decay)
             if name in self.locals or name in self.params:
                 offset = self.locals.get(name, self.params.get(name, (0, None)))[0]
                 self.emit(f"    leaq {offset}(%rbp), %rax")
