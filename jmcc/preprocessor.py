@@ -260,15 +260,7 @@ struct hostent *gethostbyname(const char *name);
 #define MAXSHORT 32767
 """,
         # X11/Xlib.h, X11/Xutil.h, X11/keysym.h — use real system headers
-        "X11/extensions/XShm.h": """
-typedef struct {
-    unsigned long shmseg;
-    int shmid;
-    char *shmaddr;
-    int readOnly;
-} XShmSegmentInfo;
-#define ShmCompletion 0
-""",
+        # X11/extensions/XShm.h — use real system header (libxext-dev)
         "arpa/inet.h": """
 #include <netinet/in.h>
 in_addr_t inet_addr(const char *cp);
@@ -635,6 +627,22 @@ int inet_aton(const char *cp, struct in_addr *inp);
 """,
     }
 
+    # Pre-content prepended before loading a real system header
+    HEADER_PRE_SHIMS = {
+        "X11/extensions/XShm.h": """
+#include <X11/Xlib.h>
+""",
+    }
+
+    # Post-content appended after loading a real system header
+    HEADER_POST_SHIMS = {
+        "X11/extensions/XShm.h": """
+#ifndef ShmCompletion
+#define ShmCompletion 0
+#endif
+""",
+    }
+
     def _handle_include(self, line: str, current_file: str) -> Optional[str]:
         """Handle #include directive, return included content."""
         # Extract filename
@@ -656,9 +664,13 @@ int inet_aton(const char *cp, struct in_addr *inp);
             with open(full) as f:
                 content = f.read().replace('\\\n', '')
                 content = self._strip_comments(content)
-            # Append shim if one exists for this header
+            # Prepend/append shims if they exist for this header
+            if inc_name in self.HEADER_PRE_SHIMS:
+                content = self.HEADER_PRE_SHIMS[inc_name] + '\n' + content
             if inc_name in self.HEADER_SHIMS:
                 content += '\n' + self.HEADER_SHIMS[inc_name]
+            if inc_name in self.HEADER_POST_SHIMS:
+                content += '\n' + self.HEADER_POST_SHIMS[inc_name]
             return content
 
         # For quoted includes, search relative to current file
