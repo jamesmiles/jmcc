@@ -374,7 +374,11 @@ class CodeGen:
                                             elems[j] = cv
                                 idx = end_idx + 1
                             for val in elems:
-                                if elem_size <= 4:
+                                if elem_size == 1:
+                                    self.emit(f"    .byte {val}")
+                                elif elem_size == 2:
+                                    self.emit(f"    .word {val}")
+                                elif elem_size <= 4:
                                     self.emit(f"    .long {val}")
                                 else:
                                     self.emit(f"    .quad {val}")

@@ -639,7 +639,10 @@ extern int errno;
                     depth = 0
                     in_s = False
                     in_block = False
+                    skip_until = -1
                     for ci, ch in enumerate(joined):
+                        if ci < skip_until:
+                            continue
                         if in_block:
                             if ch == '*' and ci + 1 < len(joined) and joined[ci + 1] == '/':
                                 in_block = False
@@ -648,6 +651,12 @@ extern int errno;
                             break  # rest is a line comment — skip
                         if ch == '/' and ci + 1 < len(joined) and joined[ci + 1] == '*':
                             in_block = True
+                            continue
+                        if ch == "'" and not in_s:
+                            # Skip char literal contents (e.g. '(' or '\\')
+                            end = joined.find("'", ci + 1)
+                            if end >= 0:
+                                skip_until = end + 1
                             continue
                         if ch == '"' and not in_s: in_s = True
                         elif ch == '"' and in_s: in_s = False
