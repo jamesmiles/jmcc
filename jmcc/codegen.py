@@ -155,13 +155,31 @@ class CodeGen:
                                 isinstance(decl.init.operand, UnaryOp) and
                                 decl.init.operand.op == "&" and
                                 isinstance(decl.init.operand.operand, Identifier))
-                if is_addr_init or is_func_init or is_cast_addr:
+                is_array_elem_addr = (decl.init and isinstance(decl.init, UnaryOp) and
+                                      decl.init.op == "&" and
+                                      isinstance(decl.init.operand, ArrayAccess) and
+                                      isinstance(decl.init.operand.array, Identifier))
+                if is_addr_init or is_func_init or is_cast_addr or is_array_elem_addr:
                     self.emit("    .data")
                     if not decl.type_spec.is_static:
                         self.emit(f"    .globl {name}")
                     self.emit(f"    .align 8")
                     self.label(name)
-                    if is_addr_init:
+                    if is_array_elem_addr:
+                        arr_name = decl.init.operand.array.name
+                        idx_val = self._try_eval_const(decl.init.operand.index)
+                        if idx_val is not None and idx_val != 0:
+                            # Element size from the array's declaration
+                            elem_size = 4  # default int
+                            if arr_name in self.global_vars:
+                                gts = self.global_vars[arr_name].type_spec
+                                elem_size = gts.size_bytes()
+                                if gts.struct_def:
+                                    elem_size = gts.struct_def.size_bytes()
+                            self.emit(f"    .quad {arr_name}+{idx_val * elem_size}")
+                        else:
+                            self.emit(f"    .quad {arr_name}")
+                    elif is_addr_init:
                         self.emit(f"    .quad {decl.init.operand.name}")
                     elif is_cast_addr:
                         self.emit(f"    .quad {decl.init.operand.operand.name}")
