@@ -2217,9 +2217,13 @@ class CodeGen:
                     # Element is a pointer, not dereferenced type
                     elem_size = 8  # pointer size
                 else:
-                    elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
-                                       is_unsigned=ts.is_unsigned)
-                    elem_size = elem_ts.size_bytes()
+                    if ts.is_pointer() and ts.struct_def:
+                        # Pointer to struct: element size is the struct size
+                        elem_size = ts.struct_def.size_bytes()
+                    else:
+                        elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
+                                           is_unsigned=ts.is_unsigned, struct_def=ts.struct_def)
+                        elem_size = elem_ts.size_bytes()
                     # Pointer to array: (*p)[N] — element stride includes array size
                     if ts.is_pointer() and ts.array_sizes:
                         for dim in ts.array_sizes:
