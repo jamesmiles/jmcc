@@ -512,9 +512,29 @@ extern int errno;
             if_stack = []
 
         i = 0
+        in_block_comment = False
         while i < len(lines):
             line = lines[i]
             stripped = line.strip()
+
+            # Track block comment state across lines
+            if in_block_comment:
+                end_pos = line.find('*/')
+                if end_pos >= 0:
+                    in_block_comment = False
+                    # Keep the line (may have code after */)
+                else:
+                    output.append(line)
+                    i += 1
+                    continue
+            # Check if line starts a block comment (not on a preprocessor line)
+            if not stripped.startswith('#'):
+                bc_start = self._find_block_comment_start(line)
+                if bc_start >= 0 and '*/' not in line[bc_start + 2:]:
+                    in_block_comment = True
+                    output.append(line)
+                    i += 1
+                    continue
 
             # Check if we're in a disabled #if branch
             active = all(frame["active"] for frame in if_stack)
@@ -614,9 +634,21 @@ extern int errno;
                 joined = line
                 while i + 1 < len(lines):
                     # Check for unbalanced parens (macro call split across lines)
+                    # Strip // comments before counting so unmatched parens
+                    # inside comments don't trigger the multi-line joiner.
                     depth = 0
                     in_s = False
-                    for ch in joined:
+                    in_block = False
+                    for ci, ch in enumerate(joined):
+                        if in_block:
+                            if ch == '*' and ci + 1 < len(joined) and joined[ci + 1] == '/':
+                                in_block = False
+                            continue
+                        if ch == '/' and ci + 1 < len(joined) and joined[ci + 1] == '/':
+                            break  # rest is a line comment — skip
+                        if ch == '/' and ci + 1 < len(joined) and joined[ci + 1] == '*':
+                            in_block = True
+                            continue
                         if ch == '"' and not in_s: in_s = True
                         elif ch == '"' and in_s: in_s = False
                         elif not in_s and ch == '(': depth += 1
@@ -635,6 +667,21 @@ extern int errno;
                 output.append("")
 
             i += 1
+
+    @staticmethod
+    def _find_block_comment_start(line: str) -> int:
+        """Return index of /* that is not inside a string or // comment, or -1."""
+        in_s = False
+        for ci, ch in enumerate(line):
+            if ch == '/' and ci + 1 < len(line) and line[ci + 1] == '/' and not in_s:
+                return -1  # line comment first
+            if ch == '/' and ci + 1 < len(line) and line[ci + 1] == '*' and not in_s:
+                return ci
+            if ch == '"' and not in_s:
+                in_s = True
+            elif ch == '"' and in_s:
+                in_s = False
+        return -1
 
     def _parse_directive(self, line: str) -> List[str]:
         """Parse a preprocessor directive into parts."""
