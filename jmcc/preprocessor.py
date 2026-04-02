@@ -28,6 +28,9 @@ class Preprocessor:
 
     # Built-in freestanding headers that JMCC provides
     BUILTIN_HEADERS = {
+        "alloca.h": """
+#define alloca __builtin_alloca
+""",
         "stddef.h": """
 typedef long ptrdiff_t;
 typedef unsigned long size_t;

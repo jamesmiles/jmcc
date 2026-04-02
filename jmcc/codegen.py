@@ -2957,6 +2957,19 @@ class CodeGen:
     def gen_func_call(self, expr: FuncCall):
         func_name = expr.name.name if isinstance(expr.name, Identifier) else None
 
+        # Handle __builtin_alloca: inline stack allocation
+        if func_name in ("__builtin_alloca", "alloca"):
+            if expr.args:
+                self.gen_expr(expr.args[0])             # size in %rax
+                self.emit("    addq $15, %rax")          # align up to 16
+                self.emit("    andq $-16, %rax")
+                self.emit("    subq %rax, %rsp")         # allocate on stack
+                self.emit("    movq %rsp, %rax")         # return pointer
+                self.emit("    pushq %rax")              # push result
+            else:
+                self.emit("    pushq $0")
+            return
+
         # Handle va_start/va_end/va_copy builtins
         if func_name == "__builtin_va_start":
             self._gen_va_start(expr)
