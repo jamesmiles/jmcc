@@ -219,6 +219,16 @@ class CodeGen:
                     self.emit(f"    .align 8")
                     self.label(name)
                     self.emit(f"    .quad {anon_name}")
+                elif decl.init and isinstance(decl.init, StringLiteral) and decl.type_spec.is_pointer():
+                    # char *s = "hello"; — pointer to string literal
+                    lbl = self.new_label("str")
+                    self.string_literals.append((lbl, decl.init.value, decl.init.wide))
+                    self.emit("    .data")
+                    if not decl.type_spec.is_static:
+                        self.emit(f"    .globl {name}")
+                    self.emit(f"    .align 8")
+                    self.label(name)
+                    self.emit(f"    .quad {lbl}")
                 elif decl.init and isinstance(decl.init, StringLiteral) and decl.type_spec.is_array():
                     # char s[] = "hello";  or  wchar_t s[] = L"hello";
                     self.emit("    .data")
