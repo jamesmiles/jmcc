@@ -434,8 +434,9 @@ class CodeGen:
                     size = decl.type_spec.size_bytes()
                     if (decl.type_spec.is_array() or decl.type_spec.is_ptr_array) and decl.type_spec.array_sizes:
                         for dim in decl.type_spec.array_sizes:
-                            if isinstance(dim, IntLiteral):
-                                size *= dim.value
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                size *= dv
                     align = min(decl.type_spec.size_bytes(), 8)
                     if align < 4:
                         align = 4
@@ -909,6 +910,12 @@ class CodeGen:
             for i in range(8):
                 if offset + i < len(buf):
                     buf[offset + i] = packed[i]
+
+    def _dim_value(self, dim) -> Optional[int]:
+        """Evaluate an array dimension expression to an integer."""
+        if isinstance(dim, IntLiteral):
+            return dim.value
+        return self._try_eval_const(dim)
 
     def _try_eval_const(self, expr) -> Optional[int]:
         """Try to evaluate an expression as a compile-time integer constant."""
@@ -2075,8 +2082,9 @@ class CodeGen:
                     size = ts.struct_def.size_bytes()
                 if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
                     for dim in ts.array_sizes:
-                        if isinstance(dim, IntLiteral):
-                            size *= dim.value
+                        dv = self._dim_value(dim)
+                        if dv is not None:
+                            size *= dv
             else:
                 # sizeof on an expression — infer type
                 et = self.get_expr_type(expr.operand)
@@ -2086,8 +2094,9 @@ class CodeGen:
                         size = et.struct_def.size_bytes()
                     if (et.is_array() or et.is_ptr_array) and et.array_sizes:
                         for dim in et.array_sizes:
-                            if isinstance(dim, IntLiteral):
-                                size *= dim.value
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                size *= dv
                 else:
                     size = 4
             self.emit(f"    movl ${size}, %eax")
@@ -2285,8 +2294,9 @@ class CodeGen:
                     # Multi-dim struct array: outer stride includes inner dimensions
                     if ts.array_sizes and len(ts.array_sizes) > 1:
                         for dim in ts.array_sizes[1:]:
-                            if isinstance(dim, IntLiteral):
-                                elem_size *= dim.value
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                elem_size *= dv
                 elif ts.is_array():
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth,
                                        is_unsigned=ts.is_unsigned)
@@ -2294,16 +2304,18 @@ class CodeGen:
                     # Multi-dim array: element size includes inner dimensions
                     if ts.array_sizes and len(ts.array_sizes) > 1:
                         for dim in ts.array_sizes[1:]:
-                            if isinstance(dim, IntLiteral):
-                                elem_size *= dim.value
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                elem_size *= dv
                 elif ts.is_ptr_array:
                     # Array of pointers (e.g., void (*table[3])(void))
                     elem_size = 8  # pointer size
                     # Multi-dim pointer array: outer stride includes inner dimensions
                     if ts.array_sizes and len(ts.array_sizes) > 1:
                         for dim in ts.array_sizes[1:]:
-                            if isinstance(dim, IntLiteral):
-                                elem_size *= dim.value
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                elem_size *= dv
                 else:
                     if ts.is_pointer() and ts.struct_def and ts.pointer_depth == 1:
                         # Pointer to struct: element size is the struct size
@@ -2315,8 +2327,9 @@ class CodeGen:
                     # Pointer to array: (*p)[N] — element stride includes array size
                     if ts.is_pointer() and ts.array_sizes:
                         for dim in ts.array_sizes:
-                            if isinstance(dim, IntLiteral):
-                                elem_size *= dim.value
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                elem_size *= dv
 
         # Fallback: use get_expr_type for element size
         if elem_size == 4 and not isinstance(expr.array, Identifier):
