@@ -2649,10 +2649,16 @@ class CodeGen:
             self.emit(f"    movq {temp_off}(%rbp), %rax")
         elif mem_type.is_pointer() or mem_type.size_bytes() == 8:
             self.emit("    movq (%rax), %rax")
-        elif mem_type.base == "char" and not mem_type.is_pointer():
-            self.emit("    movsbl (%rax), %eax")
-        elif mem_type.base == "short" and not mem_type.is_pointer():
-            self.emit("    movswl (%rax), %eax")
+        elif mem_type.size_bytes() == 1 and not mem_type.is_pointer():
+            if mem_type.is_unsigned:
+                self.emit("    movzbl (%rax), %eax")
+            else:
+                self.emit("    movsbl (%rax), %eax")
+        elif mem_type.size_bytes() == 2 and not mem_type.is_pointer():
+            if mem_type.is_unsigned:
+                self.emit("    movzwl (%rax), %eax")
+            else:
+                self.emit("    movswl (%rax), %eax")
         else:
             self.emit("    movl (%rax), %eax")
 
