@@ -2231,15 +2231,27 @@ class CodeGen:
                 _, ts = self.get_var_location(root.name)
             elif isinstance(root, MemberAccess):
                 ts = self.get_expr_type(root)
-            if ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) > depth:
+            if ts and ts.is_ptr_array and ts.array_sizes:
+                # Pointer array: element is a pointer (8 bytes)
+                elem_size = 8
+                # For outer dimensions, multiply by remaining inner dimensions
+                if len(ts.array_sizes) > depth:
+                    for dim in ts.array_sizes[depth:]:
+                        if isinstance(dim, IntLiteral):
+                            elem_size *= dim.value
+            elif ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) > depth:
                 # Element size is product of remaining dimensions * base size
                 elem_size = ts.size_bytes()
+                if ts.struct_def:
+                    elem_size = ts.struct_def.size_bytes()
                 for dim in ts.array_sizes[depth:]:
                     if isinstance(dim, IntLiteral):
                         elem_size *= dim.value
             elif ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) == depth:
                 # Innermost dimension — element is the base type
                 elem_size = ts.size_bytes()
+                if ts.struct_def:
+                    elem_size = ts.struct_def.size_bytes()
             elif ts and ts.is_pointer() and ts.array_sizes:
                 # Pointer-to-array: inner element is the base type
                 elem_size = TypeSpec(base=ts.base).size_bytes()
@@ -2267,8 +2279,12 @@ class CodeGen:
                                 elem_size *= dim.value
                 elif ts.is_ptr_array:
                     # Array of pointers (e.g., void (*table[3])(void))
-                    # Element is a pointer, not dereferenced type
                     elem_size = 8  # pointer size
+                    # Multi-dim pointer array: outer stride includes inner dimensions
+                    if ts.array_sizes and len(ts.array_sizes) > 1:
+                        for dim in ts.array_sizes[1:]:
+                            if isinstance(dim, IntLiteral):
+                                elem_size *= dim.value
                 else:
                     if ts.is_pointer() and ts.struct_def and ts.pointer_depth == 1:
                         # Pointer to struct: element size is the struct size
@@ -2313,17 +2329,29 @@ class CodeGen:
         if isinstance(expr.array, ArrayAccess):
             # Nested array access — find root type for base element size
             root = expr.array
+            depth = 1
             while isinstance(root, ArrayAccess):
                 root = root.array
+                depth += 1
             if isinstance(root, Identifier):
                 _, ts = self.get_var_location(root.name)
-                if ts:
-                    if ts.base == "char":
+                if ts and ts.is_ptr_array:
+                    # Pointer array: innermost element is a pointer (8 bytes)
+                    elem_size = 8
+                elif ts:
+                    # For nested access, the base element type matters
+                    base = ts.base
+                    if base == "char":
                         elem_size = 1
-                    elif ts.base in ("long", "long long") or ts.is_pointer():
+                    elif base == "short":
+                        elem_size = 2
+                    elif base in ("long", "long long"):
                         elem_size = 8
                     elif ts.struct_def:
                         elem_size = ts.struct_def.size_bytes()
+                    elif ts.is_pointer() and not ts.array_sizes:
+                        # Pure pointer (not ptr-to-array): element is pointer
+                        elem_size = 8
         elif isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
@@ -2422,8 +2450,15 @@ class CodeGen:
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
                                     array_sizes=arr_type.array_sizes[1:])
+                elif arr_type.is_ptr_array and arr_type.array_sizes and len(arr_type.array_sizes) > 1:
+                    # Multi-dim pointer array: strip first dimension
+                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
+                                    struct_def=arr_type.struct_def,
+                                    is_unsigned=arr_type.is_unsigned,
+                                    array_sizes=arr_type.array_sizes[1:],
+                                    is_ptr_array=True)
                 elif arr_type.is_ptr_array:
-                    # Array of pointers (e.g., fptr table[3]): element is pointer type
+                    # Single-dim pointer array: element is pointer type
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
                                     is_unsigned=arr_type.is_unsigned)
