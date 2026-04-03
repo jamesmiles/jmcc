@@ -2039,8 +2039,18 @@ class CodeGen:
                                 if dst_size == 8 and not src_type.is_unsigned:
                                     self.emit("    movslq %eax, %rax")
                         elif dst_size < src_size:
-                            # Narrowing cast — truncation is implicit in x86
-                            pass
+                            # Narrowing cast — must sign/zero-extend the truncated value
+                            # so it matches what a load of that size would produce
+                            if dst_size == 1:
+                                if dst_type.is_unsigned:
+                                    self.emit("    movzbl %al, %eax")
+                                else:
+                                    self.emit("    movsbl %al, %eax")
+                            elif dst_size == 2:
+                                if dst_type.is_unsigned:
+                                    self.emit("    movzwl %ax, %eax")
+                                else:
+                                    self.emit("    movswl %ax, %eax")
 
         elif isinstance(expr, SizeofExpr):
             if expr.is_type:
@@ -2141,7 +2151,7 @@ class CodeGen:
             else:
                 self.emit(f"    movswl {loc}, %eax")
         elif ts and ts.size_bytes() == 1:
-            if ts.is_unsigned or ts.base == "char":
+            if ts.is_unsigned:
                 self.emit(f"    movzbl {loc}, %eax")
             else:
                 self.emit(f"    movsbl {loc}, %eax")
@@ -2873,17 +2883,58 @@ class CodeGen:
                 if not is_prefix:
                     self.emit("    movq %rdx, %rax")
             else:
-                self.emit("    movl (%rax), %eax")
+                store_size = self._type_store_size(operand_type)
+                self._emit_load("%rax", store_size, operand_type)
                 if not is_prefix:
                     self.emit("    movl %eax, %edx")
                 op = "addl" if is_inc else "subl"
                 self.emit(f"    {op} ${elem_size}, %eax")
                 self.emit("    popq %rcx")
-                self.emit("    movl %eax, (%rcx)")
+                self._emit_store("%rcx", store_size)
                 if not is_prefix:
                     self.emit("    movl %edx, %eax")
         else:
             self.error(f"unhandled unary operator '{expr.op}'", expr.line, expr.col)
+
+    def _type_store_size(self, ts):
+        """Return the store/load size in bytes for a type."""
+        if not ts:
+            return 4
+        if ts.is_pointer() or ts.size_bytes() == 8 or ts.base in ("float", "double", "long double"):
+            return 8
+        if ts.size_bytes() == 2:
+            return 2
+        if ts.size_bytes() == 1:
+            return 1
+        return 4
+
+    def _emit_load(self, addr_reg, size, ts=None):
+        """Emit a load from (addr_reg) into %rax with correct width."""
+        if size == 8:
+            self.emit(f"    movq ({addr_reg}), %rax")
+        elif size == 2:
+            if ts and ts.is_unsigned:
+                self.emit(f"    movzwl ({addr_reg}), %eax")
+            else:
+                self.emit(f"    movswl ({addr_reg}), %eax")
+        elif size == 1:
+            if ts and ts.is_unsigned:
+                self.emit(f"    movzbl ({addr_reg}), %eax")
+            else:
+                self.emit(f"    movsbl ({addr_reg}), %eax")
+        else:
+            self.emit(f"    movl ({addr_reg}), %eax")
+
+    def _emit_store(self, addr_reg, size):
+        """Emit a store from %rax/%eax/%ax/%al to (addr_reg)."""
+        if size == 8:
+            self.emit(f"    movq %rax, ({addr_reg})")
+        elif size == 2:
+            self.emit(f"    movw %ax, ({addr_reg})")
+        elif size == 1:
+            self.emit(f"    movb %al, ({addr_reg})")
+        else:
+            self.emit(f"    movl %eax, ({addr_reg})")
 
     def gen_assignment(self, expr: Assignment):
         if expr.op == "=":
@@ -2967,15 +3018,18 @@ class CodeGen:
                 self.emit("    movq %rax, (%rcx)")    # store result
                 return
 
+            store_size = self._type_store_size(target_type)
+            is_long = store_size == 8 and not is_ptr
+
             self.gen_lvalue_addr(expr.target)
             self.emit("    pushq %rax")
-            if is_ptr:
-                self.emit("    movq (%rax), %rax")
-            else:
-                self.emit("    movl (%rax), %eax")
+            self._emit_load("%rax", store_size, target_type)
             self.emit("    pushq %rax")
             self.gen_expr(expr.value)
-            self.emit("    movl %eax, %ecx")
+            if is_long or is_ptr:
+                self.emit("    movq %rax, %rcx")
+            else:
+                self.emit("    movl %eax, %ecx")
             self.emit("    popq %rax")
 
             if is_ptr and op in ("+", "-"):
@@ -2989,6 +3043,24 @@ class CodeGen:
                     self.emit("    addq %rcx, %rax")
                 else:
                     self.emit("    subq %rcx, %rax")
+            elif is_long:
+                # 64-bit operations for long/long long
+                q_ops = {"+": "addq", "-": "subq", "&": "andq", "|": "orq", "^": "xorq"}
+                if op in q_ops:
+                    self.emit(f"    {q_ops[op]} %rcx, %rax")
+                elif op == "<<":
+                    self.emit("    shlq %cl, %rax")
+                elif op == ">>":
+                    self.emit("    sarq %cl, %rax")
+                elif op == "*":
+                    self.emit("    imulq %rcx, %rax")
+                elif op == "/":
+                    self.emit("    cqo")
+                    self.emit("    idivq %rcx")
+                elif op == "%":
+                    self.emit("    cqo")
+                    self.emit("    idivq %rcx")
+                    self.emit("    movq %rdx, %rax")
             elif op == "+":
                 self.emit("    addl %ecx, %eax")
             elif op == "-":
@@ -3014,10 +3086,7 @@ class CodeGen:
                 self.emit("    sarl %cl, %eax")
 
             self.emit("    popq %rcx")
-            if is_ptr:
-                self.emit("    movq %rax, (%rcx)")
-            else:
-                self.emit("    movl %eax, (%rcx)")
+            self._emit_store("%rcx", store_size)
 
     def gen_func_call(self, expr: FuncCall):
         func_name = expr.name.name if isinstance(expr.name, Identifier) else None
