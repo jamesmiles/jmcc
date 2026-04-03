@@ -2251,6 +2251,11 @@ class CodeGen:
                 if ts.is_array() and ts.struct_def:
                     # Array of structs
                     elem_size = ts.struct_def.size_bytes()
+                    # Multi-dim struct array: outer stride includes inner dimensions
+                    if ts.array_sizes and len(ts.array_sizes) > 1:
+                        for dim in ts.array_sizes[1:]:
+                            if isinstance(dim, IntLiteral):
+                                elem_size *= dim.value
                 elif ts.is_array():
                     elem_ts = TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth,
                                        is_unsigned=ts.is_unsigned)
