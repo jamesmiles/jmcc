@@ -387,20 +387,35 @@ class CodeGen:
                                 else:
                                     self.emit(f"    .quad {val}")
                         else:
-                            elems = [0] * total_elems
-                            idx = 0
+                            # Compute total flat element count for multi-dim
+                            total_flat = total_elems
+                            inner_count = 1
+                            if decl.type_spec.array_sizes and len(decl.type_spec.array_sizes) > 1:
+                                for dim in decl.type_spec.array_sizes[1:]:
+                                    if isinstance(dim, IntLiteral):
+                                        inner_count *= dim.value
+                                total_flat = total_elems * inner_count
+                            elems = [0] * total_flat
+                            flat_idx = 0
                             for item in actual_init.items:
                                 if item.designator_index is not None:
-                                    idx = item.designator_index
-                                end_idx = idx
-                                if item.designator_end is not None:
-                                    end_idx = item.designator_end
-                                cv = self._try_eval_const(item.value)
-                                if cv is not None:
-                                    for j in range(idx, end_idx + 1):
-                                        if j < total_elems:
-                                            elems[j] = cv
-                                idx = end_idx + 1
+                                    flat_idx = item.designator_index * inner_count
+                                val = item.value
+                                # Unwrap CastExpr
+                                while isinstance(val, CastExpr):
+                                    val = val.operand
+                                if isinstance(val, InitList) and inner_count > 1:
+                                    # Inner init list for multi-dim array
+                                    for sub_item in val.items:
+                                        cv = self._try_eval_const(sub_item.value)
+                                        if cv is not None and flat_idx < total_flat:
+                                            elems[flat_idx] = cv
+                                        flat_idx += 1
+                                else:
+                                    cv = self._try_eval_const(val)
+                                    if cv is not None and flat_idx < total_flat:
+                                        elems[flat_idx] = cv
+                                    flat_idx += 1
                             for val in elems:
                                 if elem_size == 1:
                                     self.emit(f"    .byte {val}")
