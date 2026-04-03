@@ -417,7 +417,7 @@ class CodeGen:
                     if not decl.type_spec.is_static:
                         self.emit(f"    .globl {name}")
                     size = decl.type_spec.size_bytes()
-                    if decl.type_spec.is_array() and decl.type_spec.array_sizes:
+                    if (decl.type_spec.is_array() or decl.type_spec.is_ptr_array) and decl.type_spec.array_sizes:
                         for dim in decl.type_spec.array_sizes:
                             if isinstance(dim, IntLiteral):
                                 size *= dim.value
@@ -2056,19 +2056,23 @@ class CodeGen:
             if expr.is_type:
                 ts = expr.operand
                 size = ts.size_bytes()
-                if (ts.is_array() or (ts.is_ptr_array)) and ts.array_sizes:
-                    first = ts.array_sizes[0]
-                    if isinstance(first, IntLiteral):
-                        size *= first.value
+                if ts.struct_def and not ts.is_pointer():
+                    size = ts.struct_def.size_bytes()
+                if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
+                    for dim in ts.array_sizes:
+                        if isinstance(dim, IntLiteral):
+                            size *= dim.value
             else:
                 # sizeof on an expression — infer type
                 et = self.get_expr_type(expr.operand)
                 if et:
                     size = et.size_bytes()
-                    if (et.is_array() or (et.is_ptr_array)) and et.array_sizes:
-                        first = et.array_sizes[0]
-                        if isinstance(first, IntLiteral):
-                            size *= first.value
+                    if et.struct_def and not et.is_pointer():
+                        size = et.struct_def.size_bytes()
+                    if (et.is_array() or et.is_ptr_array) and et.array_sizes:
+                        for dim in et.array_sizes:
+                            if isinstance(dim, IntLiteral):
+                                size *= dim.value
                 else:
                     size = 4
             self.emit(f"    movl ${size}, %eax")
