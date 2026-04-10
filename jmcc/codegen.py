@@ -339,8 +339,12 @@ class CodeGen:
                         total_elems = 0
                         if decl.type_spec.array_sizes and decl.type_spec.array_sizes[0]:
                             first = decl.type_spec.array_sizes[0]
-                            if isinstance(first, IntLiteral):
-                                total_elems = first.value
+                            dv = self._dim_value(first)
+                            if dv is not None:
+                                total_elems = dv
+                        elif actual_init and actual_init.items:
+                            # Unsized array: infer from initializer length
+                            total_elems = len(actual_init.items)
 
                         # Handle pointer-sized elements (function pointers) vs scalar arrays
                         is_ptr_array = decl.type_spec.is_pointer() or (decl.type_spec.struct_def and decl.type_spec.size_bytes() == 8)
@@ -374,6 +378,10 @@ class CodeGen:
                                                 elems[j] = inner.name
                                             elif isinstance(inner, UnaryOp) and inner.op == "&" and isinstance(inner.operand, Identifier):
                                                 elems[j] = inner.operand.name
+                                        elif isinstance(val, StringLiteral):
+                                            lbl = self.new_label("str")
+                                            self.string_literals.append((lbl, val.value, val.wide))
+                                            elems[j] = lbl
                                         else:
                                             cv = self._try_eval_const(val)
                                             if cv is not None:
@@ -2235,7 +2243,13 @@ class CodeGen:
                 self.gen_expr(expr.array)
         elif isinstance(expr.array, ArrayAccess):
             # Nested array access (multi-dim): get address, don't dereference
+            # EXCEPT for ptr_array where the intermediate result is a pointer value
             self.gen_array_addr(expr.array)
+            # Check if the intermediate result is a pointer that needs dereferencing
+            # (ptr_array intermediate results are sub-arrays, not pointer values)
+            inner_type = self.get_expr_type(expr.array)
+            if inner_type and inner_type.is_pointer() and not inner_type.is_array() and not inner_type.is_ptr_array:
+                self.emit("    movq (%rax), %rax")  # dereference pointer
         else:
             self.gen_expr(expr.array)
 
@@ -2260,13 +2274,18 @@ class CodeGen:
             elif isinstance(root, MemberAccess):
                 ts = self.get_expr_type(root)
             if ts and ts.is_ptr_array and ts.array_sizes:
-                # Pointer array: element is a pointer (8 bytes)
-                elem_size = 8
-                # For outer dimensions, multiply by remaining inner dimensions
-                if len(ts.array_sizes) > depth:
-                    for dim in ts.array_sizes[depth:]:
-                        if isinstance(dim, IntLiteral):
-                            elem_size *= dim.value
+                num_dims = len(ts.array_sizes)
+                if depth <= num_dims:
+                    # Still within the pointer array dimensions
+                    elem_size = 8
+                    if num_dims > depth:
+                        for dim in ts.array_sizes[depth:]:
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                elem_size *= dv
+                else:
+                    # Past array dims — indexing into pointed-to type
+                    elem_size = TypeSpec(base=ts.base).size_bytes()
             elif ts and ts.is_array() and ts.array_sizes and len(ts.array_sizes) > depth:
                 # Element size is product of remaining dimensions * base size
                 elem_size = ts.size_bytes()
@@ -2368,8 +2387,14 @@ class CodeGen:
             if isinstance(root, Identifier):
                 _, ts = self.get_var_location(root.name)
                 if ts and ts.is_ptr_array:
-                    # Pointer array: innermost element is a pointer (8 bytes)
-                    elem_size = 8
+                    # Pointer array: depth 1 = pointer element (8 bytes)
+                    # depth 2+ = dereferenced pointer element (base type)
+                    num_dims = len(ts.array_sizes) if ts.array_sizes else 1
+                    if depth <= num_dims:
+                        elem_size = 8  # still indexing within the pointer array
+                    else:
+                        # Past the array dimensions — indexing the pointed-to type
+                        elem_size = TypeSpec(base=ts.base).size_bytes()
                 elif ts:
                     # For nested access, the base element type matters
                     base = ts.base
@@ -3411,9 +3436,18 @@ class CodeGen:
         if is_indirect or is_fptr:
             if is_indirect:
                 call_target = expr.name
-                while isinstance(call_target, UnaryOp) and call_target.op == "*":
-                    call_target = call_target.operand
-                self.gen_expr(call_target)
+                # Strip ONE level of * (C: *funcptr == funcptr)
+                if isinstance(call_target, UnaryOp) and call_target.op == "*":
+                    inner = call_target.operand
+                    inner_type = self.get_expr_type(inner)
+                    if inner_type and inner_type.is_pointer() and inner_type.pointer_depth >= 2:
+                        # Pointer-to-function-pointer: need full dereference
+                        self.gen_expr(call_target)
+                    else:
+                        # Simple function pointer: *fp == fp, just load it
+                        self.gen_expr(inner)
+                else:
+                    self.gen_expr(call_target)
             else:
                 self.gen_load_var(func_name, expr.line, expr.col)
             self.emit("    pushq %rax")
