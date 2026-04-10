@@ -2493,6 +2493,7 @@ class CodeGen:
                     # Multi-dim array: strip first dimension, keep rest
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
+                                    is_unsigned=arr_type.is_unsigned,
                                     array_sizes=arr_type.array_sizes[1:])
                 elif arr_type.is_ptr_array and arr_type.array_sizes and len(arr_type.array_sizes) > 1:
                     # Multi-dim pointer array: strip first dimension
