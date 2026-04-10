@@ -2927,10 +2927,13 @@ class CodeGen:
                 self.emit("    cmpq %rcx, %rax")
             else:
                 self.emit("    cmpl %ecx, %eax")
-            # Use unsigned comparison only when BOTH operands are unsigned int/long
+            # Use unsigned comparison when both operands are unsigned, or when
+            # the left operand is unsigned and right is a non-negative literal
             both_unsigned = (left_type and left_type.is_unsigned and left_type.size_bytes() >= 4 and
                             right_type and right_type.is_unsigned and right_type.size_bytes() >= 4)
-            if both_unsigned and expr.op not in ("==", "!="):
+            left_unsigned_right_nonneg = (left_type and left_type.is_unsigned and left_type.size_bytes() >= 4 and
+                                         isinstance(expr.right, IntLiteral) and expr.right.value > 0)
+            if (both_unsigned or left_unsigned_right_nonneg) and expr.op not in ("==", "!="):
                 cond_map = {
                     "<": "setb", ">": "seta",
                     "<=": "setbe", ">=": "setae",
