@@ -2801,9 +2801,13 @@ class CodeGen:
             # Sign-extend right operand if it's a narrower type
             right_is_narrow = (right_type is None or
                                (right_type.base not in ("long", "long long") and
-                                not right_type.is_pointer()))
-            if right_is_narrow and not is_ptr_op:
-                self.emit("    cltq")  # sign-extend eax to rax
+                                not right_type.is_pointer() and
+                                not right_type.is_array()))
+            if right_is_narrow:
+                if right_type and right_type.is_unsigned:
+                    self.emit("    movl %eax, %eax")  # zero-extend
+                else:
+                    self.emit("    cltq")  # sign-extend eax to rax
             self.emit("    movq %rax, %rcx")   # right operand in rcx (64-bit)
             self.emit("    popq %rax")          # left operand in rax
             # Sign-extend left operand if narrower (int in a long/ptr context)
