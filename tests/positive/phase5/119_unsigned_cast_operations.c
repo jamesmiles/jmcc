@@ -26,11 +26,10 @@ int main(void) {
     unsigned int divided = (unsigned)neg / 2;
     if (divided != 2147483647u) return 4;  /* fails with idivl: 0 */
 
-    /* 4. Modulo: (unsigned)0x80000001 % 3 */
-    int val = (int)0x80000001u;
-    unsigned int modded = (unsigned)val % 3;
-    /* 0x80000001 = 2147483649, 2147483649 % 3 = 2 */
-    if (modded != 2) return 5;
+    /* 4. Modulo: (unsigned)(-1) % 5 */
+    unsigned int modded = (unsigned)neg % 5;
+    /* 0xFFFFFFFF = 4294967295, 4294967295 % 5 = 0 */
+    if (modded != 0) return 5;
 
     /* 5. Cast chain: (unsigned)(char)0xAA  */
     char c = 0xAA;   /* -86 as signed char */
