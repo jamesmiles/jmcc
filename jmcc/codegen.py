@@ -2395,6 +2395,8 @@ class CodeGen:
                     # Pointer to base type: element is the base type
                     if ts.base == "char":
                         elem_size = 1
+                    elif ts.base == "short":
+                        elem_size = 2
                     elif ts.base in ("long", "long long") or ts.struct_def:
                         elem_size = 8
                     else:
@@ -2407,6 +2409,8 @@ class CodeGen:
                         elem_size = 8
                     elif ts.base == "char":
                         elem_size = 1
+                    elif ts.base == "short":
+                        elem_size = 2
                     elif ts.struct_def:
                         elem_size = ts.struct_def.size_bytes()
                     elif ts.base in ("long", "long long"):
