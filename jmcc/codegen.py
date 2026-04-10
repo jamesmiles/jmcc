@@ -2464,18 +2464,15 @@ class CodeGen:
                 base = "long long"
             elif 'L' in s:
                 base = "long"
+            elif val > 4294967295:  # > UINT32_MAX: must be long
+                base = "long"
+            elif val > 2147483647:  # > INT32_MAX: unsigned int
+                base = "int"
             else:
-                # Per C standard: unsuffixed decimal fits int, then long, then long long
-                if -2147483648 <= val <= 2147483647:
-                    base = "int"
-                elif -9223372036854775808 <= val <= 9223372036854775807:
-                    base = "long"
-                else:
-                    base = "long long"
+                base = "int"
             is_unsigned = 'U' in s
-            # Hex/octal without U suffix: if value doesn't fit signed, try unsigned
             if not is_unsigned and val > 2147483647 and base == "int":
-                is_unsigned = True
+                is_unsigned = True  # hex/octal large values are unsigned int
             return TypeSpec(base=base, is_unsigned=is_unsigned)
         if isinstance(expr, StringLiteral):
             return TypeSpec(base="char", pointer_depth=1)
@@ -2806,6 +2803,15 @@ class CodeGen:
                 self.emit("    cltq")  # sign-extend eax to rax
             self.emit("    movq %rax, %rcx")   # right operand in rcx (64-bit)
             self.emit("    popq %rax")          # left operand in rax
+            # Sign-extend left operand if narrower (int in a long/ptr context)
+            left_is_narrow = (left_type is not None and
+                              left_type.base not in ("long", "long long") and
+                              not left_type.is_pointer())
+            if left_is_narrow and not is_ptr_op:
+                if left_type.is_unsigned:
+                    self.emit("    movl %eax, %eax")  # zero-extend
+                else:
+                    self.emit("    cltq")  # sign-extend eax to rax
         else:
             self.emit("    movl %eax, %ecx")   # right operand in ecx (32-bit for ints)
             self.emit("    popq %rax")          # left operand in eax
@@ -2917,9 +2923,7 @@ class CodeGen:
                 else:
                     self.emit("    sarl %cl, %eax")
         elif expr.op in ("==", "!=", "<", ">", "<=", ">="):
-            is_ptr_cmp = ((left_type and left_type.is_pointer()) or
-                         (right_type and right_type.is_pointer()))
-            if is_ptr_cmp:
+            if is_64bit or is_ptr_op:
                 self.emit("    cmpq %rcx, %rax")
             else:
                 self.emit("    cmpl %ecx, %eax")
@@ -2954,10 +2958,18 @@ class CodeGen:
                 self.emit("    movq %xmm0, %rax")
             else:
                 self.gen_expr(expr.operand)
-                self.emit("    negl %eax")
+                op_type = self.get_expr_type(expr.operand)
+                if op_type and (op_type.base in ("long", "long long") or op_type.is_pointer()):
+                    self.emit("    negq %rax")
+                else:
+                    self.emit("    negl %eax")
         elif expr.op == "~":
             self.gen_expr(expr.operand)
-            self.emit("    notl %eax")
+            op_type = self.get_expr_type(expr.operand)
+            if op_type and (op_type.base in ("long", "long long") or op_type.is_pointer()):
+                self.emit("    notq %rax")
+            else:
+                self.emit("    notl %eax")
         elif expr.op == "!":
             self.gen_expr(expr.operand)
             self._emit_cond_test(expr.operand)
