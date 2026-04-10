@@ -2459,13 +2459,23 @@ class CodeGen:
             return None
         if isinstance(expr, IntLiteral):
             s = expr.suffix.upper()
+            val = expr.value
             if 'LL' in s:
                 base = "long long"
             elif 'L' in s:
                 base = "long"
             else:
-                base = "int"
+                # Per C standard: unsuffixed decimal fits int, then long, then long long
+                if -2147483648 <= val <= 2147483647:
+                    base = "int"
+                elif -9223372036854775808 <= val <= 9223372036854775807:
+                    base = "long"
+                else:
+                    base = "long long"
             is_unsigned = 'U' in s
+            # Hex/octal without U suffix: if value doesn't fit signed, try unsigned
+            if not is_unsigned and val > 2147483647 and base == "int":
+                is_unsigned = True
             return TypeSpec(base=base, is_unsigned=is_unsigned)
         if isinstance(expr, StringLiteral):
             return TypeSpec(base="char", pointer_depth=1)
@@ -2907,7 +2917,12 @@ class CodeGen:
                 else:
                     self.emit("    sarl %cl, %eax")
         elif expr.op in ("==", "!=", "<", ">", "<=", ">="):
-            self.emit("    cmpl %ecx, %eax")
+            is_ptr_cmp = ((left_type and left_type.is_pointer()) or
+                         (right_type and right_type.is_pointer()))
+            if is_ptr_cmp:
+                self.emit("    cmpq %rcx, %rax")
+            else:
+                self.emit("    cmpl %ecx, %eax")
             # Use unsigned comparison only when BOTH operands are unsigned int/long
             both_unsigned = (left_type and left_type.is_unsigned and left_type.size_bytes() >= 4 and
                             right_type and right_type.is_unsigned and right_type.size_bytes() >= 4)
