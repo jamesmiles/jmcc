@@ -2853,8 +2853,12 @@ class CodeGen:
                 self.emit("    cqo")
                 self.emit("    idivq %rcx")
         elif expr.op == "/":
-            self.emit("    cdq")
-            self.emit("    idivl %ecx")
+            if left_type and left_type.is_unsigned:
+                self.emit("    xorl %edx, %edx")
+                self.emit("    divl %ecx")
+            else:
+                self.emit("    cdq")
+                self.emit("    idivl %ecx")
         elif expr.op == "%" and is_64bit:
             if left_type and left_type.is_unsigned:
                 self.emit("    xorq %rdx, %rdx")
@@ -2864,8 +2868,12 @@ class CodeGen:
                 self.emit("    idivq %rcx")
             self.emit("    movq %rdx, %rax")
         elif expr.op == "%":
-            self.emit("    cdq")
-            self.emit("    idivl %ecx")
+            if left_type and left_type.is_unsigned:
+                self.emit("    xorl %edx, %edx")
+                self.emit("    divl %ecx")
+            else:
+                self.emit("    cdq")
+                self.emit("    idivl %ecx")
             self.emit("    movl %edx, %eax")
         elif expr.op == "&":
             if is_64bit:
@@ -2894,14 +2902,26 @@ class CodeGen:
                 else:
                     self.emit("    sarq %cl, %rax")
             else:
-                self.emit("    sarl %cl, %eax")
+                if left_type and left_type.is_unsigned:
+                    self.emit("    shrl %cl, %eax")
+                else:
+                    self.emit("    sarl %cl, %eax")
         elif expr.op in ("==", "!=", "<", ">", "<=", ">="):
             self.emit("    cmpl %ecx, %eax")
-            cond_map = {
-                "==": "sete", "!=": "setne",
-                "<": "setl", ">": "setg",
-                "<=": "setle", ">=": "setge",
-            }
+            # Use unsigned comparison only when BOTH operands are unsigned int/long
+            both_unsigned = (left_type and left_type.is_unsigned and left_type.size_bytes() >= 4 and
+                            right_type and right_type.is_unsigned and right_type.size_bytes() >= 4)
+            if both_unsigned and expr.op not in ("==", "!="):
+                cond_map = {
+                    "<": "setb", ">": "seta",
+                    "<=": "setbe", ">=": "setae",
+                }
+            else:
+                cond_map = {
+                    "==": "sete", "!=": "setne",
+                    "<": "setl", ">": "setg",
+                    "<=": "setle", ">=": "setge",
+                }
             self.emit(f"    {cond_map[expr.op]} %al")
             self.emit("    movzbl %al, %eax")
         else:
