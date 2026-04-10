@@ -1788,7 +1788,7 @@ class CodeGen:
         end_label = self.new_label("endif")
 
         self.gen_expr(stmt.condition)
-        self.emit("    cmpl $0, %eax")
+        self._emit_cond_test(stmt.condition)
 
         if stmt.else_body:
             self.emit(f"    je {else_label}")
@@ -1811,7 +1811,7 @@ class CodeGen:
 
         self.label(start_label)
         self.gen_expr(stmt.condition)
-        self.emit("    cmpl $0, %eax")
+        self._emit_cond_test(stmt.condition)
         self.emit(f"    je {end_label}")
         self.gen_stmt(stmt.body)
         self.emit(f"    jmp {start_label}")
@@ -1832,7 +1832,7 @@ class CodeGen:
         self.gen_stmt(stmt.body)
         self.label(cond_label)
         self.gen_expr(stmt.condition)
-        self.emit("    cmpl $0, %eax")
+        self._emit_cond_test(stmt.condition)
         self.emit(f"    jne {start_label}")
         self.label(end_label)
 
@@ -1853,7 +1853,7 @@ class CodeGen:
         self.label(cond_label)
         if stmt.condition:
             self.gen_expr(stmt.condition)
-            self.emit("    cmpl $0, %eax")
+            self._emit_cond_test(stmt.condition)
             self.emit(f"    je {end_label}")
 
         self.gen_stmt(stmt.body)
@@ -2743,10 +2743,10 @@ class CodeGen:
             false_label = self.new_label("and_false")
             end_label = self.new_label("and_end")
             self.gen_expr(expr.left)
-            self.emit("    cmpl $0, %eax")
+            self._emit_cond_test(expr.left)
             self.emit(f"    je {false_label}")
             self.gen_expr(expr.right)
-            self.emit("    cmpl $0, %eax")
+            self._emit_cond_test(expr.right)
             self.emit(f"    je {false_label}")
             self.emit("    movl $1, %eax")
             self.emit(f"    jmp {end_label}")
@@ -2759,10 +2759,10 @@ class CodeGen:
             true_label = self.new_label("or_true")
             end_label = self.new_label("or_end")
             self.gen_expr(expr.left)
-            self.emit("    cmpl $0, %eax")
+            self._emit_cond_test(expr.left)
             self.emit(f"    jne {true_label}")
             self.gen_expr(expr.right)
-            self.emit("    cmpl $0, %eax")
+            self._emit_cond_test(expr.right)
             self.emit(f"    jne {true_label}")
             self.emit("    xorl %eax, %eax")
             self.emit(f"    jmp {end_label}")
@@ -2945,7 +2945,7 @@ class CodeGen:
             self.emit("    notl %eax")
         elif expr.op == "!":
             self.gen_expr(expr.operand)
-            self.emit("    cmpl $0, %eax")
+            self._emit_cond_test(expr.operand)
             self.emit("    sete %al")
             self.emit("    movzbl %al, %eax")
         elif expr.op == "&":
@@ -3011,6 +3011,14 @@ class CodeGen:
                     self.emit("    movl %edx, %eax")
         else:
             self.error(f"unhandled unary operator '{expr.op}'", expr.line, expr.col)
+
+    def _emit_cond_test(self, expr):
+        """Emit a condition test — uses testq for pointers, cmpl for ints."""
+        et = self.get_expr_type(expr) if expr else None
+        if et and (et.is_pointer() or et.size_bytes() == 8):
+            self.emit("    testq %rax, %rax")
+        else:
+            self.emit("    cmpl $0, %eax")
 
     def _type_store_size(self, ts):
         """Return the store/load size in bytes for a type."""
@@ -3674,7 +3682,7 @@ class CodeGen:
         end_label = self.new_label("tern_e")
 
         self.gen_expr(expr.condition)
-        self.emit("    cmpl $0, %eax")
+        self._emit_cond_test(expr.condition)
         self.emit(f"    je {false_label}")
         self.gen_expr(expr.true_expr)
         self.emit(f"    jmp {end_label}")
