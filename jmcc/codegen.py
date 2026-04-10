@@ -2068,6 +2068,18 @@ class CodeGen:
                                     self.emit("    movswl %ax, %eax")
                                 if dst_size == 8 and not src_type.is_unsigned:
                                     self.emit("    movslq %eax, %rax")
+                        elif dst_size == src_size and dst_size < 4:
+                            # Same size but different signedness (e.g., char -> unsigned char)
+                            if dst_size == 1:
+                                if dst_type.is_unsigned:
+                                    self.emit("    movzbl %al, %eax")
+                                else:
+                                    self.emit("    movsbl %al, %eax")
+                            elif dst_size == 2:
+                                if dst_type.is_unsigned:
+                                    self.emit("    movzwl %ax, %eax")
+                                else:
+                                    self.emit("    movswl %ax, %eax")
                         elif dst_size < src_size:
                             # Narrowing cast — must sign/zero-extend the truncated value
                             # so it matches what a load of that size would produce
