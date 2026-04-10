@@ -2535,9 +2535,12 @@ class CodeGen:
                 return TypeSpec(base="double")
             # Shifts: result type is promoted type of LEFT operand only
             if expr.op in ("<<", ">>"):
-                if lt and lt.base in ("long long", "long"):
-                    return TypeSpec(base=lt.base, is_unsigned=lt.is_unsigned)
-                return None  # short/int promoted to int — let default handle it
+                if lt:
+                    # Integer promotions: unsigned short/char promote to signed int
+                    # Only unsigned int/long/long long stay unsigned
+                    promoted_unsigned = lt.is_unsigned and lt.size_bytes() >= 4
+                    return TypeSpec(base=lt.base if lt.base in ("long", "long long") else "int",
+                                   is_unsigned=promoted_unsigned)
             # Usual arithmetic conversions: long long > long > int
             if (lt and lt.base == "long long") or (rt and rt.base == "long long"):
                 return TypeSpec(base="long long")
@@ -2927,13 +2930,10 @@ class CodeGen:
                 self.emit("    cmpq %rcx, %rax")
             else:
                 self.emit("    cmpl %ecx, %eax")
-            # Use unsigned comparison when both operands are unsigned, or when
-            # the left operand is unsigned and right is a non-negative literal
-            both_unsigned = (left_type and left_type.is_unsigned and left_type.size_bytes() >= 4 and
-                            right_type and right_type.is_unsigned and right_type.size_bytes() >= 4)
-            left_unsigned_right_nonneg = (left_type and left_type.is_unsigned and left_type.size_bytes() >= 4 and
-                                         isinstance(expr.right, IntLiteral) and expr.right.value > 0)
-            if (both_unsigned or left_unsigned_right_nonneg) and expr.op not in ("==", "!="):
+            # Use unsigned comparison when either operand is unsigned int/long
+            either_unsigned = ((left_type and left_type.is_unsigned and left_type.size_bytes() >= 4) or
+                              (right_type and right_type.is_unsigned and right_type.size_bytes() >= 4))
+            if either_unsigned and expr.op not in ("==", "!="):
                 cond_map = {
                     "<": "setb", ">": "seta",
                     "<=": "setbe", ">=": "setae",
