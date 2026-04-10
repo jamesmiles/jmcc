@@ -2420,10 +2420,22 @@ class CodeGen:
             if arr_type and arr_type.is_array():
                 elem_size = arr_type.size_bytes()
 
+        # Determine signedness for 1/2-byte loads
+        is_unsigned = False
+        expr_type = self.get_expr_type(expr)
+        if expr_type:
+            is_unsigned = expr_type.is_unsigned
+
         if elem_size == 1:
-            self.emit("    movsbl (%rax), %eax")
+            if is_unsigned:
+                self.emit("    movzbl (%rax), %eax")
+            else:
+                self.emit("    movsbl (%rax), %eax")
         elif elem_size == 2:
-            self.emit("    movswl (%rax), %eax")
+            if is_unsigned:
+                self.emit("    movzwl (%rax), %eax")
+            else:
+                self.emit("    movswl (%rax), %eax")
         elif elem_size == 8:
             self.emit("    movq (%rax), %rax")
         else:
@@ -2496,7 +2508,8 @@ class CodeGen:
                                     is_unsigned=arr_type.is_unsigned)
                 elif arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
-                                    struct_def=arr_type.struct_def)
+                                    struct_def=arr_type.struct_def,
+                                    is_unsigned=arr_type.is_unsigned)
         if isinstance(expr, BinaryOp) and expr.op in (
                 "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"):
             lt = self.get_expr_type(expr.left)
