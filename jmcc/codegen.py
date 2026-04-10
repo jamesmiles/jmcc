@@ -159,7 +159,11 @@ class CodeGen:
                                       decl.init.op == "&" and
                                       isinstance(decl.init.operand, ArrayAccess) and
                                       isinstance(decl.init.operand.array, Identifier))
-                if is_addr_init or is_func_init or is_cast_addr or is_array_elem_addr:
+                # Global var init with another global (array decay to pointer)
+                is_global_ref = (decl.init and isinstance(decl.init, Identifier) and
+                                 decl.init.name in self.global_vars and
+                                 decl.init.name not in self.known_functions)
+                if is_addr_init or is_func_init or is_cast_addr or is_array_elem_addr or is_global_ref:
                     self.emit("    .data")
                     if not decl.type_spec.is_static:
                         self.emit(f"    .globl {name}")
