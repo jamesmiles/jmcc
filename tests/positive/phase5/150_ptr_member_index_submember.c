@@ -43,9 +43,8 @@ int main(void) {
 
     /* ptr->ptr_member[i].field */
     for (i = 0; i < cur->count; i++) {
-        if (cur->items[i].name[0]) {
-            printf("item %d: %s\n", i, cur->items[i].name);
-        }
+        if (!cur->items[i].name[0])
+            return 10 + i;
     }
 
     if (cur->items[0].name[0] != 'N') return 1;
