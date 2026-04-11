@@ -418,11 +418,14 @@ class CodeGen:
                                     val = val.operand
                                 if isinstance(val, InitList) and inner_count > 1:
                                     # Inner init list for multi-dim array
+                                    row_start = flat_idx
                                     for sub_item in val.items:
                                         cv = self._try_eval_const(sub_item.value)
                                         if cv is not None and flat_idx < total_flat:
                                             elems[flat_idx] = cv
                                         flat_idx += 1
+                                    # Advance to next row boundary (zero-fill partial rows)
+                                    flat_idx = row_start + inner_count
                                 else:
                                     cv = self._try_eval_const(val)
                                     if cv is not None and flat_idx < total_flat:
