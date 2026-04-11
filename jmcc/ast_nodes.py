@@ -14,15 +14,17 @@ class StructDef:
     is_union: bool = False
 
     def _member_total_size(self, ts):
-        """Get total size of a type including array dimensions."""
+        """Get total size of a type including all array dimensions."""
         size = ts.size_bytes()
-        if ts.is_array() and ts.array_sizes:
+        if ts.struct_def and not ts.is_pointer():
+            size = ts.struct_def.size_bytes()
+        if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
             from jmcc.ast_nodes import IntLiteral  # avoid circular at module level
-            first = ts.array_sizes[0]
-            if first is None:
-                return 0  # Flexible array member: size 0
-            if isinstance(first, IntLiteral):
-                size *= first.value
+            for dim in ts.array_sizes:
+                if dim is None:
+                    return 0  # Flexible array member: size 0
+                if isinstance(dim, IntLiteral):
+                    size *= dim.value
         return size
 
     def _member_align(self, ts):
