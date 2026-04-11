@@ -2066,7 +2066,10 @@ class CodeGen:
                         self.emit("    cvttsd2si %xmm0, %rax")
                     elif not src_is_float and dst_is_float:
                         # int -> float/double
-                        self.emit("    cvtsi2sd %rax, %xmm0")
+                        if src_size <= 4:
+                            self.emit("    cvtsi2sd %eax, %xmm0")  # 32-bit signed int
+                        else:
+                            self.emit("    cvtsi2sd %rax, %xmm0")  # 64-bit long
                         self.emit("    movq %xmm0, %rax")
                     elif not src_is_float and not dst_is_float:
                         # int -> int: handle widening/narrowing
