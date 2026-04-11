@@ -2584,9 +2584,16 @@ class CodeGen:
                                    is_unsigned=promoted_unsigned)
             # Usual arithmetic conversions: long long > long > int
             if (lt and lt.base == "long long") or (rt and rt.base == "long long"):
-                return TypeSpec(base="long long")
+                is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
+                return TypeSpec(base="long long", is_unsigned=is_uns)
             if (lt and lt.base == "long") or (rt and rt.base == "long"):
-                return TypeSpec(base="long")
+                is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
+                return TypeSpec(base="long", is_unsigned=is_uns)
+            # Both int: propagate unsigned only when either is unsigned int
+            if lt and rt and not lt.is_pointer() and not rt.is_pointer():
+                is_uns = (lt.is_unsigned and lt.size_bytes() >= 4) or \
+                         (rt.is_unsigned and rt.size_bytes() >= 4)
+                return TypeSpec(base="int", is_unsigned=is_uns)
         if isinstance(expr, FuncCall):
             if isinstance(expr.name, Identifier) and expr.name.name in self.func_return_types:
                 return self.func_return_types[expr.name.name]
