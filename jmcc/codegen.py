@@ -664,6 +664,29 @@ class CodeGen:
             elif isinstance(unwrapped, Identifier) and unwrapped.name in self.global_vars:
                 # Global variable reference (array decaying to pointer)
                 relocs.append((mem_offset, unwrapped.name))
+            elif (isinstance(unwrapped, ArrayAccess) and
+                  isinstance(unwrapped.array, Identifier) and
+                  unwrapped.array.name in self.global_vars):
+                # array[index] — row of 2D array decaying to pointer
+                arr_name = unwrapped.array.name
+                idx_val = self._try_eval_const(unwrapped.index)
+                if idx_val is not None:
+                    gdecl = self.global_vars[arr_name]
+                    gts = gdecl.type_spec
+                    # Row size = element_size * inner_dimension
+                    row_size = gts.size_bytes()
+                    if gts.struct_def:
+                        row_size = gts.struct_def.size_bytes()
+                    if gts.array_sizes and len(gts.array_sizes) > 1:
+                        for dim in gts.array_sizes[1:]:
+                            dv = self._dim_value(dim)
+                            if dv is not None:
+                                row_size *= dv
+                    offset = idx_val * row_size
+                    if offset == 0:
+                        relocs.append((mem_offset, arr_name))
+                    else:
+                        relocs.append((mem_offset, f"{arr_name}+{offset}"))
 
         def fill_array(arr_offset, arr_ts, init, elem_size, arr_count):
             """Fill array from init list items."""
@@ -2523,10 +2546,16 @@ class CodeGen:
         if elem_size == 4 and not isinstance(expr.array, (Identifier, ArrayAccess)):
             arr_type = self.get_expr_type(expr.array)
             if arr_type:
-                if arr_type.is_pointer() and arr_type.pointer_depth >= 2:
-                    elem_size = 8  # pointer to pointer: element is pointer
-                elif arr_type.is_pointer() and arr_type.size_bytes() == 8:
-                    elem_size = 8
+                if arr_type.is_ptr_array:
+                    elem_size = 8  # pointer array: element is pointer
+                elif arr_type.is_pointer() and arr_type.pointer_depth >= 2:
+                    elem_size = 8  # double pointer: element is pointer
+                elif arr_type.is_pointer():
+                    # Single pointer: element is the pointed-to type
+                    pointed = TypeSpec(base=arr_type.base, pointer_depth=0,
+                                       struct_def=arr_type.struct_def,
+                                       is_unsigned=arr_type.is_unsigned)
+                    elem_size = pointed.size_bytes()
                 elif arr_type.is_array():
                     elem_size = arr_type.size_bytes()
 
