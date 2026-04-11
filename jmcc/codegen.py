@@ -2468,9 +2468,13 @@ class CodeGen:
             if arr_type and arr_type.is_array():
                 elem_size = arr_type.size_bytes()
 
+        # Check if result is an array (sub-array of multi-dim) — return address, don't load
+        expr_type = self.get_expr_type(expr)
+        if expr_type and (expr_type.is_array() or (expr_type.array_sizes and len(expr_type.array_sizes) > 0)):
+            return  # address already in %rax — array decay
+
         # Determine signedness for 1/2-byte loads
         is_unsigned = False
-        expr_type = self.get_expr_type(expr)
         if expr_type:
             is_unsigned = expr_type.is_unsigned
 
