@@ -2343,7 +2343,11 @@ class CodeGen:
                 # Pointer-to-array: inner element is the base type
                 elem_size = TypeSpec(base=ts.base).size_bytes()
             elif ts:
-                elem_size = ts.size_bytes()  # base element size
+                # For double pointers (e.g., short**), inner access uses base type size
+                if ts.is_pointer() and ts.pointer_depth > 1 and depth >= ts.pointer_depth:
+                    elem_size = TypeSpec(base=ts.base, is_unsigned=ts.is_unsigned).size_bytes()
+                else:
+                    elem_size = ts.size_bytes()
         elif isinstance(expr.array, Identifier):
             _, ts = self.get_var_location(expr.array.name)
             if ts:
