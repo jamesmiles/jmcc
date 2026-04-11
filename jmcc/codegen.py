@@ -3188,6 +3188,20 @@ class CodeGen:
             target_is_float = target_type and target_type.base in ("float", "double", "long double") and not target_type.is_pointer()
             value_is_float = (value_type and value_type.base in ("float", "double", "long double") and not value_type.is_pointer()) or isinstance(expr.value, FloatLiteral)
 
+            # Struct assignment: copy all bytes
+            if target_type and self._is_struct_by_value(target_type):
+                struct_size = target_type.struct_def.size_bytes()
+                # Get source address (value is a struct, gen_expr puts address in rax)
+                self.gen_lvalue_addr(expr.value)
+                self.emit("    pushq %rax")     # source address
+                self.gen_lvalue_addr(expr.target)
+                self.emit("    movq %rax, %rdi") # dest
+                self.emit("    popq %rsi")       # source
+                # Copy using rep movsb
+                self.emit(f"    movl ${struct_size}, %ecx")
+                self.emit("    rep movsb")
+                return
+
             self.gen_expr(expr.value)
 
             # Int-to-float or float-to-int conversion
