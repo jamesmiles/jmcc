@@ -995,6 +995,11 @@ class CodeGen:
             if expr.is_type:
                 ts = expr.operand
                 size = ts.size_bytes()
+                if (ts.base.startswith("struct ") or ts.base.startswith("union ")) and \
+                   not ts.struct_def and not ts.is_pointer():
+                    import sys
+                    print(f"warning: sizeof applied to unknown type '{ts.base}' "
+                          f"(defaulting to {size})", file=sys.stderr)
                 if (ts.is_array() or (ts.is_ptr_array)) and ts.array_sizes:
                     first = ts.array_sizes[0]
                     if isinstance(first, IntLiteral):
@@ -2128,6 +2133,16 @@ class CodeGen:
                 size = ts.size_bytes()
                 if ts.struct_def and not ts.is_pointer():
                     size = ts.struct_def.size_bytes()
+                # Warn if sizeof on incomplete or unknown struct/union type
+                if not ts.is_pointer():
+                    if (ts.base.startswith("struct ") or ts.base.startswith("union ")) and not ts.struct_def:
+                        import sys
+                        print(f"warning: sizeof applied to unknown type '{ts.base}' "
+                              f"(defaulting to {size})", file=sys.stderr)
+                    elif ts.struct_def and not ts.struct_def.members:
+                        import sys
+                        print(f"warning: sizeof applied to incomplete type '{ts.base}' "
+                              f"(no members defined, size is 0)", file=sys.stderr)
                 if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
                     for dim in ts.array_sizes:
                         dv = self._dim_value(dim)
