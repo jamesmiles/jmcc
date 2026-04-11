@@ -1,6 +1,8 @@
 #ifndef __TEST_ZONE__
 #define __TEST_ZONE__
 
+#include <stdio.h>
+
 #define TAG_STATIC 1
 #define TAG_CACHE  101
 
@@ -10,12 +12,12 @@ void  TZ_ChangeTag2(void *ptr, int tag);
 
 typedef struct tblock_s
 {
-    int              size;
-    void**           user;
-    int              tag;
-    int              id;
-    struct tblock_s* next;
-    struct tblock_s* prev;
+    int			size;	// including the header
+    void**		user;	// NULL if a free block
+    int			tag;	// purgelevel
+    int			id;	// should be ZONEID
+    struct tblock_s*	next;
+    struct tblock_s*	prev;
 } tblock_t;
 
 #define TZ_ChangeTag(p,t) \
