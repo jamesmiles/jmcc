@@ -33,8 +33,8 @@ int main(void) {
     angle_t c = 0xF0000000u;
     int shift = 19;
     c >>= shift;
-    /* 0xF0000000 >> 19 = 0x7800 = 30720 */
-    if (c != 30720) return 3;
+    /* 0xF0000000 >> 19 = 0x1E00 = 7680 */
+    if (c != 7680) return 3;
 
     printf("ok\n");
     return 0;
