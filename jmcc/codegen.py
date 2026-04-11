@@ -2908,10 +2908,12 @@ class CodeGen:
             self.emit("    movl %eax, %ecx")   # right operand in ecx (32-bit for ints)
             self.emit("    popq %rax")          # left operand in eax
 
-        if expr.op == "+" and left_type and left_type.is_pointer():
-            # pointer + int: scale int by element size, result in rax
-            elem_size = TypeSpec(base=left_type.base, pointer_depth=left_type.pointer_depth - 1,
+        if expr.op == "+" and left_type and (left_type.is_pointer() or left_type.is_array()):
+            # pointer/array + int: scale int by element size, result in rax
+            elem_size = TypeSpec(base=left_type.base, pointer_depth=max(left_type.pointer_depth - 1, 0),
                                   struct_def=left_type.struct_def).size_bytes()
+            if left_type.is_array() and left_type.struct_def:
+                elem_size = left_type.struct_def.size_bytes()
             if elem_size > 1:
                 self.emit(f"    imulq ${elem_size}, %rcx")
             self.emit("    addq %rcx, %rax")
