@@ -661,6 +661,9 @@ class CodeGen:
                     relocs.append((mem_offset, f"{arr_name}+{idx_val * elem_size}"))
             elif isinstance(unwrapped, Identifier) and unwrapped.name in self.known_functions:
                 relocs.append((mem_offset, unwrapped.name))
+            elif isinstance(unwrapped, Identifier) and unwrapped.name in self.global_vars:
+                # Global variable reference (array decaying to pointer)
+                relocs.append((mem_offset, unwrapped.name))
 
         def fill_array(arr_offset, arr_ts, init, elem_size, arr_count):
             """Fill array from init list items."""
