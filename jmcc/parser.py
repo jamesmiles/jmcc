@@ -291,6 +291,8 @@ class Parser:
                             arr_sizes.append(self.parse_expr())
                         self.expect(TokenType.RBRACKET, "']'")
                     mem_type.array_sizes = arr_sizes
+                    if mem_type.pointer_depth > 0:
+                        mem_type.is_ptr_array = True
 
                 # Bit-field width: int x : 8;
                 if self.match(TokenType.COLON):

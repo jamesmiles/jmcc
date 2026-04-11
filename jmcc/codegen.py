@@ -2305,6 +2305,16 @@ class CodeGen:
             inner_type = self.get_expr_type(expr.array)
             if inner_type and inner_type.is_pointer() and not inner_type.is_array() and not inner_type.is_ptr_array:
                 self.emit("    movq (%rax), %rax")  # dereference pointer
+        elif isinstance(expr.array, MemberAccess):
+            # Member access as array base: check if it's an array member
+            arr_type = self.get_expr_type(expr.array)
+            if arr_type and (arr_type.is_array() or arr_type.is_ptr_array or
+                            (arr_type.is_pointer() and arr_type.array_sizes)):
+                # Array member: use address, not value
+                self.gen_member_addr(expr.array)
+            else:
+                # Pointer member: load the pointer value
+                self.gen_expr(expr.array)
         else:
             self.gen_expr(expr.array)
 
@@ -2419,6 +2429,10 @@ class CodeGen:
                     for dim in arr_type.array_sizes[1:]:
                         if isinstance(dim, IntLiteral):
                             elem_size *= dim.value
+            elif arr_type and arr_type.is_ptr_array:
+                elem_size = 8  # pointer array: element is a pointer
+            elif arr_type and arr_type.is_pointer() and arr_type.pointer_depth >= 2:
+                elem_size = 8  # double pointer: element is pointer
             elif arr_type and arr_type.is_pointer():
                 pointed = TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
                                    struct_def=arr_type.struct_def)
@@ -2608,6 +2622,11 @@ class CodeGen:
                                     is_ptr_array=True)
                 elif arr_type.is_ptr_array:
                     # Single-dim pointer array: element is pointer type
+                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
+                                    struct_def=arr_type.struct_def,
+                                    is_unsigned=arr_type.is_unsigned)
+                elif arr_type.is_ptr_array:
+                    # Pointer array: element is the pointer type
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
                                     is_unsigned=arr_type.is_unsigned)
@@ -3156,6 +3175,19 @@ class CodeGen:
         else:
             self.emit("    cmpl $0, %eax")
 
+    def _target_is_ptr_array_element(self, expr):
+        """Check if expr is indexing into a pointer array member (e.g., a->p[0] where p is T*[N])."""
+        if not isinstance(expr, ArrayAccess):
+            return False
+        arr = expr.array
+        arr_type = self.get_expr_type(arr)
+        # Check if the array expression is a pointer type with array dimensions
+        if arr_type and arr_type.is_pointer() and arr_type.pointer_depth >= 1 and arr_type.array_sizes:
+            return True
+        if arr_type and arr_type.is_ptr_array:
+            return True
+        return False
+
     def _type_store_size(self, ts):
         """Return the store/load size in bytes for a type."""
         if not ts:
@@ -3203,8 +3235,16 @@ class CodeGen:
             target_is_float = target_type and target_type.base in ("float", "double", "long double") and not target_type.is_pointer()
             value_is_float = (value_type and value_type.base in ("float", "double", "long double") and not value_type.is_pointer()) or isinstance(expr.value, FloatLiteral)
 
-            # Struct assignment: copy all bytes
-            if target_type and self._is_struct_by_value(target_type):
+            # Struct assignment: copy all bytes (but NOT for pointers or pointer arrays)
+            # Also skip when the target is an array access into a pointer-with-array member
+            # (e.g., a->p[0] where p is patch_t*[3] — element is a pointer, not struct)
+            target_is_ptr_element = (isinstance(expr.target, ArrayAccess) and
+                                     target_type and target_type.struct_def and
+                                     target_type.pointer_depth == 0 and
+                                     self._target_is_ptr_array_element(expr.target))
+            if target_type and self._is_struct_by_value(target_type) and \
+               not target_type.is_pointer() and not target_type.is_ptr_array and \
+               not target_is_ptr_element:
                 struct_size = target_type.struct_def.size_bytes()
                 # Get source address (value is a struct, gen_expr puts address in rax)
                 self.gen_lvalue_addr(expr.value)
@@ -3234,7 +3274,9 @@ class CodeGen:
 
             # Determine store size
             store_size = 4
-            if target_type:
+            if target_is_ptr_element:
+                store_size = 8  # pointer array element
+            elif target_type:
                 if target_is_float or target_type.is_pointer() or target_type.size_bytes() == 8:
                     store_size = 8
                 elif target_type.size_bytes() == 2:
