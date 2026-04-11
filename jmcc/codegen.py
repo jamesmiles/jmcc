@@ -3399,15 +3399,26 @@ class CodeGen:
                 elif op == "<<":
                     self.emit("    shlq %cl, %rax")
                 elif op == ">>":
-                    self.emit("    sarq %cl, %rax")
+                    if target_type and target_type.is_unsigned:
+                        self.emit("    shrq %cl, %rax")
+                    else:
+                        self.emit("    sarq %cl, %rax")
                 elif op == "*":
                     self.emit("    imulq %rcx, %rax")
                 elif op == "/":
-                    self.emit("    cqo")
-                    self.emit("    idivq %rcx")
+                    if target_type and target_type.is_unsigned:
+                        self.emit("    xorq %rdx, %rdx")
+                        self.emit("    divq %rcx")
+                    else:
+                        self.emit("    cqo")
+                        self.emit("    idivq %rcx")
                 elif op == "%":
-                    self.emit("    cqo")
-                    self.emit("    idivq %rcx")
+                    if target_type and target_type.is_unsigned:
+                        self.emit("    xorq %rdx, %rdx")
+                        self.emit("    divq %rcx")
+                    else:
+                        self.emit("    cqo")
+                        self.emit("    idivq %rcx")
                     self.emit("    movq %rdx, %rax")
             elif op == "+":
                 self.emit("    addl %ecx, %eax")
@@ -3416,11 +3427,19 @@ class CodeGen:
             elif op == "*":
                 self.emit("    imull %ecx, %eax")
             elif op == "/":
-                self.emit("    cdq")
-                self.emit("    idivl %ecx")
+                if target_type and target_type.is_unsigned:
+                    self.emit("    xorl %edx, %edx")
+                    self.emit("    divl %ecx")
+                else:
+                    self.emit("    cdq")
+                    self.emit("    idivl %ecx")
             elif op == "%":
-                self.emit("    cdq")
-                self.emit("    idivl %ecx")
+                if target_type and target_type.is_unsigned:
+                    self.emit("    xorl %edx, %edx")
+                    self.emit("    divl %ecx")
+                else:
+                    self.emit("    cdq")
+                    self.emit("    idivl %ecx")
                 self.emit("    movl %edx, %eax")
             elif op == "&":
                 self.emit("    andl %ecx, %eax")
@@ -3431,7 +3450,10 @@ class CodeGen:
             elif op == "<<":
                 self.emit("    shll %cl, %eax")
             elif op == ">>":
-                self.emit("    sarl %cl, %eax")
+                if target_type and target_type.is_unsigned:
+                    self.emit("    shrl %cl, %eax")
+                else:
+                    self.emit("    sarl %cl, %eax")
 
             self.emit("    popq %rcx")
             self._emit_store("%rcx", store_size)
