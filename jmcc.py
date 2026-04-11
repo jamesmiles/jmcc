@@ -22,7 +22,12 @@ def compile_file(source_path: str, output_path: str, defines: list = None) -> bo
 
     try:
         # Preprocessing
-        include_paths = [os.path.dirname(os.path.abspath(source_path))]
+        source_dir = os.path.dirname(os.path.abspath(source_path))
+        include_paths = [source_dir]
+        # Also search helpers/ subdirectory if it exists
+        helpers_dir = os.path.join(source_dir, "helpers")
+        if os.path.isdir(helpers_dir):
+            include_paths.append(helpers_dir)
         pp = Preprocessor(filename=source_path, include_paths=include_paths)
         # Apply -D defines
         for d in (defines or []):
