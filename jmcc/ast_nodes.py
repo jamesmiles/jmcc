@@ -13,18 +13,40 @@ class StructDef:
     members: List['StructMember'] = field(default_factory=list)
     is_union: bool = False
 
+    @staticmethod
+    def _eval_dim(dim):
+        """Evaluate an array dimension expression to an integer."""
+        if dim is None:
+            return None
+        if isinstance(dim, IntLiteral):
+            return dim.value
+        if isinstance(dim, BinaryOp):
+            left = StructDef._eval_dim(dim.left)
+            right = StructDef._eval_dim(dim.right)
+            if left is not None and right is not None:
+                ops = {'+': lambda a, b: a + b, '-': lambda a, b: a - b,
+                       '*': lambda a, b: a * b, '/': lambda a, b: a // b if b else 0,
+                       '%': lambda a, b: a % b if b else 0,
+                       '<<': lambda a, b: a << b, '>>': lambda a, b: a >> b}
+                if dim.op in ops:
+                    return ops[dim.op](left, right)
+        if isinstance(dim, UnaryOp) and dim.op == '-':
+            val = StructDef._eval_dim(dim.operand)
+            return -val if val is not None else None
+        return None
+
     def _member_total_size(self, ts):
         """Get total size of a type including all array dimensions."""
         size = ts.size_bytes()
         if ts.struct_def and not ts.is_pointer():
             size = ts.struct_def.size_bytes()
         if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
-            from jmcc.ast_nodes import IntLiteral  # avoid circular at module level
             for dim in ts.array_sizes:
                 if dim is None:
                     return 0  # Flexible array member: size 0
-                if isinstance(dim, IntLiteral):
-                    size *= dim.value
+                dv = self._eval_dim(dim)
+                if dv is not None:
+                    size *= dv
         return size
 
     def _member_align(self, ts):
