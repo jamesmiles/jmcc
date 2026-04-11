@@ -285,7 +285,7 @@ class CodeGen:
                     self.emit(f"    .align 8")
                     self.label(name)
                     sdef = decl.type_spec.struct_def
-                    if sdef and not decl.type_spec.is_array():
+                    if sdef and not decl.type_spec.is_array() and not decl.type_spec.is_ptr_array:
                         # Single struct init
                         self._emit_struct_init_data(sdef, actual_init)
                     elif decl.type_spec.is_array() and sdef:
@@ -370,9 +370,27 @@ class CodeGen:
                                 for j in range(idx, end_idx + 1):
                                     if j < total_elems:
                                         val = self._unwrap_compound_literal(item.value)
+                                        # Unwrap casts
+                                        while isinstance(val, CastExpr):
+                                            val = val.operand
                                         # Check if it's an address or function ref
                                         if isinstance(val, UnaryOp) and val.op == "&" and isinstance(val.operand, Identifier):
                                             elems[j] = val.operand.name
+                                        elif (isinstance(val, UnaryOp) and val.op == "&" and
+                                              isinstance(val.operand, ArrayAccess) and
+                                              isinstance(val.operand.array, Identifier)):
+                                            arr_name = val.operand.array.name
+                                            idx_val = self._try_eval_const(val.operand.index)
+                                            if idx_val is not None and idx_val == 0:
+                                                elems[j] = arr_name
+                                            elif idx_val is not None:
+                                                elem_sz = 4
+                                                if arr_name in self.global_vars:
+                                                    gts = self.global_vars[arr_name].type_spec
+                                                    elem_sz = gts.size_bytes()
+                                                    if gts.struct_def:
+                                                        elem_sz = gts.struct_def.size_bytes()
+                                                elems[j] = f"{arr_name}+{idx_val * elem_sz}"
                                         elif isinstance(val, Identifier) and val.name in self.known_functions:
                                             elems[j] = val.name
                                         elif isinstance(val, InitList) and val.items:
@@ -2462,11 +2480,16 @@ class CodeGen:
                     else:
                         elem_size = 4
 
-        # Fallback: use get_expr_type for load size
+        # Fallback: use get_expr_type for proper element size
         if elem_size == 4 and not isinstance(expr.array, (Identifier, ArrayAccess)):
             arr_type = self.get_expr_type(expr.array)
-            if arr_type and arr_type.is_array():
-                elem_size = arr_type.size_bytes()
+            if arr_type:
+                if arr_type.is_pointer() and arr_type.pointer_depth >= 2:
+                    elem_size = 8  # pointer to pointer: element is pointer
+                elif arr_type.is_pointer() and arr_type.size_bytes() == 8:
+                    elem_size = 8
+                elif arr_type.is_array():
+                    elem_size = arr_type.size_bytes()
 
         # Check if result is an array (sub-array of multi-dim) — return address, don't load
         expr_type = self.get_expr_type(expr)
