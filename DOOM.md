@@ -124,3 +124,5 @@ Doom needs a WAD file. The shareware `doom1.wad` works:
 | 33 | 159 | va_copy crashes (undefined variable in codegen) | — |
 | 34 | 160 | 2D char array with string literal init emits zeros | Menu skull cursor "not found" crash |
 | 35 | 162 | Switch/case with negative values skipped | Secret platforms and floor-lowering don't work |
+| 36 | 163 | Static pointer array init with data symbol addresses emits zeros | Intermission screen crash (WI_loadData) |
+| 37 | 164 | sizeof(array) in call args breaks array-to-pointer decay | Automap crash (Tab key) |
