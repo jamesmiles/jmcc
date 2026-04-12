@@ -434,7 +434,18 @@ class CodeGen:
                                 # Unwrap CastExpr
                                 while isinstance(val, CastExpr):
                                     val = val.operand
-                                if isinstance(val, InitList) and inner_count > 1:
+                                if isinstance(val, StringLiteral) and inner_count > 1:
+                                    # String literal for char row in 2D char array
+                                    row_start = flat_idx
+                                    for ch in val.value:
+                                        if flat_idx < total_flat:
+                                            elems[flat_idx] = ord(ch)
+                                        flat_idx += 1
+                                    # Null terminator
+                                    if flat_idx < total_flat:
+                                        elems[flat_idx] = 0
+                                    flat_idx = row_start + inner_count
+                                elif isinstance(val, InitList) and inner_count > 1:
                                     # Inner init list for multi-dim array
                                     row_start = flat_idx
                                     for sub_item in val.items:
@@ -3860,11 +3871,6 @@ class CodeGen:
         self.emit("    movq %rcx, 8(%rdi)")
         self.emit("    movq 16(%rsi), %rcx")
         self.emit("    movq %rcx, 16(%rdi)")
-
-        # Store new state pointer into dest
-        self.gen_lvalue_addr(expr.args[0])
-        self.emit(f"    leaq {new_state_off}(%rbp), %rcx")
-        self.emit(f"    movq %rcx, (%rax)")
 
     def _gen_builtin_va_arg(self, expr):
         """Generate code for __builtin_va_arg(ap, type).
