@@ -703,10 +703,12 @@ int inet_aton(const char *cp, struct in_addr *inp);
 
         return ""
 
-    def _expand_macros(self, line: str, depth=0) -> str:
+    def _expand_macros(self, line: str, depth=0, expanding=None) -> str:
         """Expand macros in a line of text."""
         if not self.macros or depth > 20:
             return line
+        if expanding is None:
+            expanding = set()
 
         # Don't expand inside string literals or comments
         result = []
@@ -768,7 +770,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
                     result.append(f'"{getattr(self, "_current_file", "<unknown>")}"')
                     i = j
                     continue
-                elif word in self.macros:
+                elif word in self.macros and word not in expanding:
                     macro = self.macros[word]
                     if macro.is_func:
                         # Function-like macro — look for (args)
@@ -782,7 +784,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
                             if '##' not in macro.body:
                                 args = [self._expand_macros(a) for a in args]
                             expanded = macro.expand(args, raw_args=raw_args)
-                            expanded = self._expand_macros(expanded)  # recursive
+                            expanded = self._expand_macros(expanded, expanding=expanding | {word})
                             result.append(expanded)
                             i = end
                             continue
@@ -792,7 +794,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
                         continue
                     else:
                         expanded = macro.body
-                        expanded = self._expand_macros(expanded)
+                        expanded = self._expand_macros(expanded, expanding=expanding | {word})
                         result.append(expanded)
                         i = j
                         continue
