@@ -1065,6 +1065,7 @@ class CodeGen:
         self.locals = {}
         self.params = {}
         self.static_locals = {}
+        self.vla_sizes = {}  # VLA name -> stack offset of saved size
         self.stack_offset = 0
         if hasattr(self, '_va_area_offset'):
             del self._va_area_offset
@@ -1279,7 +1280,10 @@ class CodeGen:
                     self.emit("    movq %rdi, %rax")
             else:
                 self.gen_expr(stmt.value)
-                # Result is in %rax/%eax already
+                # Result is in %rax/%eax — move to xmm0 if returning float/double
+                if ret_type and ret_type.base in ("float", "double") and not ret_type.is_pointer():
+                    if not (ret_type.struct_def and ret_type.pointer_depth == 0):
+                        self.emit("    movq %rax, %xmm0")
         self.emit("    leave")
         self.emit("    ret")
 
@@ -1333,6 +1337,12 @@ class CodeGen:
                 elem_size = size
                 if elem_size != 1:
                     self.emit(f"    imull ${elem_size}, %eax")
+                # Save unaligned total size for sizeof
+                self.emit("    movslq %eax, %rax")
+                self.stack_offset -= 8
+                vla_size_off = self.stack_offset
+                self.emit(f"    movq %rax, {vla_size_off}(%rbp)")
+                self.vla_sizes[decl.name] = vla_size_off
                 # Align to 16
                 self.emit("    addl $15, %eax")
                 self.emit("    andl $-16, %eax")
@@ -1341,7 +1351,7 @@ class CodeGen:
                 # Store the pointer (rsp is now the base of the VLA)
                 self.stack_offset -= 8
                 self.locals[decl.name] = (self.stack_offset, TypeSpec(
-                    base=decl.type_spec.base, pointer_depth=1))
+                    base=decl.type_spec.base, pointer_depth=decl.type_spec.pointer_depth + 1))
                 self.emit(f"    movq %rsp, {self.stack_offset}(%rbp)")
                 return
             # Align to 8
@@ -1883,10 +1893,19 @@ class CodeGen:
                     end_idx = idx
                     if item.designator_end is not None:
                         end_idx = item.designator_end
+                    is_float_arr = type_spec.base in ("float", "double") and not type_spec.is_pointer()
                     for j in range(idx, end_idx + 1):
                         self.gen_expr(val)
                         offset = base_offset + j * elem_size
-                        if elem_size == 1:
+                        if is_float_arr and isinstance(val, (IntLiteral, UnaryOp)):
+                            # Convert integer to float/double for float array init
+                            self.emit("    cvtsi2sd %eax, %xmm0")
+                            if type_spec.base == "float":
+                                self.emit("    cvtsd2ss %xmm0, %xmm0")
+                                self.emit(f"    movss %xmm0, {offset}(%rbp)")
+                            else:
+                                self.emit(f"    movsd %xmm0, {offset}(%rbp)")
+                        elif elem_size == 1:
                             self.emit(f"    movb %al, {offset}(%rbp)")
                         elif elem_size == 8:
                             self.emit(f"    movq %rax, {offset}(%rbp)")
@@ -2225,6 +2244,11 @@ class CodeGen:
                         if dv is not None:
                             size *= dv
             else:
+                # sizeof on an expression — check for VLA first
+                if isinstance(expr.operand, Identifier) and expr.operand.name in self.vla_sizes:
+                    off = self.vla_sizes[expr.operand.name]
+                    self.emit(f"    movq {off}(%rbp), %rax")
+                    return
                 # sizeof on an expression — infer type
                 et = self.get_expr_type(expr.operand)
                 if et:
@@ -2731,11 +2755,15 @@ class CodeGen:
                 "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"):
             lt = self.get_expr_type(expr.left)
             rt = self.get_expr_type(expr.right)
-            if lt and lt.is_pointer():
-                return lt
+            if lt and (lt.is_pointer() or lt.is_array()):
+                return TypeSpec(base=lt.base, pointer_depth=lt.pointer_depth + (1 if lt.is_array() else 0),
+                                struct_def=lt.struct_def, is_unsigned=lt.is_unsigned)
+            if rt and (rt.is_pointer() or rt.is_array()) and expr.op in ("+", "-"):
+                return TypeSpec(base=rt.base, pointer_depth=rt.pointer_depth + (1 if rt.is_array() else 0),
+                                struct_def=rt.struct_def, is_unsigned=rt.is_unsigned)
             # Float arithmetic returns float
-            if (lt and lt.base in ("float", "double", "long double")) or \
-               (rt and rt.base in ("float", "double", "long double")) or \
+            if (lt and lt.base in ("float", "double", "long double") and not lt.is_array()) or \
+               (rt and rt.base in ("float", "double", "long double") and not rt.is_array()) or \
                isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral):
                 return TypeSpec(base="double")
             # Shifts: result type is promoted type of LEFT operand only
@@ -2905,12 +2933,12 @@ class CodeGen:
     def _is_float_type(self, expr):
         """Check if expression has float/double type."""
         et = self.get_expr_type(expr)
-        return et and et.base in ("float", "double", "long double") and not et.is_pointer()
+        return et and et.base in ("float", "double", "long double") and not et.is_pointer() and not et.is_array()
 
     def _gen_float_operands(self, expr):
         """Load binary op operands into xmm0 (left) and xmm1 (right)."""
         lt = self.get_expr_type(expr.left)
-        if lt and lt.base in ("float", "double", "long double"):
+        if lt and lt.base in ("float", "double", "long double") and not lt.is_pointer() and not lt.is_array():
             self.gen_expr(expr.left)
             self.emit("    movq %rax, %xmm0")
         elif isinstance(expr.left, FloatLiteral):
@@ -2923,7 +2951,7 @@ class CodeGen:
         self.emit("    movsd %xmm0, (%rsp)")  # save left
 
         rt = self.get_expr_type(expr.right)
-        if rt and rt.base in ("float", "double", "long double"):
+        if rt and rt.base in ("float", "double", "long double") and not rt.is_pointer() and not rt.is_array():
             self.gen_expr(expr.right)
             self.emit("    movq %rax, %xmm1")
         elif isinstance(expr.right, FloatLiteral):
@@ -3216,7 +3244,7 @@ class CodeGen:
                     self.emit("    movzwl (%rax), %eax")
                 else:
                     self.emit("    movswl (%rax), %eax")
-            elif inner_type and inner_type.pointer_depth == 1 and (inner_type.base in ("long", "long long") or inner_type.struct_def):
+            elif inner_type and inner_type.pointer_depth == 1 and (inner_type.base in ("long", "long long", "double") or inner_type.struct_def):
                 self.emit("    movq (%rax), %rax")
             else:
                 self.emit("    movl (%rax), %eax")
@@ -3325,8 +3353,8 @@ class CodeGen:
         if expr.op == "=":
             target_type = self.get_expr_type(expr.target)
             value_type = self.get_expr_type(expr.value)
-            target_is_float = target_type and target_type.base in ("float", "double", "long double") and not target_type.is_pointer()
-            value_is_float = (value_type and value_type.base in ("float", "double", "long double") and not value_type.is_pointer()) or isinstance(expr.value, FloatLiteral)
+            target_is_float = target_type and target_type.base in ("float", "double", "long double") and not target_type.is_pointer() and not target_type.is_array()
+            value_is_float = (value_type and value_type.base in ("float", "double", "long double") and not value_type.is_pointer() and not value_type.is_array()) or isinstance(expr.value, FloatLiteral)
 
             # Struct assignment: copy all bytes (but NOT for pointers or pointer arrays)
             # Also skip when the target is an array access into a pointer-with-array member

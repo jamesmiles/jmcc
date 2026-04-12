@@ -183,7 +183,7 @@ class Parser:
         elif len(base_parts) == 1:
             base = base_parts[0]
             if base == "_Bool":
-                base = "int"
+                base = "char"
         else:
             if "long" in base_parts:
                 base = "long"
