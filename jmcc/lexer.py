@@ -144,6 +144,8 @@ KEYWORDS = {
     "long": TokenType.LONG,
     "register": TokenType.REGISTER,
     "restrict": TokenType.RESTRICT,
+    "__restrict": TokenType.RESTRICT,
+    "__restrict__": TokenType.RESTRICT,
     "return": TokenType.RETURN,
     "short": TokenType.SHORT,
     "signed": TokenType.SIGNED,
