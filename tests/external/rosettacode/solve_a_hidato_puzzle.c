@@ -6,6 +6,7 @@
 // SOURCE: https://rosettacode.org/wiki/Solve_a_Hidato_puzzle#C
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
+// STDOUT:
 // STDOUT: Before:
 // STDOUT:  __ 33 35 __ __         
 // STDOUT:  __ __ 24 22 __         
