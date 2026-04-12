@@ -189,6 +189,7 @@ class TypeSpec:
         if self.enum_def:
             return 4  # enums are int-sized
         sizes = {
+            "_Bool": 1,
             "char": 1,
             "short": 2,
             "int": 4,

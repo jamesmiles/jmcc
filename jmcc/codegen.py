@@ -1471,6 +1471,11 @@ class CodeGen:
                         self.emit(f"    movss %xmm0, {offset}(%rbp)")
                     else:
                         self.emit(f"    movq %rax, {offset}(%rbp)")
+                elif decl.type_spec.base == "_Bool" and not decl.type_spec.is_pointer():
+                    # _Bool truncation: any non-zero value becomes 1
+                    self.emit(f"    testl %eax, %eax")
+                    self.emit(f"    setne %al")
+                    self.emit(f"    movb %al, {offset}(%rbp)")
                 elif size <= 4 and not decl.type_spec.is_pointer():
                     self.emit(f"    movl %eax, {offset}(%rbp)")
                 else:
@@ -2669,7 +2674,7 @@ class CodeGen:
                 elif ts:
                     # For nested access, the base element type matters
                     base = ts.base
-                    if base == "char":
+                    if base in ("char", "_Bool"):
                         elem_size = 1
                     elif base == "short":
                         elem_size = 2
@@ -2689,7 +2694,7 @@ class CodeGen:
                     elem_size = 8
                 elif ts.is_pointer() and ts.pointer_depth == 1:
                     # Pointer to base type: element is the base type
-                    if ts.base == "char":
+                    if ts.base in ("char", "_Bool"):
                         elem_size = 1
                     elif ts.base == "short":
                         elem_size = 2
@@ -2705,7 +2710,7 @@ class CodeGen:
                 elif ts.is_array():
                     if ts.pointer_depth > 0:
                         elem_size = 8
-                    elif ts.base == "char":
+                    elif ts.base in ("char", "_Bool"):
                         elem_size = 1
                     elif ts.base == "short":
                         elem_size = 2
@@ -3479,6 +3484,12 @@ class CodeGen:
 
             self.gen_expr(expr.value)
 
+            # _Bool truncation: any non-zero value becomes 1
+            if target_type and target_type.base == "_Bool" and not target_type.is_pointer():
+                self.emit("    testl %eax, %eax")
+                self.emit("    setne %al")
+                self.emit("    movzbl %al, %eax")
+
             # Int-to-float or float-to-int conversion
             if target_is_float and not value_is_float:
                 self.emit("    cvtsi2sd %eax, %xmm0")
@@ -3512,7 +3523,7 @@ class CodeGen:
                     store_size = 8
                 elif target_type.size_bytes() == 2:
                     store_size = 2
-                elif target_type.base == "char" and not target_type.is_pointer():
+                elif target_type.base in ("char", "_Bool") and not target_type.is_pointer():
                     store_size = 1
             elif isinstance(expr.target, Identifier):
                 _, ts = self.get_var_location(expr.target.name)
