@@ -1058,6 +1058,19 @@ class CodeGen:
                         if isinstance(first, IntLiteral):
                             size *= first.value
                     return size
+            # sizeof(*expr) — dereference: get element type size
+            if isinstance(expr.operand, UnaryOp) and expr.operand.op == "*":
+                inner = expr.operand.operand
+                if isinstance(inner, Identifier):
+                    _, ts = self.get_var_location(inner.name)
+                    if ts:
+                        if ts.is_ptr_array or (ts.is_array() and ts.pointer_depth > 0):
+                            return 8  # element is a pointer
+                        elif ts.is_pointer():
+                            return TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth - 1,
+                                            struct_def=ts.struct_def).size_bytes()
+                        elif ts.is_array():
+                            return ts.size_bytes()
             return 4
         return None
 
