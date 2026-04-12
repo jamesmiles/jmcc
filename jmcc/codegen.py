@@ -87,7 +87,7 @@ class CodeGen:
             if isinstance(decl, GlobalVarDecl):
                 # Infer array size from initializer if unsized (e.g., int a[] = {1,2,3})
                 ts = decl.type_spec
-                if ts.is_array() and ts.array_sizes and ts.array_sizes[0] is None:
+                if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes and ts.array_sizes[0] is None:
                     if isinstance(decl.init, InitList):
                         # Simulate sequential index progression with designated jumps
                         idx = 0
@@ -99,7 +99,8 @@ class CodeGen:
                             max_idx = max(max_idx, idx + 1)
                             idx += 1
                         # For flat struct array init, divide by members per struct
-                        if ts.struct_def and not has_nested:
+                        # (skip for ptr_arrays — each item is a pointer, not struct members)
+                        if ts.struct_def and not has_nested and not ts.is_ptr_array:
                             member_count = 0
                             for m in ts.struct_def.members:
                                 if m.type_spec.is_array() and m.type_spec.array_sizes:
