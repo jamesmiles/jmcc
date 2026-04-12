@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
+Total: 1341 | Implemented: 26 | Breaks jmcc: 111 | Skipped: 8 | Remaining: 1196
 
 ## Tasks
 
@@ -303,7 +303,7 @@ Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
 | 279 | Decision tables | not implemented | |
 | 280 | Deconvolution/1D | not implemented | |
 | 281 | Deconvolution/2D+ | not implemented | |
-| 282 | Decorate-sort-undecorate idiom | breaks jmcc | compile error: expected type specifier |
+| 282 | Decorate-sort-undecorate idiom | implemented | FAILS jmcc - VLA struct compound literal member access |
 | 283 | Deepcopy | implemented | FAILS jmcc - nested struct float reads as 0.0 |
 | 284 | Delegates | implemented | FAILS jmcc - SIGSEGV on typedef'd struct ptr with fn ptrs |
 | 285 | Delete a file | not implemented | |
@@ -764,7 +764,7 @@ Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
 | 740 | N'th | breaks jmcc | compile error: expected type specifier |
 | 741 | N-body problem | not implemented | |
 | 742 | N-grams | not implemented | |
-| 743 | N-queens problem | breaks jmcc | compile error: expected type specifier |
+| 743 | N-queens problem | skipped | requires command-line args |
 | 744 | N-smooth numbers | not implemented | |
 | 745 | Named parameters | not implemented | |
 | 746 | Naming conventions | not implemented | |
@@ -914,7 +914,7 @@ Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
 | 890 | Prime groups | not implemented | |
 | 891 | Prime numbers whose neighboring pairs are tetraprimes | not implemented | |
 | 892 | Prime reciprocal sum | not implemented | |
-| 893 | Prime triangle | breaks jmcc | wrong output |
+| 893 | Prime triangle | skipped | only timing differs |
 | 894 | Primes - allocate descendants to their ancestors | not implemented | |
 | 895 | Primes whose first and last number is 3 | not implemented | |
 | 896 | Primes whose sum of digits is 25 | not implemented | |
@@ -987,7 +987,7 @@ Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
 | 963 | Resistor mesh | breaks jmcc | compile error: parse failure |
 | 964 | Retrieve and search chat history | not implemented | |
 | 965 | Return multiple values | implemented | FAILS jmcc - large struct return corrupts float |
-| 966 | Reverse a string | breaks jmcc | SIGSEGV |
+| 966 | Reverse a string | implemented | FAILS jmcc - SIGSEGV on wchar/mbstowcs |
 | 967 | Reverse words in a string | not implemented | |
 | 968 | RIPEMD-160 | not implemented | |
 | 969 | User:Roboticist-Tav | not implemented | |
@@ -1316,7 +1316,7 @@ Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
 | 1292 | Vile and Dopey numbers | not implemented | |
 | 1293 | Visualize a tree | not implemented | |
 | 1294 | VList | not implemented | |
-| 1295 | Vogel's approximation method | breaks jmcc | wrong output |
+| 1295 | Vogel's approximation method | implemented | FAILS jmcc - 2D VLA garbage values |
 | 1296 | Voronoi diagram | not implemented | |
 | 1297 | Wagstaff primes | not implemented | |
 | 1298 | Walk a directory/Non-recursively | not implemented | |
