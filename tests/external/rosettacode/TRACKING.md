@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 15 | Breaks jmcc: 125 | Skipped: 4 | Remaining: 1197
+Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
 
 ## Tasks
 
@@ -317,7 +317,7 @@ Total: 1341 | Implemented: 15 | Breaks jmcc: 125 | Skipped: 4 | Remaining: 1197
 | 293 | Determine if a string is numeric | not implemented | |
 | 294 | Determine if a string is squeezable | not implemented | |
 | 295 | Determine if only one instance is running | not implemented | |
-| 296 | Determine if two triangles overlap | breaks jmcc | SIGSEGV |
+| 296 | Determine if two triangles overlap | implemented | FAILS jmcc - wrong double comparison results |
 | 297 | Dice game probabilities | not implemented | |
 | 298 | Digit fifth powers | not implemented | |
 | 299 | Digital root | not implemented | |
@@ -1017,7 +1017,7 @@ Total: 1341 | Implemented: 15 | Breaks jmcc: 125 | Skipped: 4 | Remaining: 1197
 | 993 | Scope/Function names and labels | not implemented | |
 | 994 | Sealed classes and methods | not implemented | |
 | 995 | Search a list | not implemented | |
-| 996 | Search a list of records | breaks jmcc | SIGSEGV |
+| 996 | Search a list of records | implemented | FAILS jmcc - wrong search result |
 | 997 | Search in paragraph's text | not implemented | |
 | 998 | Secure temporary file | not implemented | |
 | 999 | SEDOLs | not implemented | |
@@ -1146,7 +1146,7 @@ Total: 1341 | Implemented: 15 | Breaks jmcc: 125 | Skipped: 4 | Remaining: 1197
 | 1122 | Stack traces | not implemented | |
 | 1123 | Stair-climbing puzzle | not implemented | |
 | 1124 | Start from a main routine | not implemented | |
-| 1125 | State name puzzle | breaks jmcc | wrong output |
+| 1125 | State name puzzle | implemented | FAILS jmcc - SIGSEGV on qsort+sprintf |
 | 1126 | Statistics/Basic | not implemented | |
 | 1127 | Statistics/Normal distribution | not implemented | |
 | 1128 | Steady squares | not implemented | |
@@ -1215,7 +1215,7 @@ Total: 1341 | Implemented: 15 | Breaks jmcc: 125 | Skipped: 4 | Remaining: 1197
 | 1191 | Tarjan | not implemented | |
 | 1192 | Tau function | not implemented | |
 | 1193 | Tau number | not implemented | |
-| 1194 | Taxicab numbers | breaks jmcc | compile error: lvalue check |
+| 1194 | Taxicab numbers | implemented | FAILS jmcc - struct array decl parsed as subscript |
 | 1195 | Teacup rim text | not implemented | |
 | 1196 | Temperature conversion | not implemented | |
 | 1197 | Terminal control/Clear the screen | not implemented | |
