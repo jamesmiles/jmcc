@@ -124,8 +124,11 @@ def _native_execute_hosted(binary_path, stdin_data=None):
     try:
         r = subprocess.run(
             [binary_path],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+            capture_output=True, timeout=TIMEOUT_SECONDS
         )
+        r = type(r)(r.args, r.returncode,
+                    r.stdout.decode('utf-8', errors='replace'),
+                    r.stderr.decode('utf-8', errors='replace'))
         return {"stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
     except subprocess.TimeoutExpired:
         return {"stdout": "", "stderr": "TIMEOUT", "returncode": -1}

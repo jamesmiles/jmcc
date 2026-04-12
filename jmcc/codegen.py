@@ -3599,13 +3599,13 @@ class CodeGen:
                 continue
 
             is_flt = (at and at.base in ("float", "double") and
-                      not at.is_pointer() and not (at.struct_def and at.pointer_depth == 0))
+                      not at.is_pointer() and not at.is_array() and not (at.struct_def and at.pointer_depth == 0))
             if isinstance(arg, FloatLiteral):
                 is_flt = True
             needs_conv = False
             if pt:
                 param_is_float = (pt.base in ("float", "double")
-                                  and not pt.is_pointer()
+                                  and not pt.is_pointer() and not pt.is_array()
                                   and not (pt.struct_def and pt.pointer_depth == 0))
                 if param_is_float and not is_flt:
                     needs_conv = True
@@ -3946,9 +3946,10 @@ class CodeGen:
         use_overflow = self.new_label("va_overflow")
         va_done = self.new_label("va_done")
 
-        # Check gp_offset < 48 (6 regs * 8 bytes)
+        # Check gp_offset + slot_size <= 48 (6 regs * 8 bytes)
+        gp_limit = 48 - slot_size + 8  # overflow when gp_offset >= this
         self.emit(f"    movl (%r10), %eax")         # gp_offset
-        self.emit(f"    cmpl $48, %eax")
+        self.emit(f"    cmpl ${gp_limit}, %eax")
         self.emit(f"    jae {use_overflow}")
 
         # Read from reg_save_area + gp_offset
