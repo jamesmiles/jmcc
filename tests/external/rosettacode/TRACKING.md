@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 4 | Breaks jmcc: 136 | Skipped: 3 | Remaining: 1198
+Total: 1341 | Implemented: 7 | Breaks jmcc: 133 | Skipped: 4 | Remaining: 1197
 
 ## Tasks
 
@@ -37,7 +37,7 @@ Total: 1341 | Implemented: 4 | Breaks jmcc: 136 | Skipped: 3 | Remaining: 1198
 | 13 | A* search algorithm | not implemented | |
 | 14 | A+B | not implemented | |
 | 15 | Abbreviations, automatic | not implemented | |
-| 16 | Abbreviations, easy | breaks jmcc | compile error: expected type specifier |
+| 16 | Abbreviations, easy | implemented | FAILS jmcc - size_t not recognized |
 | 17 | Abbreviations, simple | breaks jmcc | compile error: expected type specifier |
 | 18 | ABC correlation | breaks jmcc | compile error: expected type specifier |
 | 19 | ABC problem | not implemented | |
@@ -54,7 +54,7 @@ Total: 1341 | Implemented: 4 | Breaks jmcc: 136 | Skipped: 3 | Remaining: 1198
 | 30 | Active object | not implemented | |
 | 31 | Addition chains | not implemented | |
 | 32 | Addition-chain exponentiation | not implemented | |
-| 33 | Additive primes | breaks jmcc | wrong output |
+| 33 | Additive primes | implemented | FAILS jmcc - wrong sieve output (88 vs 54 primes) |
 | 34 | Address of a variable | not implemented | |
 | 35 | Air mass | not implemented | |
 | 36 | AKS test for primes | breaks jmcc | compile error: parse failure |
@@ -310,7 +310,7 @@ Total: 1341 | Implemented: 4 | Breaks jmcc: 136 | Skipped: 3 | Remaining: 1198
 | 286 | Department numbers | not implemented | |
 | 287 | Descending primes | not implemented | |
 | 288 | Detect division by zero | not implemented | |
-| 289 | Determinant and permanent | breaks jmcc | SIGSEGV |
+| 289 | Determinant and permanent | implemented | FAILS jmcc - SIGSEGV on VLA+double** |
 | 290 | Determine if a string has all the same characters | not implemented | |
 | 291 | Determine if a string has all unique characters | not implemented | |
 | 292 | Determine if a string is collapsible | not implemented | |
@@ -485,7 +485,7 @@ Total: 1341 | Implemented: 4 | Breaks jmcc: 136 | Skipped: 3 | Remaining: 1198
 | 461 | Gauss-Jordan matrix inversion | not implemented | |
 | 462 | Gaussian elimination | not implemented | |
 | 463 | Gaussian primes | not implemented | |
-| 464 | General FizzBuzz | breaks jmcc | SIGSEGV |
+| 464 | General FizzBuzz | skipped | false positive - passes jmcc, SIGPIPE from test harness |
 | 465 | Generate Chess960 starting position | not implemented | |
 | 466 | Generate lower case ASCII alphabet | not implemented | |
 | 467 | Generate random chess position | not implemented | |
