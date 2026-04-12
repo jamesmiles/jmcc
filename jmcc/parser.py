@@ -1385,7 +1385,7 @@ class Parser:
                 while self.match(TokenType.STAR):
                     extra_ptrs += 1
                 ename = self.expect(TokenType.IDENTIFIER, "identifier").value
-                ets = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth + extra_ptrs,
+                ets = TypeSpec(base=type_spec.base, pointer_depth=extra_ptrs,
                                is_unsigned=type_spec.is_unsigned, struct_def=type_spec.struct_def)
                 # Array declarator
                 if self.match(TokenType.LBRACKET):
@@ -1401,7 +1401,7 @@ class Parser:
                     if self.at(TokenType.LBRACE):
                         einit = self.parse_init_list()
                     else:
-                        einit = self.parse_expr()
+                        einit = self.parse_assignment()
                 extra.append(GlobalVarDecl(type_spec=ets, name=ename, init=einit, line=t.line, col=t.col))
                 if not self.match(TokenType.COMMA):
                     break
