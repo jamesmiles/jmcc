@@ -158,6 +158,7 @@ class Parser:
                     is_volatile=is_volatile, is_static=is_static,
                     is_extern=is_extern, struct_def=td.struct_def,
                     enum_def=td.enum_def,
+                    is_func_ptr=td.is_func_ptr if pointer_depth == td.pointer_depth else False,
                 )
             elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
                             TokenType.INT, TokenType.LONG, TokenType.FLOAT,
@@ -1442,7 +1443,7 @@ class Parser:
             # Preserve the return type info — function pointer that returns type_spec
             fptr_type = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth + 1,
                                   struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
-                                  is_unsigned=type_spec.is_unsigned)
+                                  is_unsigned=type_spec.is_unsigned, is_func_ptr=True)
             self.typedefs[name] = fptr_type
             return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
 

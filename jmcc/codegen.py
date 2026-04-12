@@ -1150,7 +1150,11 @@ class CodeGen:
                 self.stack_offset -= 8
                 self.params[param.name] = (self.stack_offset, param.type_spec)
                 # Float param: save from xmm register
-                self.emit(f"    movsd %xmm{xmm_param_idx}, {self.stack_offset}(%rbp)")
+                if param.type_spec.base == "float":
+                    self.emit(f"    cvtsd2ss %xmm{xmm_param_idx}, %xmm{xmm_param_idx}")
+                    self.emit(f"    movss %xmm{xmm_param_idx}, {self.stack_offset}(%rbp)")
+                else:
+                    self.emit(f"    movsd %xmm{xmm_param_idx}, {self.stack_offset}(%rbp)")
                 xmm_param_idx += 1
             elif not is_float_param and int_param_idx < 6:
                 self.stack_offset -= 8
@@ -1432,20 +1436,24 @@ class CodeGen:
                 if is_float_var and not is_float_init:
                     # int -> float: convert and store
                     self.emit(f"    cvtsi2sd %eax, %xmm0")
-                    self.emit(f"    movsd %xmm0, {offset}(%rbp)")
+                    if decl.type_spec.base == "float":
+                        self.emit(f"    cvtsd2ss %xmm0, %xmm0")
+                        self.emit(f"    movss %xmm0, {offset}(%rbp)")
+                    else:
+                        self.emit(f"    movsd %xmm0, {offset}(%rbp)")
                 elif not is_float_var and is_float_init:
                     # float -> int: convert (value in xmm0 and rax)
                     self.emit(f"    movq %rax, %xmm0")
                     self.emit(f"    cvttsd2si %xmm0, %eax")
                     self.emit(f"    movl %eax, {offset}(%rbp)")
                 elif is_float_var:
-                    # float -> float: store as double (truncate to float precision if float type)
+                    # float -> float: store correctly
                     if decl.type_spec.base == "float":
                         self.emit(f"    movq %rax, %xmm0")
                         self.emit(f"    cvtsd2ss %xmm0, %xmm0")
-                        self.emit(f"    cvtss2sd %xmm0, %xmm0")
-                        self.emit(f"    movq %xmm0, %rax")
-                    self.emit(f"    movq %rax, {offset}(%rbp)")
+                        self.emit(f"    movss %xmm0, {offset}(%rbp)")
+                    else:
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
                 elif size <= 4 and not decl.type_spec.is_pointer():
                     self.emit(f"    movl %eax, {offset}(%rbp)")
                 else:
@@ -1791,6 +1799,16 @@ class CodeGen:
             return
 
         self.gen_expr(unwrapped)
+        # Float member: convert double to float for storage
+        if mem_ts and mem_ts.base == "float" and not mem_ts.is_pointer() and mem_size == 4:
+            if isinstance(unwrapped, (FloatLiteral, IntLiteral)):
+                if isinstance(unwrapped, IntLiteral):
+                    self.emit("    cvtsi2sd %eax, %xmm0")
+                else:
+                    self.emit("    movq %rax, %xmm0")
+                self.emit("    cvtsd2ss %xmm0, %xmm0")
+                self.emit(f"    movss %xmm0, {offset}(%rbp)")
+                return
         if mem_ts and (mem_ts.is_pointer() or mem_size == 8):
             self.emit(f"    movq %rax, {offset}(%rbp)")
         elif mem_ts and mem_size == 1:
@@ -2347,8 +2365,13 @@ class CodeGen:
                 self.emit(f"    leaq {mangled}(%rip), %rax")
             else:
                 self.emit(f"    leaq {name}(%rip), %rax")
+        elif ts and ts.base == "float" and not ts.is_pointer() and ts.pointer_depth == 0:
+            # Load 4-byte float, convert to double, store in %rax
+            self.emit(f"    movss {loc}, %xmm0")
+            self.emit("    cvtss2sd %xmm0, %xmm0")
+            self.emit("    movq %xmm0, %rax")
         elif ts and (ts.is_pointer() or ts.size_bytes() == 8 or
-                     ts.base in ("float", "double", "long double")):
+                     ts.base in ("double", "long double")):
             self.emit(f"    movq {loc}, %rax")
         elif ts and ts.size_bytes() == 2:
             if ts.is_unsigned:
@@ -2388,6 +2411,32 @@ class CodeGen:
             self.gen_array_addr(expr)
         elif isinstance(expr, MemberAccess):
             self.gen_member_addr(expr)
+        elif isinstance(expr, CastExpr) and isinstance(expr.operand, InitList):
+            # Compound literal: (Type){init} — allocate on stack and return address
+            ts = expr.target_type
+            size = ts.size_bytes()
+            if ts.struct_def:
+                size = ts.struct_def.size_bytes()
+            alloc = (size + 7) & ~7
+            self.stack_offset -= alloc
+            temp_off = self.stack_offset
+            self._emit_zero_fill(temp_off, size)
+            if ts.struct_def:
+                self._gen_struct_init_sequential(
+                    ts.struct_def, temp_off, expr.operand.items, [0])
+            self.emit(f"    leaq {temp_off}(%rbp), %rax")
+        elif isinstance(expr, InitList):
+            # Bare compound literal (type was parsed separately or omitted)
+            # Infer struct type from context if available, or use pointer size per member
+            n_items = len(expr.items)
+            alloc = ((n_items * 8) + 7) & ~7
+            self.stack_offset -= alloc
+            temp_off = self.stack_offset
+            self._emit_zero_fill(temp_off, n_items * 8)
+            for i, item in enumerate(expr.items):
+                self.gen_expr(item.value)
+                self.emit(f"    movq %rax, {temp_off + i * 8}(%rbp)")
+            self.emit(f"    leaq {temp_off}(%rbp), %rax")
         else:
             self.error("expression is not an lvalue", expr.line, expr.col)
 
@@ -3403,10 +3452,19 @@ class CodeGen:
             # Int-to-float or float-to-int conversion
             if target_is_float and not value_is_float:
                 self.emit("    cvtsi2sd %eax, %xmm0")
-                self.emit("    movq %xmm0, %rax")
+                if target_type and target_type.base == "float":
+                    self.emit("    cvtsd2ss %xmm0, %xmm0")
+                    self.emit("    movd %xmm0, %eax")
+                else:
+                    self.emit("    movq %xmm0, %rax")
             elif not target_is_float and value_is_float:
                 self.emit("    movq %rax, %xmm0")
                 self.emit("    cvttsd2si %xmm0, %eax")
+            elif target_is_float and value_is_float and target_type and target_type.base == "float":
+                # double value → float target: truncate to float precision
+                self.emit("    movq %rax, %xmm0")
+                self.emit("    cvtsd2ss %xmm0, %xmm0")
+                self.emit("    movd %xmm0, %eax")
 
             self.emit("    pushq %rax")
             self.gen_lvalue_addr(expr.target)
@@ -3418,7 +3476,9 @@ class CodeGen:
             if target_is_ptr_element:
                 store_size = 8  # pointer array element
             elif target_type:
-                if target_is_float or target_type.is_pointer() or target_type.size_bytes() == 8:
+                if target_type.base == "float" and target_is_float:
+                    store_size = 4  # float is 4 bytes
+                elif target_is_float or target_type.is_pointer() or target_type.size_bytes() == 8:
                     store_size = 8
                 elif target_type.size_bytes() == 2:
                     store_size = 2
@@ -3467,10 +3527,14 @@ class CodeGen:
 
             if is_float_target and op in ("+", "-", "*", "/"):
                 # Float compound assignment: a += 1.0
+                is_float32 = target_type and target_type.base == "float"
                 self.gen_lvalue_addr(expr.target)
                 self.emit("    pushq %rax")          # save address
-                self.emit("    movq (%rax), %rax")   # load current value (double)
-                self.emit("    movq %rax, %xmm0")    # into xmm0
+                if is_float32:
+                    self.emit("    movss (%rax), %xmm0")  # load 4-byte float
+                    self.emit("    cvtss2sd %xmm0, %xmm0")  # promote to double
+                else:
+                    self.emit("    movsd (%rax), %xmm0")  # load 8-byte double
                 self.emit("    subq $8, %rsp")
                 self.emit("    movsd %xmm0, (%rsp)") # save current value
                 self.gen_expr(expr.value)             # evaluate RHS
@@ -3483,13 +3547,13 @@ class CodeGen:
                 self.emit("    addq $8, %rsp")
                 sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
                 self.emit(f"    {sse_ops[op]} %xmm1, %xmm0")
-                # Truncate to float precision if target is float (not double)
-                if target_type and target_type.base == "float":
-                    self.emit("    cvtsd2ss %xmm0, %xmm0")
-                    self.emit("    cvtss2sd %xmm0, %xmm0")
-                self.emit("    movq %xmm0, %rax")
                 self.emit("    popq %rcx")            # restore address
-                self.emit("    movq %rax, (%rcx)")    # store result
+                if is_float32:
+                    self.emit("    cvtsd2ss %xmm0, %xmm0")
+                    self.emit(f"    movss %xmm0, (%rcx)")
+                else:
+                    self.emit(f"    movsd %xmm0, (%rcx)")
+                self.emit("    movq %xmm0, %rax")    # result in rax
                 return
 
             store_size = self._type_store_size(target_type)
@@ -3753,11 +3817,12 @@ class CodeGen:
                 if isinstance(call_target, UnaryOp) and call_target.op == "*":
                     inner = call_target.operand
                     inner_type = self.get_expr_type(inner)
-                    if inner_type and inner_type.is_pointer() and inner_type.pointer_depth >= 2:
+                    if (inner_type and inner_type.is_pointer() and inner_type.pointer_depth >= 2
+                            and not inner_type.is_func_ptr):
                         # Pointer-to-function-pointer: need full dereference
                         self.gen_expr(call_target)
                     else:
-                        # Simple function pointer: *fp == fp, just load it
+                        # Function pointer (possibly typedef'd): *fp == fp, just load it
                         self.gen_expr(inner)
                 else:
                     self.gen_expr(call_target)

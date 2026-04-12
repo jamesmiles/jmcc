@@ -157,6 +157,7 @@ class TypeSpec:
     is_ptr_array: bool = False  # True for "array of pointers" (e.g., fptr table[3])
     is_static: bool = False
     is_extern: bool = False
+    is_func_ptr: bool = False  # True for function pointer typedefs
     array_sizes: Optional[List[Optional['Expr']]] = None  # None = unsized, e.g. int[]
     struct_def: Optional[StructDef] = None  # populated for struct types
     enum_def: Optional[EnumDef] = None  # populated for enum types
