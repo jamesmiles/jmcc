@@ -15,7 +15,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 0 | Skipped: 1 | Remaining: 1340
+Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 
 ## Tasks
 
@@ -603,7 +603,7 @@ Total: 1341 | Implemented: 0 | Skipped: 1 | Remaining: 1340
 | 580 | Keyboard input/Obtain a Y or N response | not implemented | |
 | 581 | Keyboard macros | not implemented | |
 | 582 | Klarner-Rado sequence | not implemented | |
-| 583 | Knapsack problem/0-1 | not implemented | |
+| 583 | Knapsack problem/0-1 | implemented | FAILS jmcc - wrong DP output |
 | 584 | Knapsack problem/Bounded | not implemented | |
 | 585 | Knapsack problem/Continuous | not implemented | |
 | 586 | Knapsack problem/Unbounded | not implemented | |
