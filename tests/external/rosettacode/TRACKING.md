@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 7 | Breaks jmcc: 133 | Skipped: 4 | Remaining: 1197
+Total: 1341 | Implemented: 11 | Breaks jmcc: 129 | Skipped: 4 | Remaining: 1197
 
 ## Tasks
 
@@ -225,7 +225,7 @@ Total: 1341 | Implemented: 7 | Breaks jmcc: 133 | Skipped: 4 | Remaining: 1197
 | 201 | Colour pinstripe/Display | not implemented | |
 | 202 | Combinations | not implemented | |
 | 203 | Combinations and permutations | not implemented | |
-| 204 | Combinations with repetitions | breaks jmcc | compile error: parse failure |
+| 204 | Combinations with repetitions | implemented | FAILS jmcc - C99 mixed declarations |
 | 205 | Comma quibbling | breaks jmcc | compile error: expected type specifier |
 | 206 | Command-line arguments | breaks jmcc | wrong output |
 | 207 | Comments | not implemented | |
@@ -699,7 +699,7 @@ Total: 1341 | Implemented: 7 | Breaks jmcc: 133 | Skipped: 4 | Remaining: 1197
 | 675 | Matrix chain multiplication | not implemented | |
 | 676 | Matrix digital rain | not implemented | |
 | 677 | Matrix multiplication | breaks jmcc | SIGSEGV |
-| 678 | Matrix transposition | breaks jmcc | SIGSEGV |
+| 678 | Matrix transposition | implemented | FAILS jmcc - VLA pointer-to-array stride bug |
 | 679 | Matrix with two diagonals | not implemented | |
 | 680 | Matrix-exponentiation operator | not implemented | |
 | 681 | Maximum difference between adjacent elements of list | not implemented | |
@@ -1049,7 +1049,7 @@ Total: 1341 | Implemented: 7 | Breaks jmcc: 133 | Skipped: 4 | Remaining: 1197
 | 1025 | Shell one-liner | not implemented | |
 | 1026 | Shift list elements to left by 3 | breaks jmcc | compile error: expected type specifier |
 | 1027 | Shoelace formula for polygonal area | not implemented | |
-| 1028 | Short-circuit evaluation | breaks jmcc | wrong output |
+| 1028 | Short-circuit evaluation | implemented | FAILS jmcc - # stringify expands before stringifying |
 | 1029 | Shortest common supersequence | breaks jmcc | compile error |
 | 1030 | Show ASCII table | not implemented | |
 | 1031 | Show the (decimal) value of a number of 1s appended with a 3, then squared | not implemented | |
@@ -1141,7 +1141,7 @@ Total: 1341 | Implemented: 7 | Breaks jmcc: 133 | Skipped: 4 | Remaining: 1197
 | 1117 | Square but not cube | not implemented | |
 | 1118 | Square form factorization | not implemented | |
 | 1119 | Square-free integers | not implemented | |
-| 1120 | Stable marriage problem | breaks jmcc | SIGSEGV |
+| 1120 | Stable marriage problem | implemented | FAILS jmcc - SIGSEGV on enum-indexed 2D arrays |
 | 1121 | Stack | not implemented | |
 | 1122 | Stack traces | not implemented | |
 | 1123 | Stair-climbing puzzle | not implemented | |
