@@ -315,6 +315,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["NULL"] = Macro("NULL", body="((void*)0)")
         self.macros["EOF"] = Macro("EOF", body="(-1)")
         self.macros["__LP64__"] = Macro("__LP64__", body="1")
+        self.macros["__extension__"] = Macro("__extension__", body="")  # GCC extension prefix, ignored
         # Size/byte-order macros needed by glibc headers
         self.macros["__BYTE_ORDER__"] = Macro("__BYTE_ORDER__", body="1234")
         self.macros["__ORDER_LITTLE_ENDIAN__"] = Macro("__ORDER_LITTLE_ENDIAN__", body="1234")

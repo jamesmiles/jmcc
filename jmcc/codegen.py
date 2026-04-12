@@ -2782,6 +2782,10 @@ class CodeGen:
             return self.get_expr_type(expr.operand)
         if isinstance(expr, UnaryOp) and expr.op == "*":
             inner = self.get_expr_type(expr.operand)
+            if inner and (inner.is_ptr_array or (inner.is_array() and inner.pointer_depth > 0)):
+                # Dereferencing a pointer array: element is the pointer type (keep pd)
+                return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth,
+                                struct_def=inner.struct_def, enum_def=inner.enum_def)
             if inner and inner.is_pointer():
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def)

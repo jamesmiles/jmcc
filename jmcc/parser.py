@@ -59,7 +59,7 @@ class Parser:
         TokenType.LONG, TokenType.FLOAT, TokenType.DOUBLE, TokenType.SIGNED,
         TokenType.UNSIGNED, TokenType.BOOL, TokenType.STRUCT, TokenType.UNION,
         TokenType.ENUM, TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC,
-        TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER,
+        TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER, TokenType.ATOMIC,
     }
 
     def skip_attribute(self):
@@ -113,6 +113,8 @@ class Parser:
             elif t.type == TokenType.VOLATILE:
                 is_volatile = True
                 self.advance()
+            elif t.type == TokenType.ATOMIC:
+                self.advance()  # _Atomic qualifier: accept and ignore
             elif t.type == TokenType.STATIC:
                 is_static = True
                 has_storage_class = True
@@ -784,6 +786,10 @@ class Parser:
     def parse_stmt(self) -> Stmt:
         t = self.current()
 
+        if self.at(TokenType.STATIC_ASSERT):
+            self._skip_static_assert()
+            return Block(stmts=[], line=t.line, col=t.col)
+
         if self.at(TokenType.LBRACE):
             return self.parse_block()
 
@@ -1179,8 +1185,27 @@ class Parser:
                     decls.append(decl)
         return Program(declarations=decls)
 
+    def _skip_static_assert(self):
+        """Skip _Static_assert(expr, "message"); declaration."""
+        self.advance()  # _Static_assert
+        self.expect(TokenType.LPAREN, "'('")
+        depth = 1
+        while depth > 0 and not self.at(TokenType.EOF):
+            if self.match(TokenType.LPAREN):
+                depth += 1
+            elif self.match(TokenType.RPAREN):
+                depth -= 1
+            else:
+                self.advance()
+        self.match(TokenType.SEMICOLON)
+
     def parse_top_level(self) -> Union[FuncDecl, GlobalVarDecl, StructDecl, EnumDecl, TypedefDecl, None]:
         t = self.current()
+
+        # _Static_assert: skip entirely
+        if self.at(TokenType.STATIC_ASSERT):
+            self._skip_static_assert()
+            return None
 
         # Typedef
         if self.at(TokenType.TYPEDEF):
