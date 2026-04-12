@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
+Total: 1341 | Implemented: 23 | Breaks jmcc: 117 | Skipped: 5 | Remaining: 1196
 
 ## Tasks
 
@@ -584,7 +584,7 @@ Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
 | 560 | Jacobi symbol | not implemented | |
 | 561 | Jacobsthal numbers | not implemented | |
 | 562 | Jaro similarity | breaks jmcc | wrong output |
-| 563 | Jensen's Device | breaks jmcc | wrong output |
+| 563 | Jensen's Device | implemented | FAILS jmcc - int/double division via fn ptr wrong |
 | 564 | Jewels and stones | not implemented | |
 | 565 | Jordan-Pólya numbers | not implemented | |
 | 566 | JortSort | not implemented | |
@@ -698,7 +698,7 @@ Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
 | 674 | Map range | not implemented | |
 | 675 | Matrix chain multiplication | not implemented | |
 | 676 | Matrix digital rain | not implemented | |
-| 677 | Matrix multiplication | breaks jmcc | SIGSEGV |
+| 677 | Matrix multiplication | implemented | FAILS jmcc - restrict/inline double accumulation wrong |
 | 678 | Matrix transposition | implemented | FAILS jmcc - VLA pointer-to-array stride bug |
 | 679 | Matrix with two diagonals | not implemented | |
 | 680 | Matrix-exponentiation operator | not implemented | |
@@ -720,7 +720,7 @@ Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
 | 696 | Metaprogramming | not implemented | |
 | 697 | Metered concurrency | not implemented | |
 | 698 | Metronome | not implemented | |
-| 699 | Mian-Chowla sequence | breaks jmcc | wrong output |
+| 699 | Mian-Chowla sequence | skipped | only timing differs, not a real bug |
 | 700 | Middle three digits | not implemented | |
 | 701 | Miller-Rabin primality test | not implemented | |
 | 702 | Mind boggling card trick | not implemented | |
@@ -972,7 +972,7 @@ Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
 | 948 | Recaman's sequence | not implemented | |
 | 949 | Record sound | not implemented | |
 | 950 | Reduced row echelon form | not implemented | |
-| 951 | Regular expressions | breaks jmcc | SIGSEGV |
+| 951 | Regular expressions | implemented | FAILS jmcc - SIGSEGV with regex.h regcomp |
 | 952 | Remote agent/Agent interface | not implemented | |
 | 953 | Remote agent/Agent logic | not implemented | |
 | 954 | Remote agent/Simulation | not implemented | |
@@ -1088,7 +1088,7 @@ Total: 1341 | Implemented: 19 | Breaks jmcc: 121 | Skipped: 4 | Remaining: 1197
 | 1064 | Sockets | not implemented | |
 | 1065 | Sokoban | not implemented | |
 | 1066 | Soloway's recurring rainfall | not implemented | |
-| 1067 | Solve a Hidato puzzle | breaks jmcc | compile error: parse failure |
+| 1067 | Solve a Hidato puzzle | implemented | FAILS jmcc - for-loop var scoping bug |
 | 1068 | Solve the no connection puzzle | not implemented | |
 | 1069 | Sort a list of object identifiers | not implemented | |
 | 1070 | Sort an array of composite structures | not implemented | |
