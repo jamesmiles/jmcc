@@ -2221,6 +2221,11 @@ class CodeGen:
             else:
                 self.emit("    movl $0, %eax")
 
+        elif isinstance(expr, CommaExpr):
+            # Evaluate all expressions, result is the last one
+            for sub in expr.exprs:
+                self.gen_expr(sub)
+
         elif isinstance(expr, StatementExpr):
             saved_locals = dict(self.locals)
             for stmt in expr.body.stmts:

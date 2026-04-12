@@ -349,7 +349,7 @@ class Parser:
             while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
                 mem_name = self.expect(TokenType.IDENTIFIER, "enumerator name").value
                 if self.match(TokenType.ASSIGN):
-                    val_expr = self.parse_expr()
+                    val_expr = self.parse_assignment()
                     cv = self._eval_const(val_expr)
                     if cv is not None:
                         value = cv
@@ -414,7 +414,13 @@ class Parser:
 
     def parse_expr(self) -> Expr:
         """Parse a full expression (comma operator level)."""
-        return self.parse_assignment()
+        left = self.parse_assignment()
+        if self.at(TokenType.COMMA) and not self._in_func_args:
+            exprs = [left]
+            while self.match(TokenType.COMMA):
+                exprs.append(self.parse_assignment())
+            return CommaExpr(exprs=exprs, line=left.line, col=left.col)
+        return left
 
     def parse_assignment(self) -> Expr:
         left = self.parse_ternary()
@@ -920,11 +926,6 @@ class Parser:
             init = self.parse_var_decl()
         else:
             expr = self.parse_expr()
-            if self.at(TokenType.COMMA):
-                exprs = [expr]
-                while self.match(TokenType.COMMA):
-                    exprs.append(self.parse_expr())
-                expr = CommaExpr(exprs=exprs, line=exprs[0].line, col=exprs[0].col)
             self.expect(TokenType.SEMICOLON, "';'")
             init = ExprStmt(expr=expr, line=expr.line, col=expr.col)
 
