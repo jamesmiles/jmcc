@@ -81,8 +81,9 @@ Doom needs a WAD file. The shareware `doom1.wad` works:
 - **Assemble:** 62/62 files
 - **Link:** Success
 - **Title screen:** Fully working with all 62/62 jmcc files. Pixel-perfect match with GCC.
-- **E1M1 gameplay:** Playable with 60/62 jmcc files. `r_bsp.c` and `hu_stuff.c` require GCC fallback due to remaining codegen issues.
+- **E1M1 gameplay:** Fully playable with all 62/62 jmcc files. No GCC fallbacks required.
 - **Controls:** Keyboard input works (arrow keys, Ctrl to shoot, Space to open doors, Escape for menu).
+- **Menu:** Fully working (Escape opens/closes menu on title screen and during gameplay).
 
 ## Codegen bugs found and fixed
 
@@ -114,3 +115,11 @@ Doom needs a WAD file. The shareware `doom1.wad` works:
 | 24 | 140 | `ptr->ptr_array[i]->field` chain broken | HUD drawing, texture lookup |
 | 25 | 141 | Negative double-to-int cast wrong upper bits | FixedDiv2 negative results |
 | 26 | 142 | `short**` double indexing wrong first stride | Texture column lookup crash |
+| 27 | 144-145 | Struct copy `rep movsb` wrong size or missing | Keyboard event struct copy |
+| 28 | 150 | `ptr->ptr_member[i].field` wrong offset calculation | M_Menu item access crash |
+| 29 | 152 | 2D array row as struct pointer initializer wrong | st_stuff keyboard input crash |
+| 30 | 153 | `char l[MAXLEN+1]` constant expr in array dimension | hu_stuff buffer too small |
+| 31 | 154-155 | Compound assign `>>=`, `/=`, `%=` on unsigned uses signed ops | Player teleporting randomly |
+| 32 | 157 | va_list struct layout wrong for AMD64 ABI | I_Error crashes in vfprintf |
+| 33 | 159 | va_copy crashes (undefined variable in codegen) | — |
+| 34 | 160 | 2D char array with string literal init emits zeros | Menu skull cursor "not found" crash |
