@@ -1926,7 +1926,9 @@ class CodeGen:
                     for k, sub_item in enumerate(val.items):
                         self.gen_expr(sub_item.value)
                         offset = row_base + k * elem_size
-                        if is_float_arr and isinstance(sub_item.value, (IntLiteral, UnaryOp)):
+                        needs_int2flt = isinstance(sub_item.value, IntLiteral) or (
+                            isinstance(sub_item.value, UnaryOp) and not isinstance(sub_item.value.operand, FloatLiteral) and not self._is_float_type(sub_item.value.operand))
+                        if is_float_arr and needs_int2flt:
                             self.emit("    cvtsi2sd %eax, %xmm0")
                             if type_spec.base == "float":
                                 self.emit("    cvtsd2ss %xmm0, %xmm0")
@@ -1953,7 +1955,9 @@ class CodeGen:
                     for j in range(idx, end_idx + 1):
                         self.gen_expr(val)
                         offset = base_offset + j * elem_size
-                        if is_float_arr and isinstance(val, (IntLiteral, UnaryOp)):
+                        needs_int2flt = isinstance(val, IntLiteral) or (
+                            isinstance(val, UnaryOp) and not isinstance(val.operand, FloatLiteral) and not self._is_float_type(val.operand))
+                        if is_float_arr and needs_int2flt:
                             # Convert integer to float/double for float array init
                             self.emit("    cvtsi2sd %eax, %xmm0")
                             if type_spec.base == "float":
@@ -2893,7 +2897,7 @@ class CodeGen:
                 return self.func_return_types[expr.name.name]
             # Indirect call through function pointer: return type is one pointer level less
             callee_type = self.get_expr_type(expr.name)
-            if callee_type and callee_type.is_pointer() and callee_type.pointer_depth >= 2:
+            if callee_type and callee_type.is_pointer() and callee_type.pointer_depth >= 1:
                 return TypeSpec(base=callee_type.base,
                                 pointer_depth=callee_type.pointer_depth - 1,
                                 struct_def=callee_type.struct_def,
@@ -3943,6 +3947,15 @@ class CodeGen:
         # For functions returning struct > 16 bytes, pass hidden pointer in %rdi
         # Shift other int args to the right
         ret_type = self.func_return_types.get(func_name) if func_name else None
+        if ret_type is None:
+            # Try to infer return type from function pointer type
+            callee_type = self.get_expr_type(expr.name)
+            if callee_type and callee_type.is_pointer():
+                ret_type = TypeSpec(base=callee_type.base,
+                                   pointer_depth=callee_type.pointer_depth - 1,
+                                   is_unsigned=callee_type.is_unsigned,
+                                   struct_def=callee_type.struct_def,
+                                   enum_def=callee_type.enum_def)
         needs_hidden_ret_ptr = (ret_type and self._is_struct_by_value(ret_type)
                                 and ret_type.size_bytes() > 16)
         hidden_ret_off = None

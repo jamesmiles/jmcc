@@ -1101,7 +1101,9 @@ class Parser:
                     if self.match(TokenType.LPAREN): depth += 1
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
-                ts = TypeSpec(base="void", pointer_depth=1,
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
+                              is_unsigned=base_type.is_unsigned,
+                              struct_def=base_type.struct_def,
                               is_ptr_array=bool(fptr_arr_sizes),
                               array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
             else:
