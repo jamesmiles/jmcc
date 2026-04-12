@@ -775,10 +775,11 @@ int inet_aton(const char *cp, struct in_addr *inp);
                             k += 1
                         if k < len(line) and line[k] == '(':
                             args, end = self._parse_macro_args(line, k)
+                            raw_args = list(args)  # save unexpanded for stringify
                             # Pre-expand args (unless used with ## in the body)
                             if '##' not in macro.body:
                                 args = [self._expand_macros(a) for a in args]
-                            expanded = macro.expand(args)
+                            expanded = macro.expand(args, raw_args=raw_args)
                             expanded = self._expand_macros(expanded)  # recursive
                             result.append(expanded)
                             i = end
@@ -1074,18 +1075,22 @@ class Macro:
         self.is_func = is_func
         self.is_variadic = is_variadic
 
-    def expand(self, args: List[str] = None) -> str:
+    def expand(self, args: List[str] = None, raw_args: List[str] = None) -> str:
         if not self.is_func:
             return self.body
 
         args = args or []
+        raw_args = raw_args or args
         result = self.body
 
-        # Build param->arg mapping
+        # Build param->arg mapping (expanded for substitution, raw for stringify)
         param_map = {}
+        raw_param_map = {}
         for i, param in enumerate(self.params):
             if i < len(args):
                 param_map[param] = args[i]
+            if i < len(raw_args):
+                raw_param_map[param] = raw_args[i]
 
         # Handle __VA_ARGS__ for variadic macros
         if self.is_variadic:
@@ -1108,10 +1113,10 @@ class Macro:
         # Handle ## (token paste): remove ## and join adjacent markers
         temp = re.sub(r'\s*##\s*', '', temp)
 
-        # Handle # (stringify): #MARKER -> "arg"
+        # Handle # (stringify): #MARKER -> "arg" (use raw/unexpanded args)
         for param, marker in markers.items():
-            if param in param_map:
-                arg = param_map[param]
+            if param in raw_param_map:
+                arg = raw_param_map[param]
                 temp = temp.replace('#' + marker,
                     '"' + arg.replace('\\', '\\\\').replace('"', '\\"') + '"')
 

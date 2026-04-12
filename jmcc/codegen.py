@@ -427,8 +427,9 @@ class CodeGen:
                             inner_count = 1
                             if decl.type_spec.array_sizes and len(decl.type_spec.array_sizes) > 1:
                                 for dim in decl.type_spec.array_sizes[1:]:
-                                    if isinstance(dim, IntLiteral):
-                                        inner_count *= dim.value
+                                    dv = self._dim_value(dim)
+                                    if dv is not None:
+                                        inner_count *= dv
                                 total_flat = total_elems * inner_count
                             elems = [0] * total_flat
                             flat_idx = 0
@@ -1874,10 +1875,18 @@ class CodeGen:
                 if isinstance(val, InitList) and inner_count > 1:
                     # Inner init list for multi-dim array row
                     row_base = base_offset + idx * inner_count * elem_size
+                    is_float_arr = type_spec.base in ("float", "double") and not type_spec.is_pointer()
                     for k, sub_item in enumerate(val.items):
                         self.gen_expr(sub_item.value)
                         offset = row_base + k * elem_size
-                        if elem_size == 1:
+                        if is_float_arr and isinstance(sub_item.value, (IntLiteral, UnaryOp)):
+                            self.emit("    cvtsi2sd %eax, %xmm0")
+                            if type_spec.base == "float":
+                                self.emit("    cvtsd2ss %xmm0, %xmm0")
+                                self.emit(f"    movss %xmm0, {offset}(%rbp)")
+                            else:
+                                self.emit(f"    movsd %xmm0, {offset}(%rbp)")
+                        elif elem_size == 1:
                             self.emit(f"    movb %al, {offset}(%rbp)")
                         elif elem_size == 8:
                             self.emit(f"    movq %rax, {offset}(%rbp)")
@@ -2518,11 +2527,14 @@ class CodeGen:
                                            is_unsigned=ts.is_unsigned, struct_def=ts.struct_def)
                         elem_size = elem_ts.size_bytes()
                     # Pointer to array: (*p)[N] — element stride includes array size
+                    vla_stride_dims = []
                     if ts.is_pointer() and ts.array_sizes:
                         for dim in ts.array_sizes:
                             dv = self._dim_value(dim)
                             if dv is not None:
                                 elem_size *= dv
+                            elif dim is not None:
+                                vla_stride_dims.append(dim)
 
         # Fallback: use get_expr_type for element size
         if elem_size == 4 and not isinstance(expr.array, Identifier):
@@ -2545,6 +2557,14 @@ class CodeGen:
 
         if elem_size != 1:
             self.emit(f"    imulq ${elem_size}, %rax")
+        # Runtime VLA stride multiply (for pointer-to-VLA like (*p)[runtime_dim])
+        if 'vla_stride_dims' in dir() and vla_stride_dims:
+            for dim_expr in vla_stride_dims:
+                self.emit("    pushq %rax")
+                self.gen_expr(dim_expr)
+                self.emit("    movslq %eax, %rcx")
+                self.emit("    popq %rax")
+                self.emit("    imulq %rcx, %rax")
 
         self.emit("    popq %rcx")
         self.emit("    addq %rcx, %rax")
@@ -2580,7 +2600,7 @@ class CodeGen:
                         elem_size = 1
                     elif base == "short":
                         elem_size = 2
-                    elif base in ("long", "long long"):
+                    elif base in ("long", "long long", "double"):
                         elem_size = 8
                     elif ts.struct_def:
                         elem_size = ts.struct_def.size_bytes()
@@ -3408,10 +3428,27 @@ class CodeGen:
                 _, ts = self.get_var_location(expr.target.name)
                 if ts and (ts.is_pointer() or ts.size_bytes() == 8):
                     store_size = 8
-                elif ts and ts.size_bytes() == 2:
-                    store_size = 2
-                elif ts and ts.base == "char":
-                    store_size = 1
+            # Fallback for nested array access: infer from root type
+            if store_size == 4 and isinstance(expr.target, ArrayAccess):
+                root = expr.target
+                while isinstance(root, ArrayAccess):
+                    root = root.array
+                if isinstance(root, Identifier):
+                    _, root_ts = self.get_var_location(root.name)
+                    if root_ts and root_ts.base in ("long", "long long", "double"):
+                        store_size = 8
+                    elif root_ts and root_ts.base == "char":
+                        store_size = 1
+                    elif root_ts and root_ts.base == "short":
+                        store_size = 2
+                elif isinstance(root, MemberAccess):
+                    root_type = self.get_expr_type(root)
+                    if root_type and root_type.base in ("long", "long long", "double"):
+                        store_size = 8
+                    elif root_type and root_type.base == "char":
+                        store_size = 1
+                    elif root_type and root_type.base == "short":
+                        store_size = 2
 
             if store_size == 1:
                 self.emit("    movb %al, (%rcx)")
