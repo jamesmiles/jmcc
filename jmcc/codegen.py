@@ -1436,6 +1436,10 @@ class CodeGen:
                     else:
                         self.emit(f"    leaq {name}(%rip), %rax")
                         self._emit_memcpy_from_rax(offset, struct_size)
+                elif isinstance(decl.init, Assignment):
+                    # Chained struct assignment: pq[0] = pq[1] returns dest addr in %rax
+                    self.gen_expr(decl.init)
+                    self._emit_memcpy_from_rax(offset, struct_size)
                 else:
                     # Generic struct expression: get address and copy
                     self.gen_lvalue_addr(decl.init)
@@ -3468,7 +3472,9 @@ class CodeGen:
                 self.emit("    popq %rsi")       # source
                 # Copy using rep movsb
                 self.emit(f"    movl ${struct_size}, %ecx")
+                self.emit("    pushq %rdi")      # save dest before rep movsb advances it
                 self.emit("    rep movsb")
+                self.emit("    popq %rax")        # return dest address (for chained assignment)
                 return
 
             self.gen_expr(expr.value)
