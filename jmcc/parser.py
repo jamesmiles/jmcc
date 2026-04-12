@@ -790,6 +790,26 @@ class Parser:
             self._skip_static_assert()
             return Block(stmts=[], line=t.line, col=t.col)
 
+        # Skip __asm__ / asm / __asm statements
+        if (self.at(TokenType.IDENTIFIER) and
+                self.current().value in ("__asm__", "asm", "__asm")):
+            self.advance()  # __asm__
+            # Skip optional volatile qualifier
+            if self.at(TokenType.VOLATILE) or (self.at(TokenType.IDENTIFIER) and
+                    self.current().value in ("__volatile__", "volatile")):
+                self.advance()
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN):
+                        depth += 1
+                    elif self.match(TokenType.RPAREN):
+                        depth -= 1
+                    else:
+                        self.advance()
+            self.match(TokenType.SEMICOLON)
+            return Block(stmts=[], line=t.line, col=t.col)
+
         if self.at(TokenType.LBRACE):
             return self.parse_block()
 
