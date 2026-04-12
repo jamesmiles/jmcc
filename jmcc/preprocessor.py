@@ -78,6 +78,7 @@ typedef __va_list_tag va_list[1];
         "stdio.h": """
 #ifndef _JMCC_STDIO_H
 #define _JMCC_STDIO_H
+#include <stddef.h>
 typedef void FILE;
 extern FILE *stdin;
 extern FILE *stdout;
