@@ -393,6 +393,8 @@ class CodeGen:
                                                 elems[j] = f"{arr_name}+{idx_val * elem_sz}"
                                         elif isinstance(val, Identifier) and val.name in self.known_functions:
                                             elems[j] = val.name
+                                        elif isinstance(val, Identifier) and val.name in self.global_vars:
+                                            elems[j] = val.name
                                         elif isinstance(val, InitList) and val.items:
                                             # Unwrap {func_ptr}
                                             inner = self._unwrap_compound_literal(val.items[0].value)
