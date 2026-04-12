@@ -217,17 +217,35 @@ class Parser:
             self.advance()  # (
             self.skip_attribute()
             if self.at(TokenType.STAR):
-                self.advance()  # *
+                star_count = 0
+                while self.match(TokenType.STAR):
+                    star_count += 1
                 if self.at(TokenType.RPAREN):
                     self.advance()  # )
-                    # Skip param list
-                    if self.match(TokenType.LPAREN):
+                    if self.at(TokenType.LBRACKET):
+                        # Pointer to array: (*)[N]
+                        arr_sizes = []
+                        while self.match(TokenType.LBRACKET):
+                            if not self.at(TokenType.RBRACKET):
+                                arr_sizes.append(self.parse_expr())
+                            else:
+                                arr_sizes.append(None)
+                            self.expect(TokenType.RBRACKET, "']'")
+                        pointer_depth = star_count
+                        return TypeSpec(
+                            base=base, pointer_depth=pointer_depth,
+                            is_unsigned=is_unsigned, is_const=is_const,
+                            is_volatile=is_volatile, is_static=is_static,
+                            is_extern=is_extern, struct_def=struct_def,
+                            enum_def=enum_def, array_sizes=arr_sizes)
+                    # Skip param list (function pointer)
+                    elif self.match(TokenType.LPAREN):
                         depth = 1
                         while depth > 0 and not self.at(TokenType.EOF):
                             if self.match(TokenType.LPAREN): depth += 1
                             elif self.match(TokenType.RPAREN): depth -= 1
                             else: self.advance()
-                    pointer_depth = 1  # function pointer is a pointer
+                    pointer_depth = star_count  # function pointer
                 else:
                     self.pos = saved_fptr  # not a match, restore
             else:
@@ -1041,7 +1059,9 @@ class Parser:
         # Also handles const-qualified pointers: (* const name)
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
             self.advance()  # (
-            self.advance()  # *
+            extra_stars = 0
+            while self.match(TokenType.STAR):
+                extra_stars += 1
             # Skip qualifiers between * and name
             while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                 self.advance()
@@ -1076,7 +1096,7 @@ class Parser:
                         if self.match(TokenType.LPAREN): d += 1
                         elif self.match(TokenType.RPAREN): d -= 1
                         else: self.advance()
-                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars,
                               struct_def=base_type.struct_def)
                 init = None
                 if self.match(TokenType.ASSIGN):
@@ -1106,7 +1126,7 @@ class Parser:
                     else:
                         arr_sizes.append(None)
                     self.expect(TokenType.RBRACKET, "']'")
-                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars,
                               is_unsigned=base_type.is_unsigned,
                               array_sizes=arr_sizes if arr_sizes else None)
             elif self.at(TokenType.LPAREN):
@@ -1117,13 +1137,13 @@ class Parser:
                     if self.match(TokenType.LPAREN): depth += 1
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
-                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1,
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars,
                               is_unsigned=base_type.is_unsigned,
                               struct_def=base_type.struct_def,
                               is_ptr_array=bool(fptr_arr_sizes),
                               array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
             else:
-                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + 1)
+                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars)
             init = None
             if self.match(TokenType.ASSIGN):
                 if self.at(TokenType.LBRACE):
@@ -1657,7 +1677,9 @@ class Parser:
         # Parenthesized declarator: (*name), (* const name), (*name)(params)
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
             self.advance()  # (
-            self.advance()  # *
+            param_stars = 0
+            while self.match(TokenType.STAR):
+                param_stars += 1
             while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                 self.advance()
             if self.at(TokenType.IDENTIFIER):
@@ -1668,7 +1690,7 @@ class Parser:
                     self.parse_expr()
                 self.expect(TokenType.RBRACKET, "']'")
             self.expect(TokenType.RPAREN, "')'")
-            type_spec.pointer_depth += 1
+            type_spec.pointer_depth += param_stars
             # Skip function params if present: (*fp)(int, int)
             if self.match(TokenType.LPAREN):
                 depth = 1
