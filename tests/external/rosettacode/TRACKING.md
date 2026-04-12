@@ -6,11 +6,16 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 - **not implemented** — not yet downloaded or converted to a test
 - **implemented** — test added, passes with gcc and tracked against jmcc
-- **skipped** — not suitable as a test (reason noted)
+- **skipped (reason)** — not suitable as a test, e.g.:
+  - *already covered* — passes jmcc out of the box, no new coverage
+  - *requires external lib* — depends on libraries beyond libc
+  - *non-deterministic* — uses rand/time, output varies per run
+  - *interactive* — requires user input
+  - *too large* — multi-file or exceeds reasonable test size
 
 ## Summary
 
-Total: 1341 | Implemented: 1 | Skipped: 0 | Remaining: 1340
+Total: 1341 | Implemented: 0 | Skipped: 1 | Remaining: 1340
 
 ## Tasks
 
@@ -1176,7 +1181,7 @@ Total: 1341 | Implemented: 1 | Skipped: 0 | Remaining: 1340
 | 1158 | Subtractive generator | not implemented | |
 | 1159 | Successive prime differences | not implemented | |
 | 1160 | Sudan function | not implemented | |
-| 1161 | Sudoku | implemented | passes gcc and jmcc |
+| 1161 | Sudoku | skipped | already covered |
 | 1162 | Sum and product of an array | not implemented | |
 | 1163 | Sum and product puzzle | not implemented | |
 | 1164 | Sum data type | not implemented | |
