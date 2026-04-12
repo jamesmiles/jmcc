@@ -49,8 +49,10 @@ class CodeGen:
         return f".{prefix}{self.label_count}"
 
     def _is_struct_by_value(self, ts):
-        """Check if a type is a struct passed/returned by value (not pointer)."""
-        return ts and ts.struct_def is not None and ts.pointer_depth == 0
+        """Check if a type is a struct passed/returned by value (not pointer, not array)."""
+        return (ts and ts.struct_def is not None and ts.pointer_depth == 0
+                and not ts.is_array() and not ts.is_ptr_array
+                and not (ts.array_sizes and any(d is not None for d in ts.array_sizes)))
 
     def _struct_arg_regs(self, size):
         """Return number of integer registers needed for a struct arg (System V ABI).
