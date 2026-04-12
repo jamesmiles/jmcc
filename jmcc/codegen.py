@@ -1069,6 +1069,15 @@ class CodeGen:
                     if ts:
                         if ts.is_ptr_array or (ts.is_array() and ts.pointer_depth > 0):
                             return 8  # element is a pointer
+                        elif ts.is_pointer() and ts.array_sizes:
+                            # Pointer-to-array: *p gives the array, size = base_size * product(dims)
+                            elem = TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth - 1,
+                                            struct_def=ts.struct_def).size_bytes()
+                            for dim in ts.array_sizes:
+                                dv = self._dim_value(dim) if dim is not None else None
+                                if dv is not None:
+                                    elem *= dv
+                            return elem
                         elif ts.is_pointer():
                             return TypeSpec(base=ts.base, pointer_depth=ts.pointer_depth - 1,
                                             struct_def=ts.struct_def).size_bytes()
@@ -2482,6 +2491,20 @@ class CodeGen:
                 self._gen_struct_init_sequential(
                     ts.struct_def, temp_off, expr.operand.items, [0])
             self.emit(f"    leaq {temp_off}(%rbp), %rax")
+        elif isinstance(expr, FuncCall):
+            # Function call returning struct: call the function, store result
+            # to a temp on the stack, and return the temp's address.
+            ret_type = self.get_expr_type(expr)
+            struct_size = ret_type.struct_def.size_bytes() if ret_type and ret_type.struct_def else 16
+            alloc = (struct_size + 7) & ~7
+            self.stack_offset -= alloc
+            temp_off = self.stack_offset
+            self.gen_expr(expr)
+            # Small structs are returned in %rax/%rdx
+            self.emit(f"    movq %rax, {temp_off}(%rbp)")
+            if struct_size > 8:
+                self.emit(f"    movq %rdx, {temp_off + 8}(%rbp)")
+            self.emit(f"    leaq {temp_off}(%rbp), %rax")
         elif isinstance(expr, InitList):
             # Bare compound literal (type was parsed separately or omitted)
             # Infer struct type from context if available, or use pointer size per member
@@ -2528,10 +2551,12 @@ class CodeGen:
         elif isinstance(expr.array, MemberAccess):
             # Member access as array base: check if it's an array member
             arr_type = self.get_expr_type(expr.array)
-            if arr_type and (arr_type.is_array() or arr_type.is_ptr_array or
-                            (arr_type.is_pointer() and arr_type.array_sizes)):
+            if arr_type and (arr_type.is_array() or arr_type.is_ptr_array):
                 # Array member: use address, not value
                 self.gen_member_addr(expr.array)
+            elif arr_type and arr_type.is_pointer() and arr_type.array_sizes:
+                # Pointer-to-array member: load the pointer value (it's a pointer, not an array)
+                self.gen_expr(expr.array)
             else:
                 # Pointer member: load the pointer value
                 self.gen_expr(expr.array)
@@ -2656,6 +2681,15 @@ class CodeGen:
                 elem_size = 8  # pointer array: element is a pointer
             elif arr_type and arr_type.is_pointer() and arr_type.pointer_depth >= 2:
                 elem_size = 8  # double pointer: element is pointer
+            elif arr_type and arr_type.is_pointer() and arr_type.array_sizes:
+                # Pointer-to-array: element stride includes array dimensions
+                pointed = TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
+                                   struct_def=arr_type.struct_def)
+                elem_size = pointed.size_bytes()
+                for dim in arr_type.array_sizes:
+                    dv = self._dim_value(dim)
+                    if dv is not None:
+                        elem_size *= dv
             elif arr_type and arr_type.is_pointer():
                 pointed = TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
                                    struct_def=arr_type.struct_def)
@@ -2836,6 +2870,11 @@ class CodeGen:
                 # Dereferencing a pointer array: element is the pointer type (keep pd)
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def)
+            if inner and inner.is_pointer() and inner.array_sizes:
+                # Pointer-to-array: *p gives the array type
+                return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
+                                struct_def=inner.struct_def, enum_def=inner.enum_def,
+                                array_sizes=inner.array_sizes)
             if inner and inner.is_pointer():
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def)

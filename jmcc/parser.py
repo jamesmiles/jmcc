@@ -268,20 +268,33 @@ class Parser:
                 mem_type = self.parse_type_spec()
                 mem_name = ""
 
-                # Function pointer member: type (*name)(params);
+                # Function pointer or pointer-to-array member: type (*name)(params) or type (*name)[N];
                 if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
                     self.advance()  # (
                     self.advance()  # *
                     mem_name = self.expect(TokenType.IDENTIFIER, "member name").value
                     self.expect(TokenType.RPAREN, "')'")
-                    # Skip param list
-                    if self.match(TokenType.LPAREN):
-                        depth = 1
-                        while depth > 0 and not self.at(TokenType.EOF):
-                            if self.match(TokenType.LPAREN): depth += 1
-                            elif self.match(TokenType.RPAREN): depth -= 1
-                            else: self.advance()
-                    mem_type = TypeSpec(base="void", pointer_depth=1)
+                    if self.at(TokenType.LBRACKET):
+                        # Pointer to array: type (*name)[N]
+                        arr_sizes = []
+                        while self.match(TokenType.LBRACKET):
+                            if not self.at(TokenType.RBRACKET):
+                                arr_sizes.append(self.parse_expr())
+                            else:
+                                arr_sizes.append(None)
+                            self.expect(TokenType.RBRACKET, "']'")
+                        mem_type = TypeSpec(base=mem_type.base, pointer_depth=mem_type.pointer_depth + 1,
+                                           is_unsigned=mem_type.is_unsigned,
+                                           array_sizes=arr_sizes if arr_sizes else None)
+                    else:
+                        # Skip param list for function pointer
+                        if self.match(TokenType.LPAREN):
+                            depth = 1
+                            while depth > 0 and not self.at(TokenType.EOF):
+                                if self.match(TokenType.LPAREN): depth += 1
+                                elif self.match(TokenType.RPAREN): depth -= 1
+                                else: self.advance()
+                        mem_type = TypeSpec(base="void", pointer_depth=1)
                 elif self.at(TokenType.IDENTIFIER):
                     mem_name = self.advance().value
 
@@ -1297,7 +1310,16 @@ class Parser:
                 self.advance()
             name = self.expect(TokenType.IDENTIFIER, "variable name").value
 
-            if self.at(TokenType.LPAREN):
+            # Parse optional array dimensions: (*name[4])(params) or (*name[])(params)
+            fptr_arr_sizes = []
+            while self.match(TokenType.LBRACKET):
+                if not self.at(TokenType.RBRACKET):
+                    fptr_arr_sizes.append(self.parse_expr())
+                else:
+                    fptr_arr_sizes.append(None)
+                self.expect(TokenType.RBRACKET, "']'")
+
+            if self.at(TokenType.LPAREN) and not fptr_arr_sizes:
                 # Function returning function pointer: int (*f1(params))(ret_params)
                 self.advance()  # ( for f1's params
                 params = []
@@ -1335,25 +1357,63 @@ class Parser:
                                 line=t.line, col=t.col)
             else:
                 self.expect(TokenType.RPAREN, "')'")
-                # Regular function pointer variable: int (*name)(params) = init;
-                if self.match(TokenType.LPAREN):
+
+                if self.at(TokenType.LBRACKET) and not fptr_arr_sizes:
+                    # Pointer to array: (*p)[N]
+                    arr_sizes = []
+                    while self.match(TokenType.LBRACKET):
+                        if not self.at(TokenType.RBRACKET):
+                            arr_sizes.append(self.parse_expr())
+                        else:
+                            arr_sizes.append(None)
+                        self.expect(TokenType.RBRACKET, "']'")
+                    fptr_type = TypeSpec(base=type_spec.base,
+                        pointer_depth=type_spec.pointer_depth + 1,
+                        is_unsigned=type_spec.is_unsigned,
+                        is_extern=type_spec.is_extern, is_static=type_spec.is_static,
+                        array_sizes=arr_sizes if arr_sizes else None)
+                elif self.at(TokenType.LPAREN):
+                    # Function pointer (possibly array): int (*name)(params) or int (*name[N])(params)
+                    self.advance()  # (
                     depth = 1
                     while depth > 0 and not self.at(TokenType.EOF):
                         if self.match(TokenType.LPAREN): depth += 1
                         elif self.match(TokenType.RPAREN): depth -= 1
                         else: self.advance()
-                fptr_type = TypeSpec(base=type_spec.base,
-                    pointer_depth=type_spec.pointer_depth + 1,
-                    struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
-                    is_unsigned=type_spec.is_unsigned,
-                    is_extern=type_spec.is_extern, is_static=type_spec.is_static)
+                    fptr_type = TypeSpec(base=type_spec.base,
+                        pointer_depth=type_spec.pointer_depth + 1,
+                        struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
+                        is_unsigned=type_spec.is_unsigned,
+                        is_extern=type_spec.is_extern, is_static=type_spec.is_static,
+                        is_ptr_array=bool(fptr_arr_sizes),
+                        array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
+                else:
+                    # Regular function pointer variable: int (*name) = init;
+                    fptr_type = TypeSpec(base=type_spec.base,
+                        pointer_depth=type_spec.pointer_depth + 1,
+                        struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
+                        is_unsigned=type_spec.is_unsigned,
+                        is_extern=type_spec.is_extern, is_static=type_spec.is_static)
+
                 init = None
                 if self.match(TokenType.ASSIGN):
-                    init = self.parse_expr()
+                    if self.at(TokenType.LBRACE):
+                        init = self.parse_init_list()
+                    else:
+                        init = self.parse_expr()
                 self.expect(TokenType.SEMICOLON, "';'")
                 return GlobalVarDecl(type_spec=fptr_type, name=name, init=init, line=t.line, col=t.col)
 
-        name = self.expect(TokenType.IDENTIFIER, "identifier").value
+        # Parenthesized function name: int (func_name)(params)
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.RPAREN:
+            self.advance()  # (
+            name = self.advance().value  # identifier
+            self.advance()  # )
+            if self.at(TokenType.LPAREN):
+                return self.parse_func_decl(type_spec, name, t)
+            # Fallthrough to variable declaration
+        else:
+            name = self.expect(TokenType.IDENTIFIER, "identifier").value
 
         # Function declaration/definition
         if self.at(TokenType.LPAREN):
