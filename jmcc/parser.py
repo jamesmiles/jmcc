@@ -1456,6 +1456,7 @@ class Parser:
                 type_spec.array_sizes = [self.parse_expr()]
             self.expect(TokenType.RBRACKET, "']'")
         self.typedefs[name] = type_spec
+        self.skip_attribute()
         # Handle comma-separated typedef names: typedef struct X *A, *B;
         while self.match(TokenType.COMMA):
             extra_ptrs = 0
