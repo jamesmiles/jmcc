@@ -1799,13 +1799,20 @@ class CodeGen:
             return
 
         self.gen_expr(unwrapped)
-        # Float member: convert double to float for storage
-        if mem_ts and mem_ts.base == "float" and not mem_ts.is_pointer() and mem_size == 4:
-            if isinstance(unwrapped, (FloatLiteral, IntLiteral)):
-                if isinstance(unwrapped, IntLiteral):
-                    self.emit("    cvtsi2sd %eax, %xmm0")
+        # Float/double member: handle int-to-float conversions
+        if mem_ts and mem_ts.base in ("float", "double") and not mem_ts.is_pointer():
+            if isinstance(unwrapped, IntLiteral) or (isinstance(unwrapped, UnaryOp) and unwrapped.op == "-"):
+                # Integer value needs conversion to float/double
+                self.emit("    cvtsi2sd %eax, %xmm0")
+                if mem_ts.base == "float":
+                    self.emit("    cvtsd2ss %xmm0, %xmm0")
+                    self.emit(f"    movss %xmm0, {offset}(%rbp)")
                 else:
-                    self.emit("    movq %rax, %xmm0")
+                    self.emit(f"    movsd %xmm0, {offset}(%rbp)")
+                return
+            elif isinstance(unwrapped, FloatLiteral) and mem_ts.base == "float":
+                # Double literal to float member
+                self.emit("    movq %rax, %xmm0")
                 self.emit("    cvtsd2ss %xmm0, %xmm0")
                 self.emit(f"    movss %xmm0, {offset}(%rbp)")
                 return
