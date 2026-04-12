@@ -123,3 +123,4 @@ Doom needs a WAD file. The shareware `doom1.wad` works:
 | 32 | 157 | va_list struct layout wrong for AMD64 ABI | I_Error crashes in vfprintf |
 | 33 | 159 | va_copy crashes (undefined variable in codegen) | — |
 | 34 | 160 | 2D char array with string literal init emits zeros | Menu skull cursor "not found" crash |
+| 35 | 162 | Switch/case with negative values skipped | Secret platforms and floor-lowering don't work |
