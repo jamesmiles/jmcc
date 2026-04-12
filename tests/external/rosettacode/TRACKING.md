@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 11 | Breaks jmcc: 129 | Skipped: 4 | Remaining: 1197
+Total: 1341 | Implemented: 15 | Breaks jmcc: 125 | Skipped: 4 | Remaining: 1197
 
 ## Tasks
 
@@ -304,8 +304,8 @@ Total: 1341 | Implemented: 11 | Breaks jmcc: 129 | Skipped: 4 | Remaining: 1197
 | 280 | Deconvolution/1D | not implemented | |
 | 281 | Deconvolution/2D+ | not implemented | |
 | 282 | Decorate-sort-undecorate idiom | breaks jmcc | compile error: expected type specifier |
-| 283 | Deepcopy | breaks jmcc | wrong output |
-| 284 | Delegates | breaks jmcc | SIGSEGV |
+| 283 | Deepcopy | implemented | FAILS jmcc - nested struct float reads as 0.0 |
+| 284 | Delegates | implemented | FAILS jmcc - SIGSEGV on typedef'd struct ptr with fn ptrs |
 | 285 | Delete a file | not implemented | |
 | 286 | Department numbers | not implemented | |
 | 287 | Descending primes | not implemented | |
@@ -693,7 +693,7 @@ Total: 1341 | Implemented: 11 | Breaks jmcc: 129 | Skipped: 4 | Remaining: 1197
 | 669 | Magnanimous numbers | not implemented | |
 | 670 | Main step of GOST 28147-89 | not implemented | |
 | 671 | Make directory path | breaks jmcc | link error |
-| 672 | Man or boy test | breaks jmcc | compile error: lvalue check |
+| 672 | Man or boy test | implemented | FAILS jmcc - &(Type){...} compound literal not lvalue |
 | 673 | Mandelbrot set | not implemented | |
 | 674 | Map range | not implemented | |
 | 675 | Matrix chain multiplication | not implemented | |
@@ -986,7 +986,7 @@ Total: 1341 | Implemented: 11 | Breaks jmcc: 129 | Skipped: 4 | Remaining: 1197
 | 962 | Repeat a string | breaks jmcc | compile error: parse failure |
 | 963 | Resistor mesh | breaks jmcc | compile error: parse failure |
 | 964 | Retrieve and search chat history | not implemented | |
-| 965 | Return multiple values | breaks jmcc | wrong output |
+| 965 | Return multiple values | implemented | FAILS jmcc - large struct return corrupts float |
 | 966 | Reverse a string | breaks jmcc | SIGSEGV |
 | 967 | Reverse words in a string | not implemented | |
 | 968 | RIPEMD-160 | not implemented | |
