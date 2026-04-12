@@ -1845,23 +1845,56 @@ class CodeGen:
                         [InitItem(value=item.value)], [0])
                 idx += 1
         else:
+            # Compute inner dimension count for multi-dim arrays
+            inner_count = 1
+            if type_spec.array_sizes and len(type_spec.array_sizes) > 1:
+                for dim in type_spec.array_sizes[1:]:
+                    dv = self._dim_value(dim) if dim else 1
+                    if dv:
+                        inner_count *= dv
+
             idx = 0
             for item in init.items:
                 if item.designator_index is not None:
                     idx = item.designator_index
-                end_idx = idx
-                if item.designator_end is not None:
-                    end_idx = item.designator_end
-                for j in range(idx, end_idx + 1):
-                    self.gen_expr(item.value)
-                    offset = base_offset + j * elem_size
-                    if elem_size == 1:
-                        self.emit(f"    movb %al, {offset}(%rbp)")
-                    elif elem_size == 8:
-                        self.emit(f"    movq %rax, {offset}(%rbp)")
-                    else:
-                        self.emit(f"    movl %eax, {offset}(%rbp)")
-                idx = end_idx + 1
+                val = item.value
+                # Unwrap CastExpr
+                while isinstance(val, CastExpr):
+                    val = val.operand
+                if isinstance(val, InitList) and inner_count > 1:
+                    # Inner init list for multi-dim array row
+                    row_base = base_offset + idx * inner_count * elem_size
+                    for k, sub_item in enumerate(val.items):
+                        self.gen_expr(sub_item.value)
+                        offset = row_base + k * elem_size
+                        if elem_size == 1:
+                            self.emit(f"    movb %al, {offset}(%rbp)")
+                        elif elem_size == 8:
+                            self.emit(f"    movq %rax, {offset}(%rbp)")
+                        else:
+                            self.emit(f"    movl %eax, {offset}(%rbp)")
+                elif isinstance(val, StringLiteral) and inner_count > 1:
+                    # String literal for char row
+                    row_base = base_offset + idx * inner_count * elem_size
+                    for k, ch in enumerate(val.value):
+                        self.emit(f"    movb ${ord(ch)}, {row_base + k}(%rbp)")
+                    self.emit(f"    movb $0, {row_base + len(val.value)}(%rbp)")
+                else:
+                    end_idx = idx
+                    if item.designator_end is not None:
+                        end_idx = item.designator_end
+                    for j in range(idx, end_idx + 1):
+                        self.gen_expr(val)
+                        offset = base_offset + j * elem_size
+                        if elem_size == 1:
+                            self.emit(f"    movb %al, {offset}(%rbp)")
+                        elif elem_size == 8:
+                            self.emit(f"    movq %rax, {offset}(%rbp)")
+                        elif elem_size == 2:
+                            self.emit(f"    movw %ax, {offset}(%rbp)")
+                        else:
+                            self.emit(f"    movl %eax, {offset}(%rbp)")
+                idx += 1
 
     def gen_if(self, stmt: IfStmt):
         else_label = self.new_label("else")
@@ -2543,8 +2576,10 @@ class CodeGen:
                         elem_size = 1
                     elif ts.base == "short":
                         elem_size = 2
-                    elif ts.base in ("long", "long long") or ts.struct_def:
+                    elif ts.base in ("long", "long long", "double") or ts.struct_def:
                         elem_size = 8
+                    elif ts.base == "long double":
+                        elem_size = 16
                     else:
                         elem_size = 4
                 elif ts.is_pointer() and ts.pointer_depth > 1:
@@ -2559,8 +2594,12 @@ class CodeGen:
                         elem_size = 2
                     elif ts.struct_def:
                         elem_size = ts.struct_def.size_bytes()
-                    elif ts.base in ("long", "long long"):
+                    elif ts.base in ("long", "long long", "double"):
                         elem_size = 8
+                    elif ts.base == "float":
+                        elem_size = 4
+                    elif ts.base == "long double":
+                        elem_size = 16
                     else:
                         elem_size = 4
 
