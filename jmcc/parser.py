@@ -1200,6 +1200,8 @@ class Parser:
         self.match(TokenType.SEMICOLON)
 
     def parse_top_level(self) -> Union[FuncDecl, GlobalVarDecl, StructDecl, EnumDecl, TypedefDecl, None]:
+        # Skip leading __attribute__ before declarations
+        self.skip_attribute()
         t = self.current()
 
         # _Static_assert: skip entirely
