@@ -2004,8 +2004,9 @@ class CodeGen:
 
         # Generate comparison jumps
         for case_stmt, lbl in cases:
-            if isinstance(case_stmt.value, IntLiteral):
-                self.emit(f"    cmpl ${case_stmt.value.value}, %r10d")
+            cv = self._try_eval_const(case_stmt.value)
+            if cv is not None:
+                self.emit(f"    cmpl ${cv}, %r10d")
                 self.emit(f"    je {lbl}")
 
         if default_label:
