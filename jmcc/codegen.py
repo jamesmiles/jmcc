@@ -3785,10 +3785,12 @@ class CodeGen:
 
     def _gen_va_start(self, expr: FuncCall):
         """Generate code for __builtin_va_start(ap, last_named_param).
-        va_list is void* pointing to a va_state struct:
-          [0]  reg_ptr      - current position in register save area
-          [8]  overflow_ptr - current position in overflow arg area
-          [16] reg_end      - end of register save area
+        AMD64 ABI va_list is an array of 1 struct (24 bytes):
+          [0]  gp_offset (uint32) - offset in reg save area for next int arg
+          [4]  fp_offset (uint32) - offset for next float arg (always 48 = no floats)
+          [8]  overflow_arg_area (void*) - pointer to stack overflow args
+          [16] reg_save_area (void*) - pointer to register save area
+        va_list is passed as pointer to this struct (array decays to pointer).
         """
         if len(expr.args) < 2:
             return
@@ -3808,27 +3810,29 @@ class CodeGen:
                 else:
                     named_int_slots += 1
 
-            # Allocate va_state (24 bytes)
-            self.stack_offset -= 24
-            state_off = self.stack_offset
-
-            # reg_ptr = va_area + named_int_slots * 8
-            reg_start = self._va_area_offset + min(named_int_slots, 6) * 8
-            self.emit(f"    leaq {reg_start}(%rbp), %rax")
-            self.emit(f"    movq %rax, {state_off}(%rbp)")
-
-            # overflow_ptr = 16(%rbp) (first overflow arg on caller's stack)
-            self.emit(f"    leaq 16(%rbp), %rax")
-            self.emit(f"    movq %rax, {state_off + 8}(%rbp)")
-
-            # reg_end = va_area + 48 (past all 6 register slots)
-            self.emit(f"    leaq {self._va_area_offset + 48}(%rbp), %rax")
-            self.emit(f"    movq %rax, {state_off + 16}(%rbp)")
-
-            # ap = &va_state
+            # ap points to a 24-byte struct (va_list[0])
+            # Get address of ap (which IS the struct, since va_list is array)
             self.gen_lvalue_addr(ap_arg)
-            self.emit(f"    leaq {state_off}(%rbp), %rcx")
-            self.emit(f"    movq %rcx, (%rax)")
+            self.emit("    pushq %rax")  # save ap address
+
+            # gp_offset = named_int_slots * 8 (offset into reg_save_area)
+            gp_off = min(named_int_slots, 6) * 8
+            self.emit("    popq %rcx")   # ap address
+            self.emit("    pushq %rcx")  # save again
+            self.emit(f"    movl ${gp_off}, (%rcx)")          # gp_offset
+
+            # fp_offset = 48 (6 int regs * 8 = 48, no float regs used)
+            self.emit(f"    movl $48, 4(%rcx)")               # fp_offset
+
+            # overflow_arg_area = 16(%rbp) (first stack arg)
+            self.emit(f"    leaq 16(%rbp), %rax")
+            self.emit(f"    movq %rax, 8(%rcx)")              # overflow_arg_area
+
+            # reg_save_area = va_area base
+            self.emit(f"    leaq {self._va_area_offset}(%rbp), %rax")
+            self.emit(f"    movq %rax, 16(%rcx)")             # reg_save_area
+
+            self.emit("    popq %rcx")  # clean up
         else:
             self.gen_lvalue_addr(ap_arg)
             self.emit("    leaq 16(%rbp), %rcx")
@@ -3836,22 +3840,26 @@ class CodeGen:
 
     def _gen_va_copy(self, expr: FuncCall):
         """Generate code for __builtin_va_copy(dest, src).
-        Allocate new va_state and copy 24 bytes from src's state."""
+        Copy 24 bytes of AMD64 va_list struct from src to dest."""
         if len(expr.args) < 2:
             return
-        # Allocate new va_state
-        self.stack_offset -= 24
-        new_state_off = self.stack_offset
 
-        # Load src va_state pointer
-        self.gen_expr(expr.args[1])  # src va_list value = pointer to va_state
-        # Copy 24 bytes from src state to new state
-        self.emit(f"    movq (%rax), %rcx")
-        self.emit(f"    movq %rcx, {new_state_off}(%rbp)")
-        self.emit(f"    movq 8(%rax), %rcx")
-        self.emit(f"    movq %rcx, {new_state_off + 8}(%rbp)")
-        self.emit(f"    movq 16(%rax), %rcx")
-        self.emit(f"    movq %rcx, {new_state_off + 16}(%rbp)")
+        # Get dest address
+        self.gen_lvalue_addr(expr.args[0])
+        self.emit("    pushq %rax")  # save dest
+
+        # Get src address
+        self.gen_lvalue_addr(expr.args[1])
+        self.emit("    movq %rax, %rsi")  # src
+
+        self.emit("    popq %rdi")        # dest
+        # Copy 24 bytes
+        self.emit("    movq (%rsi), %rcx")
+        self.emit("    movq %rcx, (%rdi)")
+        self.emit("    movq 8(%rsi), %rcx")
+        self.emit("    movq %rcx, 8(%rdi)")
+        self.emit("    movq 16(%rsi), %rcx")
+        self.emit("    movq %rcx, 16(%rdi)")
 
         # Store new state pointer into dest
         self.gen_lvalue_addr(expr.args[0])
@@ -3860,52 +3868,54 @@ class CodeGen:
 
     def _gen_builtin_va_arg(self, expr):
         """Generate code for __builtin_va_arg(ap, type).
-        ap is void* -> va_state { reg_ptr, overflow_ptr, reg_end }.
-        For each arg of aligned_size bytes:
-          if reg_ptr + aligned_size <= reg_end: read from reg_ptr, advance reg_ptr
-          else: read from overflow_ptr, advance overflow_ptr
-        Result: for scalar types, value in %rax. For struct types, address in %rax."""
+        AMD64 ABI va_list struct:
+          [0]  gp_offset (uint32) - current offset into reg_save_area
+          [4]  fp_offset (uint32) - current offset for floats (unused)
+          [8]  overflow_arg_area (void*) - next stack arg
+          [16] reg_save_area (void*) - base of saved registers
+        For each integer arg:
+          if gp_offset < 48: read from reg_save_area + gp_offset, gp_offset += 8
+          else: read from overflow_arg_area, overflow_arg_area += 8
+        """
         target_type = expr.target_type
         size = target_type.size_bytes()
         aligned_size = (size + 7) & ~7
         is_struct = self._is_struct_by_value(target_type)
-
-        # For >16 byte structs, the va slot contains a pointer (8 bytes), not the full struct
         slot_size = 8 if (is_struct and size > 16) else aligned_size
 
-        # Load va_state pointer: ap -> va_state*
+        # ap is va_list (array of 1 struct), so ap IS the struct address
         self.gen_lvalue_addr(expr.ap)
-        self.emit("    movq (%rax), %r10")  # r10 = va_state*
+        self.emit("    movq %rax, %r10")  # r10 = va_list struct address
 
-        # Check if we can read from register save area
-        # r10+0 = reg_ptr, r10+8 = overflow_ptr, r10+16 = reg_end
         use_overflow = self.new_label("va_overflow")
         va_done = self.new_label("va_done")
 
-        self.emit(f"    movq (%r10), %rax")       # reg_ptr
-        self.emit(f"    addq ${slot_size}, %rax")  # reg_ptr + slot_size
-        self.emit(f"    cmpq 16(%r10), %rax")     # compare with reg_end
-        self.emit(f"    ja {use_overflow}")         # if past end, use overflow
+        # Check gp_offset < 48 (6 regs * 8 bytes)
+        self.emit(f"    movl (%r10), %eax")         # gp_offset
+        self.emit(f"    cmpl $48, %eax")
+        self.emit(f"    jae {use_overflow}")
 
-        # Read from register save area
-        self.emit(f"    movq (%r10), %rax")  # reg_ptr (source address)
-        self.emit(f"    pushq %rax")  # save source
-        # Advance reg_ptr
-        self.emit(f"    addq ${slot_size}, %rax")
-        self.emit(f"    movq %rax, (%r10)")  # update reg_ptr
+        # Read from reg_save_area + gp_offset
+        self.emit(f"    movl (%r10), %eax")         # gp_offset
+        self.emit(f"    movslq %eax, %rax")
+        self.emit(f"    addq 16(%r10), %rax")       # reg_save_area + gp_offset
+        self.emit(f"    pushq %rax")                 # save source address
+        # Advance gp_offset
+        self.emit(f"    movl (%r10), %eax")
+        self.emit(f"    addl ${slot_size}, %eax")
+        self.emit(f"    movl %eax, (%r10)")
         self.emit(f"    jmp {va_done}")
 
-        # Read from overflow area
+        # Read from overflow_arg_area
         self.label(use_overflow)
-        self.emit(f"    movq 8(%r10), %rax")  # overflow_ptr (source address)
-        self.emit(f"    pushq %rax")  # save source
-        # Advance overflow_ptr
+        self.emit(f"    movq 8(%r10), %rax")        # overflow_arg_area
+        self.emit(f"    pushq %rax")                 # save source address
+        # Advance overflow_arg_area
         self.emit(f"    addq ${slot_size}, %rax")
-        self.emit(f"    movq %rax, 8(%r10)")  # update overflow_ptr
+        self.emit(f"    movq %rax, 8(%r10)")
 
         self.label(va_done)
-        # Source address is on top of stack
-        self.emit(f"    popq %r11")  # r11 = source address
+        self.emit(f"    popq %r11")                  # r11 = source address
 
         if is_struct:
             if size > 16:

@@ -45,7 +45,13 @@ typedef int wchar_t;
 #define false 0
 """,
         "stdarg.h": """
-typedef void *va_list;
+typedef struct {
+    unsigned int gp_offset;
+    unsigned int fp_offset;
+    void *overflow_arg_area;
+    void *reg_save_area;
+} __va_list_tag;
+typedef __va_list_tag va_list[1];
 #define va_start(ap, param) __builtin_va_start(ap, param)
 #define va_end(ap) __builtin_va_end(ap)
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
