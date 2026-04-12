@@ -527,14 +527,17 @@ class CodeGen:
         return expr
 
     def _get_member_total_size(self, ts):
-        """Get total size of a type including array dimensions."""
+        """Get total size of a type including all array dimensions."""
         size = ts.size_bytes()
         if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
-            first = ts.array_sizes[0]
-            if first is None:
-                return 0  # Flexible array
-            if isinstance(first, IntLiteral):
-                size *= first.value
+            for dim in ts.array_sizes:
+                if dim is None:
+                    return 0  # Flexible array
+                if isinstance(dim, IntLiteral):
+                    size *= dim.value
+                else:
+                    # Runtime-sized (VLA) — can't compute statically
+                    return 0
         return size
 
     def _build_data_bytes(self, sdef, init_list, is_union=False):
@@ -1080,7 +1083,7 @@ class CodeGen:
         self.params = {}
         self.static_locals = {}
         self.vla_sizes = {}  # VLA name -> stack offset of saved size
-        self.stack_offset = 0
+        self.stack_offset = -8  # -8(%rbp) is used by saved %rbx
         if hasattr(self, '_va_area_offset'):
             del self._va_area_offset
 
@@ -1093,6 +1096,7 @@ class CodeGen:
         # Prologue
         self.emit("    pushq %rbp")
         self.emit("    movq %rsp, %rbp")
+        self.emit("    pushq %rbx")  # save callee-saved %rbx (used for call alignment)
 
         # We'll patch the stack allocation later
         stack_alloc_idx = len(self.output)
@@ -1190,13 +1194,19 @@ class CodeGen:
         # Default return 0 for main, or just ret for void functions
         if func.name == "main":
             self.emit("    movl $0, %eax")
+        self.emit("    movq -8(%rbp), %rbx")  # restore callee-saved %rbx
         self.emit("    leave")
         self.emit("    ret")
 
         # Patch stack allocation (align to 16)
-        total_stack = (-self.stack_offset + 15) & ~15
+        # After pushq %rbp and pushq %rbx, rsp is 16-aligned minus 8.
+        # So subq needs to be 8 mod 16 to restore 16-byte alignment.
+        raw = -self.stack_offset
+        total_stack = (raw + 15) & ~15
+        if total_stack % 16 == 0:
+            total_stack += 8  # ensure rsp ends 16-aligned after odd push count
         if total_stack == 0:
-            total_stack = 16  # minimum
+            total_stack = 8
         self.output[stack_alloc_idx] = f"    subq ${total_stack}, %rsp"
 
     def gen_block(self, block: Block):
@@ -1302,6 +1312,7 @@ class CodeGen:
                 if ret_type and ret_type.base in ("float", "double") and not ret_type.is_pointer():
                     if not (ret_type.struct_def and ret_type.pointer_depth == 0):
                         self.emit("    movq %rax, %xmm0")
+        self.emit("    movq -8(%rbp), %rbx")  # restore callee-saved %rbx
         self.emit("    leave")
         self.emit("    ret")
 
@@ -1353,6 +1364,14 @@ class CodeGen:
                 # Variable-length array: runtime stack allocation
                 self.gen_expr(first)  # size expression in %eax
                 elem_size = size
+                # Multiply by all remaining constant dimensions (e.g., char a[n][15])
+                for dim in decl.type_spec.array_sizes[1:]:
+                    if isinstance(dim, IntLiteral):
+                        elem_size *= dim.value
+                    else:
+                        cv = self._try_eval_const(dim) if dim else None
+                        if cv:
+                            elem_size *= cv
                 if elem_size != 1:
                     self.emit(f"    imull ${elem_size}, %eax")
                 # Save unaligned total size for sizeof
@@ -1368,8 +1387,13 @@ class CodeGen:
                 self.emit("    subq %rax, %rsp")  # allocate on stack
                 # Store the pointer (rsp is now the base of the VLA)
                 self.stack_offset -= 8
+                # Preserve inner dimensions so indexing computes correct stride
+                inner_dims = decl.type_spec.array_sizes[1:] if len(decl.type_spec.array_sizes) > 1 else None
                 self.locals[decl.name] = (self.stack_offset, TypeSpec(
-                    base=decl.type_spec.base, pointer_depth=decl.type_spec.pointer_depth + 1))
+                    base=decl.type_spec.base, pointer_depth=decl.type_spec.pointer_depth + 1,
+                    is_unsigned=decl.type_spec.is_unsigned, struct_def=decl.type_spec.struct_def,
+                    enum_def=decl.type_spec.enum_def,
+                    array_sizes=inner_dims))
                 self.emit(f"    movq %rsp, {self.stack_offset}(%rbp)")
                 return
             # Align to 8
@@ -2853,6 +2877,12 @@ class CodeGen:
                     return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth,
                                     struct_def=arr_type.struct_def,
                                     is_unsigned=arr_type.is_unsigned)
+                elif arr_type.is_pointer() and arr_type.array_sizes and len(arr_type.array_sizes) > 0:
+                    # Pointer with inner dimensions (e.g., VLA char(*)[15]): strip pointer, keep array
+                    return TypeSpec(base=arr_type.base, pointer_depth=arr_type.pointer_depth - 1,
+                                    struct_def=arr_type.struct_def,
+                                    is_unsigned=arr_type.is_unsigned,
+                                    array_sizes=arr_type.array_sizes)
                 elif arr_type.is_array() or arr_type.is_pointer():
                     return TypeSpec(base=arr_type.base, pointer_depth=max(arr_type.pointer_depth - 1, 0),
                                     struct_def=arr_type.struct_def,
@@ -3851,7 +3881,7 @@ class CodeGen:
                     break
 
         remaining_on_stack = total_pushes - pop_count + ld_pushes
-        if remaining_on_stack % 2 != 0:
+        if remaining_on_stack > 0 and remaining_on_stack % 2 != 0:
             self.emit("    subq $8, %rsp")
 
         # For indirect calls, save function pointer
@@ -3974,25 +4004,37 @@ class CodeGen:
         # Set %al to number of xmm registers used (required for variadic calls)
         self.emit(f"    movl ${xmm_idx}, %eax")
 
+        # For indirect calls, pop function pointer before alignment
         if is_indirect or is_fptr:
             self.emit("    popq %r11")
+
+        # Align stack for call:
+        # - For calls with stack args, use static alignment (padding before args)
+        # - For calls with no stack args, dynamically align with andq
+        use_dynamic_align = (remaining_on_stack == 0)
+        if use_dynamic_align:
+            self.emit("    movq %rsp, %rbx")
+            self.emit("    andq $-16, %rsp")
+
+        if is_indirect or is_fptr:
             self.emit("    call *%r11")
         else:
             self.emit(f"    call {func_name}")
+
+        if use_dynamic_align:
+            self.emit("    movq %rbx, %rsp")
 
         # If function returns float/double, move xmm0 to rax
         if ret_type and ret_type.base in ("float", "double", "long double") and not ret_type.is_pointer():
             if not (ret_type.struct_def and ret_type.pointer_depth == 0):
                 self.emit("    movq %xmm0, %rax")
 
-        # Clean up stack args
+        # Clean up stack args and alignment padding
         if remaining_on_stack > 0:
             cleanup = remaining_on_stack * 8
             if remaining_on_stack % 2 != 0:
                 cleanup += 8  # alignment padding
             self.emit(f"    addq ${cleanup}, %rsp")
-        elif remaining_on_stack == 0 and remaining_on_stack % 2 != 0:
-            self.emit("    addq $8, %rsp")
 
     def _push_struct_arg(self, arg, sz):
         """Push a struct (or long double) argument onto the stack for a function call.

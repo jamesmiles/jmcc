@@ -67,6 +67,48 @@ class StructDef:
                 max_align = ma
         return max_align
 
+    def _layout_members(self):
+        """Compute (offset, size) for each member, with bitfield packing.
+        Returns list of (offset, size) tuples, one per member."""
+        if self.is_union:
+            return [(0, self._member_total_size(m.type_spec)) for m in self.members]
+        result = []
+        total = 0
+        bf_bits_used = 0  # bits consumed in current bitfield unit
+        bf_unit_size = 0  # size of current bitfield unit (bytes)
+        bf_unit_start = 0  # byte offset where current bitfield unit starts
+        for m in self.members:
+            if m.bit_width is not None:
+                # Bitfield member
+                unit_size = self._member_total_size(m.type_spec)  # e.g., 4 for unsigned int
+                unit_bits = unit_size * 8
+                if bf_unit_size == 0 or bf_bits_used + m.bit_width > unit_bits:
+                    # Start new bitfield unit
+                    total += bf_unit_size  # close previous unit if any
+                    align = self._member_align(m.type_spec)
+                    if align > 0:
+                        total = (total + align - 1) & ~(align - 1)
+                    bf_unit_start = total
+                    bf_unit_size = unit_size
+                    bf_bits_used = m.bit_width
+                else:
+                    # Pack into current unit
+                    bf_bits_used += m.bit_width
+                result.append((bf_unit_start, unit_size))
+            else:
+                # Non-bitfield: close any pending bitfield unit
+                total += bf_unit_size
+                bf_unit_size = 0
+                bf_bits_used = 0
+                align = self._member_align(m.type_spec)
+                actual_size = self._member_total_size(m.type_spec)
+                if align > 0:
+                    total = (total + align - 1) & ~(align - 1)
+                result.append((total, actual_size))
+                total += actual_size
+        total += bf_unit_size  # close final bitfield unit
+        return result, total
+
     def size_bytes(self):
         if self.is_union:
             raw = max((self._member_total_size(m.type_spec) for m in self.members), default=0)
@@ -75,13 +117,7 @@ class StructDef:
             if a > 1 and raw > 0:
                 raw = (raw + a - 1) & ~(a - 1)
             return raw
-        total = 0
-        for m in self.members:
-            align = self._member_align(m.type_spec)
-            actual_size = self._member_total_size(m.type_spec)
-            if align > 0:
-                total = (total + align - 1) & ~(align - 1)
-            total += actual_size
+        _, total = self._layout_members()
         # Align total to struct alignment
         max_align = self.alignment()
         if total > 0 and max_align > 1:
@@ -99,20 +135,16 @@ class StructDef:
                     if sub_off is not None:
                         return sub_off
             return None
-        offset = 0
-        for m in self.members:
-            align = self._member_align(m.type_spec)
-            actual_size = self._member_total_size(m.type_spec)
-            if align > 0:
-                offset = (offset + align - 1) & ~(align - 1)
+        layout, _ = self._layout_members()
+        for i, m in enumerate(self.members):
+            off, _ = layout[i]
             if m.name == name:
-                return offset
+                return off
             # Search anonymous struct/union members
             if m.name == "" and m.type_spec.struct_def:
                 sub_off = m.type_spec.struct_def.member_offset(name)
                 if sub_off is not None:
-                    return offset + sub_off
-            offset += actual_size
+                    return off + sub_off
         return None
 
     def member_type(self, name):
@@ -131,6 +163,7 @@ class StructDef:
 class StructMember:
     type_spec: 'TypeSpec' = None
     name: str = ""
+    bit_width: Optional[int] = None  # None = not a bitfield
 
 
 @dataclass

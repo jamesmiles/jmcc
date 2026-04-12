@@ -299,11 +299,14 @@ class Parser:
                         mem_type.is_ptr_array = True
 
                 # Bit-field width: int x : 8;
+                bit_width = None
                 if self.match(TokenType.COLON):
-                    self.parse_expr()  # skip width expression
+                    bw_expr = self.parse_expr()
+                    if isinstance(bw_expr, IntLiteral):
+                        bit_width = bw_expr.value
 
                 if mem_name:
-                    members.append(StructMember(type_spec=mem_type, name=mem_name))
+                    members.append(StructMember(type_spec=mem_type, name=mem_name, bit_width=bit_width))
                 elif not mem_name and mem_type.struct_def:
                     # Anonymous struct/union: keep as unnamed member
                     # member_offset/member_type resolve through it
