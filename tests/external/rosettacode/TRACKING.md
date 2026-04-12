@@ -16,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
+Total: 1341 | Implemented: 4 | Breaks jmcc: 136 | Skipped: 3 | Remaining: 1198
 
 ## Tasks
 
@@ -60,7 +60,7 @@ Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
 | 36 | AKS test for primes | breaks jmcc | compile error: parse failure |
 | 37 | Align columns | not implemented | |
 | 38 | Aliquot sequence classifications | not implemented | |
-| 39 | Almost prime | breaks jmcc | compile error: parse failure |
+| 39 | Almost prime | implemented | FAILS jmcc - comma in for-init parse error |
 | 40 | Alternade words | not implemented | |
 | 41 | Amb | not implemented | |
 | 42 | Amicable pairs | not implemented | |
@@ -351,7 +351,7 @@ Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
 | 327 | Draw a sphere | not implemented | |
 | 328 | Draw pixel 2 | not implemented | |
 | 329 | Dutch national flag problem | not implemented | |
-| 330 | Eban numbers | breaks jmcc | timeout |
+| 330 | Eban numbers | skipped | timeout - correct output, just slow unoptimized |
 | 331 | Echo server | not implemented | |
 | 332 | Egyptian division | not implemented | |
 | 333 | EKG sequence convergence | breaks jmcc | compile error: expected type specifier |
@@ -1022,7 +1022,7 @@ Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
 | 998 | Secure temporary file | not implemented | |
 | 999 | SEDOLs | not implemented | |
 | 1000 | Selectively replace multiple instances of a character within a string | not implemented | |
-| 1001 | Self numbers | breaks jmcc | timeout |
+| 1001 | Self numbers | skipped | timeout - 2GB alloc, perf issue not a bug |
 | 1002 | Self-contained numbers | not implemented | |
 | 1003 | Self-describing numbers | not implemented | |
 | 1004 | Semaphore | not implemented | |
@@ -1194,7 +1194,7 @@ Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
 | 1170 | Sum of first n cubes | not implemented | |
 | 1171 | Sum of primes in odd positions is prime | not implemented | |
 | 1172 | Sum of square and cube digits of an integer are primes | not implemented | |
-| 1173 | Sum of squares | breaks jmcc | SIGSEGV |
+| 1173 | Sum of squares | implemented | FAILS jmcc - SIGSEGV on double arrays |
 | 1174 | Sum of the digits of n is substring of n | not implemented | |
 | 1175 | Sum of two adjacent numbers are primes | not implemented | |
 | 1176 | Sum to 100 | not implemented | |
@@ -1206,7 +1206,7 @@ Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
 | 1182 | Superellipse | not implemented | |
 | 1183 | Superpermutation minimisation | not implemented | |
 | 1184 | Sutherland-Hodgman polygon clipping | not implemented | |
-| 1185 | Symmetric difference | breaks jmcc | wrong output |
+| 1185 | Symmetric difference | implemented | FAILS jmcc - wrong set diff output |
 | 1186 | Synchronous concurrency | not implemented | |
 | 1187 | System time | breaks jmcc | compile error: parse failure |
 | 1188 | Table creation | not implemented | |
