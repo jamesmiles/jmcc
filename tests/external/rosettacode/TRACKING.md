@@ -6,6 +6,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 - **not implemented** — not yet downloaded or converted to a test
 - **implemented** — test added, passes with gcc and tracked against jmcc
+- **breaks jmcc** — compiles with gcc but fails with jmcc (reason noted: compile error, SIGSEGV, wrong output, etc.)
 - **skipped (reason)** — not suitable as a test, e.g.:
   - *already covered* — passes jmcc out of the box, no new coverage
   - *requires external lib* — depends on libraries beyond libc
@@ -15,7 +16,7 @@ C programs from [Rosetta Code](https://rosettacode.org/wiki/Category:C) used as 
 
 ## Summary
 
-Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
+Total: 1341 | Implemented: 1 | Breaks jmcc: 139 | Skipped: 1 | Remaining: 1200
 
 ## Tasks
 
@@ -36,16 +37,16 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 13 | A* search algorithm | not implemented | |
 | 14 | A+B | not implemented | |
 | 15 | Abbreviations, automatic | not implemented | |
-| 16 | Abbreviations, easy | not implemented | |
-| 17 | Abbreviations, simple | not implemented | |
-| 18 | ABC correlation | not implemented | |
+| 16 | Abbreviations, easy | breaks jmcc | compile error: expected type specifier |
+| 17 | Abbreviations, simple | breaks jmcc | compile error: expected type specifier |
+| 18 | ABC correlation | breaks jmcc | compile error: expected type specifier |
 | 19 | ABC problem | not implemented | |
 | 20 | ABC words | not implemented | |
 | 21 | Abelian sandpile model | not implemented | |
 | 22 | Abstract type | not implemented | |
 | 23 | Abundant odd numbers | not implemented | |
 | 24 | Abundant, deficient and perfect number classifications | not implemented | |
-| 25 | Accumulator factory | not implemented | |
+| 25 | Accumulator factory | breaks jmcc | compile error: unexpected token |
 | 26 | Achilles numbers | not implemented | |
 | 27 | Ackermann function | not implemented | |
 | 28 | Active Directory/Connect | not implemented | |
@@ -53,13 +54,13 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 30 | Active object | not implemented | |
 | 31 | Addition chains | not implemented | |
 | 32 | Addition-chain exponentiation | not implemented | |
-| 33 | Additive primes | not implemented | |
+| 33 | Additive primes | breaks jmcc | wrong output |
 | 34 | Address of a variable | not implemented | |
 | 35 | Air mass | not implemented | |
-| 36 | AKS test for primes | not implemented | |
+| 36 | AKS test for primes | breaks jmcc | compile error: parse failure |
 | 37 | Align columns | not implemented | |
 | 38 | Aliquot sequence classifications | not implemented | |
-| 39 | Almost prime | not implemented | |
+| 39 | Almost prime | breaks jmcc | compile error: parse failure |
 | 40 | Alternade words | not implemented | |
 | 41 | Amb | not implemented | |
 | 42 | Amicable pairs | not implemented | |
@@ -93,20 +94,20 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 70 | Array length | not implemented | |
 | 71 | Arrays | not implemented | |
 | 72 | Ascending primes | not implemented | |
-| 73 | ASCII art diagram converter | not implemented | |
+| 73 | ASCII art diagram converter | breaks jmcc | compile error: parse failure |
 | 74 | ASCII control characters | not implemented | |
 | 75 | Aspect oriented programming | not implemented | |
-| 76 | Assertions | not implemented | |
+| 76 | Assertions | breaks jmcc | wrong exit code |
 | 77 | Associative array/Creation | not implemented | |
 | 78 | Associative array/Iteration | not implemented | |
 | 79 | Atomic updates | not implemented | |
 | 80 | Attractive numbers | not implemented | |
 | 81 | Average loop length | not implemented | |
-| 82 | Averages/Arithmetic mean | not implemented | |
+| 82 | Averages/Arithmetic mean | breaks jmcc | SIGSEGV |
 | 83 | Averages/Mean angle | not implemented | |
 | 84 | Averages/Mean time of day | not implemented | |
-| 85 | Averages/Median | not implemented | |
-| 86 | Averages/Mode | not implemented | |
+| 85 | Averages/Median | breaks jmcc | SIGSEGV |
+| 86 | Averages/Mode | breaks jmcc | SIGSEGV |
 | 87 | Averages/Pythagorean means | not implemented | |
 | 88 | Averages/Root mean square | not implemented | |
 | 89 | Averages/Simple moving average | not implemented | |
@@ -114,24 +115,24 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 91 | Babbage problem | not implemented | |
 | 92 | Bacon cipher | not implemented | |
 | 93 | Balanced brackets | not implemented | |
-| 94 | Balanced ternary | not implemented | |
+| 94 | Balanced ternary | breaks jmcc | compile error: parse failure |
 | 95 | Banker's algorithm | not implemented | |
 | 96 | Barnsley fern | not implemented | |
 | 97 | Base 16 numbers needing a to f | not implemented | |
 | 98 | Base64 decode data | not implemented | |
 | 99 | Base64 encode data | not implemented | |
-| 100 | Bell numbers | not implemented | |
+| 100 | Bell numbers | breaks jmcc | compile error: unexpected token |
 | 101 | Benford's law | not implemented | |
 | 102 | Bernoulli numbers | not implemented | |
 | 103 | Bernoulli's triangle | not implemented | |
 | 104 | Bernstein basis polynomials | not implemented | |
-| 105 | Best shuffle | not implemented | |
+| 105 | Best shuffle | breaks jmcc | compile error: expected type specifier |
 | 106 | Bilinear interpolation | not implemented | |
-| 107 | Bin given limits | not implemented | |
+| 107 | Bin given limits | breaks jmcc | compile error: unexpected token |
 | 108 | Binary digits | not implemented | |
 | 109 | Binary search | not implemented | |
 | 110 | Binary strings | not implemented | |
-| 111 | Binomial transform | not implemented | |
+| 111 | Binomial transform | breaks jmcc | compile error: expected type specifier |
 | 112 | Bioinformatics/Base count | not implemented | |
 | 113 | Bioinformatics/Sequence mutation | not implemented | |
 | 114 | Biorhythms | not implemented | |
@@ -154,7 +155,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 131 | Blum integer | not implemented | |
 | 132 | Boids | not implemented | |
 | 133 | Boolean values | not implemented | |
-| 134 | Box the compass | not implemented | |
+| 134 | Box the compass | breaks jmcc | wrong output |
 | 135 | Brace expansion | not implemented | |
 | 136 | Brazilian numbers | not implemented | |
 | 137 | Brownian tree | not implemented | |
@@ -169,7 +170,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 146 | Call a foreign-language function | not implemented | |
 | 147 | Call a function | not implemented | |
 | 148 | Call a function in a shared library | not implemented | |
-| 149 | Call an object method | not implemented | |
+| 149 | Call an object method | breaks jmcc | compile error: lvalue check |
 | 150 | Calmo numbers | not implemented | |
 | 151 | CalmoSoft primes | not implemented | |
 | 152 | Canny edge detector | not implemented | |
@@ -177,31 +178,31 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 154 | Cantor set | not implemented | |
 | 155 | Card shuffles | not implemented | |
 | 156 | Carmichael 3 strong pseudoprimes | not implemented | |
-| 157 | Cartesian product of two or more lists | not implemented | |
+| 157 | Cartesian product of two or more lists | breaks jmcc | wrong output |
 | 158 | Case-sensitivity of identifiers | not implemented | |
 | 159 | Casting out nines | not implemented | |
 | 160 | Catalan numbers | not implemented | |
 | 161 | Catalan numbers/Pascal's triangle | not implemented | |
 | 162 | Catamorphism | not implemented | |
 | 163 | Catmull–Clark subdivision surface | not implemented | |
-| 164 | Centroid of a set of N-dimensional points | not implemented | |
+| 164 | Centroid of a set of N-dimensional points | breaks jmcc | compile error: parse failure |
 | 165 | Change e letters to i in words | not implemented | |
 | 166 | Changeable words | not implemented | |
-| 167 | Chaocipher | not implemented | |
+| 167 | Chaocipher | breaks jmcc | compile error: parse failure |
 | 168 | Chaos game | not implemented | |
 | 169 | Character codes | not implemented | |
 | 170 | Chat server | not implemented | |
 | 171 | Chebyshev coefficients | not implemented | |
-| 172 | Check if a polygon overlaps with a rectangle | not implemented | |
-| 173 | Check if two polygons overlap | not implemented | |
+| 172 | Check if a polygon overlaps with a rectangle | breaks jmcc | compile error: parse failure |
+| 173 | Check if two polygons overlap | breaks jmcc | compile error: parse failure |
 | 174 | Check input device is a terminal | not implemented | |
 | 175 | Check output device is a terminal | not implemented | |
 | 176 | Check that file exists | not implemented | |
 | 177 | Checkpoint synchronization | not implemented | |
-| 178 | Chemical calculator | not implemented | |
+| 178 | Chemical calculator | breaks jmcc | compile error: expected type specifier |
 | 179 | Chernick's Carmichael numbers | not implemented | |
 | 180 | Cheryl's birthday | not implemented | |
-| 181 | Chinese remainder theorem | not implemented | |
+| 181 | Chinese remainder theorem | breaks jmcc | compile error: parse failure |
 | 182 | Chinese zodiac | not implemented | |
 | 183 | User:Chkas | not implemented | |
 | 184 | Cholesky decomposition | not implemented | |
@@ -224,11 +225,11 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 201 | Colour pinstripe/Display | not implemented | |
 | 202 | Combinations | not implemented | |
 | 203 | Combinations and permutations | not implemented | |
-| 204 | Combinations with repetitions | not implemented | |
-| 205 | Comma quibbling | not implemented | |
-| 206 | Command-line arguments | not implemented | |
+| 204 | Combinations with repetitions | breaks jmcc | compile error: parse failure |
+| 205 | Comma quibbling | breaks jmcc | compile error: expected type specifier |
+| 206 | Command-line arguments | breaks jmcc | wrong output |
 | 207 | Comments | not implemented | |
-| 208 | Common sorted list | not implemented | |
+| 208 | Common sorted list | breaks jmcc | compile error: expected type specifier |
 | 209 | Compare a list of strings | not implemented | |
 | 210 | Compare length of two strings | not implemented | |
 | 211 | Compare sorting algorithms' performance | not implemented | |
@@ -249,14 +250,14 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 226 | Consecutive primes with ascending or descending differences | not implemented | |
 | 227 | Consistent overhead byte stuffing | not implemented | |
 | 228 | Constrained random points on a circle | not implemented | |
-| 229 | Continued fraction | not implemented | |
+| 229 | Continued fraction | breaks jmcc | wrong output |
 | 230 | Continued fraction/Arithmetic/Construct from rational number | not implemented | |
 | 231 | Continued fraction/Arithmetic/G(matrix ng, continued fraction n) | not implemented | |
 | 232 | Continued fraction/Arithmetic/G(matrix ng, continued fraction n1, continued fraction n2) | not implemented | |
 | 233 | Convert day count to ordinal date | not implemented | |
 | 234 | Convert decimal number to rational | not implemented | |
 | 235 | Convert seconds to compound duration | not implemented | |
-| 236 | Convex hull | not implemented | |
+| 236 | Convex hull | breaks jmcc | compile error: expected type specifier |
 | 237 | Conway's Game of Life | not implemented | |
 | 238 | Coprime triplets | not implemented | |
 | 239 | Coprimes | not implemented | |
@@ -267,7 +268,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 244 | Count in factors | not implemented | |
 | 245 | Count in octal | not implemented | |
 | 246 | Count occurrences of a substring | not implemented | |
-| 247 | Count the coins | not implemented | |
+| 247 | Count the coins | breaks jmcc | compile error: parse failure |
 | 248 | Count the occurrence of each digit in e | not implemented | |
 | 249 | Cousin primes | not implemented | |
 | 250 | Cramer's rule | not implemented | |
@@ -283,40 +284,40 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 260 | Cubic special primes | not implemented | |
 | 261 | Cumulative standard deviation | not implemented | |
 | 262 | Currency | not implemented | |
-| 263 | Currying | not implemented | |
+| 263 | Currying | breaks jmcc | compile error: parse failure |
 | 264 | Curzon numbers | not implemented | |
 | 265 | CUSIP | not implemented | |
-| 266 | Cut a rectangle | not implemented | |
-| 267 | Cycle detection | not implemented | |
+| 266 | Cut a rectangle | breaks jmcc | compile error: parse failure |
+| 267 | Cycle detection | breaks jmcc | compile error: lvalue check |
 | 268 | Damm algorithm | not implemented | |
-| 269 | Data Encryption Standard | not implemented | |
+| 269 | Data Encryption Standard | breaks jmcc | compile error: parse failure |
 | 270 | Date format | not implemented | |
 | 271 | Date manipulation | not implemented | |
 | 272 | Day of the week | not implemented | |
 | 273 | Day of the week of Christmas and New Year | not implemented | |
 | 274 | Days between dates | not implemented | |
 | 275 | De Polignac numbers | not implemented | |
-| 276 | Deal cards for FreeCell | not implemented | |
+| 276 | Deal cards for FreeCell | breaks jmcc | compile error: parse failure |
 | 277 | Death Star | not implemented | |
 | 278 | Deceptive numbers | not implemented | |
 | 279 | Decision tables | not implemented | |
 | 280 | Deconvolution/1D | not implemented | |
 | 281 | Deconvolution/2D+ | not implemented | |
-| 282 | Decorate-sort-undecorate idiom | not implemented | |
-| 283 | Deepcopy | not implemented | |
-| 284 | Delegates | not implemented | |
+| 282 | Decorate-sort-undecorate idiom | breaks jmcc | compile error: expected type specifier |
+| 283 | Deepcopy | breaks jmcc | wrong output |
+| 284 | Delegates | breaks jmcc | SIGSEGV |
 | 285 | Delete a file | not implemented | |
 | 286 | Department numbers | not implemented | |
 | 287 | Descending primes | not implemented | |
 | 288 | Detect division by zero | not implemented | |
-| 289 | Determinant and permanent | not implemented | |
+| 289 | Determinant and permanent | breaks jmcc | SIGSEGV |
 | 290 | Determine if a string has all the same characters | not implemented | |
 | 291 | Determine if a string has all unique characters | not implemented | |
 | 292 | Determine if a string is collapsible | not implemented | |
 | 293 | Determine if a string is numeric | not implemented | |
 | 294 | Determine if a string is squeezable | not implemented | |
 | 295 | Determine if only one instance is running | not implemented | |
-| 296 | Determine if two triangles overlap | not implemented | |
+| 296 | Determine if two triangles overlap | breaks jmcc | SIGSEGV |
 | 297 | Dice game probabilities | not implemented | |
 | 298 | Digit fifth powers | not implemented | |
 | 299 | Digital root | not implemented | |
@@ -350,16 +351,16 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 327 | Draw a sphere | not implemented | |
 | 328 | Draw pixel 2 | not implemented | |
 | 329 | Dutch national flag problem | not implemented | |
-| 330 | Eban numbers | not implemented | |
+| 330 | Eban numbers | breaks jmcc | timeout |
 | 331 | Echo server | not implemented | |
 | 332 | Egyptian division | not implemented | |
-| 333 | EKG sequence convergence | not implemented | |
+| 333 | EKG sequence convergence | breaks jmcc | compile error: expected type specifier |
 | 334 | Element-wise operations | not implemented | |
 | 335 | Elementary cellular automaton | not implemented | |
 | 336 | Elementary cellular automaton/Random number generator | not implemented | |
 | 337 | Elliptic curve arithmetic | not implemented | |
 | 338 | Elliptic Curve Digital Signature Algorithm | not implemented | |
-| 339 | Emirp primes | not implemented | |
+| 339 | Emirp primes | breaks jmcc | compile error: parse failure |
 | 340 | Empty directory | not implemented | |
 | 341 | Empty program | not implemented | |
 | 342 | Empty string | not implemented | |
@@ -382,7 +383,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 359 | Even or odd | not implemented | |
 | 360 | Events | not implemented | |
 | 361 | Evolutionary algorithm | not implemented | |
-| 362 | Exactly three adjacent 3 in lists | not implemented | |
+| 362 | Exactly three adjacent 3 in lists | breaks jmcc | compile error: expected type specifier |
 | 363 | Exceptions | not implemented | |
 | 364 | Exceptions/Catch an exception thrown in a nested call | not implemented | |
 | 365 | Executable library | not implemented | |
@@ -393,20 +394,20 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 370 | Execute HQ9+ | not implemented | |
 | 371 | Execute SNUSP | not implemented | |
 | 372 | Experimental Verification of the NKT Law: Interpolating the Masses of 8 Planets Using NASA Data as of 30–31/12/2024 | not implemented | |
-| 373 | Exponentiation operator | not implemented | |
-| 374 | Exponentiation order | not implemented | |
+| 373 | Exponentiation operator | breaks jmcc | wrong output |
+| 374 | Exponentiation order | breaks jmcc | link error |
 | 375 | Extend your language | not implemented | |
 | 376 | Extensible prime generator | not implemented | |
 | 377 | Extra primes | not implemented | |
-| 378 | Extract file extension | not implemented | |
-| 379 | Extreme floating point values | not implemented | |
+| 378 | Extract file extension | breaks jmcc | compile error: parse failure |
+| 379 | Extreme floating point values | breaks jmcc | wrong output |
 | 380 | Extreme primes | not implemented | |
 | 381 | Factorial | not implemented | |
 | 382 | Factorions | not implemented | |
 | 383 | Factors of a Mersenne number | not implemented | |
 | 384 | Factors of an integer | not implemented | |
 | 385 | Fairshare between two and more | not implemented | |
-| 386 | Farey sequence | not implemented | |
+| 386 | Farey sequence | breaks jmcc | compile error: parse failure |
 | 387 | Fast Fourier transform | not implemented | |
 | 388 | FASTA format | not implemented | |
 | 389 | Faulhaber's formula | not implemented | |
@@ -436,16 +437,16 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 413 | Find square difference | not implemented | |
 | 414 | Find squares n where n+1 is prime | not implemented | |
 | 415 | Find the intersection of a line with a plane | not implemented | |
-| 416 | Find the intersection of two lines | not implemented | |
-| 417 | Find the last Sunday of each month | not implemented | |
-| 418 | Find the missing permutation | not implemented | |
+| 416 | Find the intersection of two lines | breaks jmcc | compile error |
+| 417 | Find the last Sunday of each month | breaks jmcc | compile error: lvalue check |
+| 418 | Find the missing permutation | breaks jmcc | wrong output |
 | 419 | Find words which contain all the vowels | not implemented | |
 | 420 | Find words which contains more than 3 e vowels | not implemented | |
 | 421 | Find words whose first and last three letters are equal | not implemented | |
 | 422 | Find words with alternating vowels and consonants | not implemented | |
 | 423 | Finite state machine | not implemented | |
 | 424 | First 9 prime Fibonacci number | not implemented | |
-| 425 | First class environments | not implemented | |
+| 425 | First class environments | breaks jmcc | wrong output |
 | 426 | First perfect square in base n with n unique digits | not implemented | |
 | 427 | First power of 2 that has leading decimal digits of 12 | not implemented | |
 | 428 | First-class functions | not implemented | |
@@ -455,7 +456,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 432 | Flatten a list | not implemented | |
 | 433 | Flipping bits game | not implemented | |
 | 434 | Flow-control structures | not implemented | |
-| 435 | Floyd's triangle | not implemented | |
+| 435 | Floyd's triangle | breaks jmcc | compile error: parse failure |
 | 436 | Floyd-Warshall algorithm | not implemented | |
 | 437 | Forbidden numbers | not implemented | |
 | 438 | Forest fire | not implemented | |
@@ -463,7 +464,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 440 | Formal power series | not implemented | |
 | 441 | Formatted numeric output | not implemented | |
 | 442 | Fortunate numbers | not implemented | |
-| 443 | Forward difference | not implemented | |
+| 443 | Forward difference | breaks jmcc | SIGSEGV |
 | 444 | Four bit adder | not implemented | |
 | 445 | Four is magic | not implemented | |
 | 446 | Four is the number of letters in the ... | not implemented | |
@@ -484,7 +485,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 461 | Gauss-Jordan matrix inversion | not implemented | |
 | 462 | Gaussian elimination | not implemented | |
 | 463 | Gaussian primes | not implemented | |
-| 464 | General FizzBuzz | not implemented | |
+| 464 | General FizzBuzz | breaks jmcc | SIGSEGV |
 | 465 | Generate Chess960 starting position | not implemented | |
 | 466 | Generate lower case ASCII alphabet | not implemented | |
 | 467 | Generate random chess position | not implemented | |
@@ -511,7 +512,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 488 | GUI/Maximum window dimensions | not implemented | |
 | 489 | Hailstone sequence | not implemented | |
 | 490 | Halt and catch fire | not implemented | |
-| 491 | Hamming numbers | not implemented | |
+| 491 | Hamming numbers | breaks jmcc | compile error: unexpected token |
 | 492 | Handle a signal | not implemented | |
 | 493 | Happy numbers | not implemented | |
 | 494 | Harmonic series | not implemented | |
@@ -531,14 +532,14 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 508 | Higher-order functions | not implemented | |
 | 509 | Hilbert curve | not implemented | |
 | 510 | History variables | not implemented | |
-| 511 | Hofstadter Figure-Figure sequences | not implemented | |
+| 511 | Hofstadter Figure-Figure sequences | breaks jmcc | compile error: expected type specifier |
 | 512 | Hofstadter Q sequence | not implemented | |
 | 513 | Hofstadter-Conway $10,000 sequence | not implemented | |
 | 514 | Holidays related to Easter | not implemented | |
 | 515 | Honaker primes | not implemented | |
 | 516 | Honeycombs | not implemented | |
 | 517 | Horizontal sundial calculations | not implemented | |
-| 518 | Horner's rule for polynomial evaluation | not implemented | |
+| 518 | Horner's rule for polynomial evaluation | breaks jmcc | SIGSEGV |
 | 519 | Host introspection | not implemented | |
 | 520 | Hostname | not implemented | |
 | 521 | Hough transform | not implemented | |
@@ -549,7 +550,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 526 | Humble numbers | not implemented | |
 | 527 | Hunt the Wumpus | not implemented | |
 | 528 | I before E except after C | not implemented | |
-| 529 | IBAN | not implemented | |
+| 529 | IBAN | breaks jmcc | compile error: parse failure |
 | 530 | Iccanobif primes | not implemented | |
 | 531 | Identity matrix | not implemented | |
 | 532 | Idiomatically determine all the lowercase and uppercase letters | not implemented | |
@@ -560,7 +561,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 537 | Implicit type conversion | not implemented | |
 | 538 | Include a file | not implemented | |
 | 539 | Increasing gaps between consecutive Niven numbers | not implemented | |
-| 540 | Increment a numerical string | not implemented | |
+| 540 | Increment a numerical string | breaks jmcc | compile error: parse failure |
 | 541 | Infinity | not implemented | |
 | 542 | Inheritance/Multiple | not implemented | |
 | 543 | Inheritance/Single | not implemented | |
@@ -582,8 +583,8 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 559 | Iterators | not implemented | |
 | 560 | Jacobi symbol | not implemented | |
 | 561 | Jacobsthal numbers | not implemented | |
-| 562 | Jaro similarity | not implemented | |
-| 563 | Jensen's Device | not implemented | |
+| 562 | Jaro similarity | breaks jmcc | wrong output |
+| 563 | Jensen's Device | breaks jmcc | wrong output |
 | 564 | Jewels and stones | not implemented | |
 | 565 | Jordan-Pólya numbers | not implemented | |
 | 566 | JortSort | not implemented | |
@@ -595,7 +596,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 572 | Just in time processing on a character stream | not implemented | |
 | 573 | K-d tree | not implemented | |
 | 574 | K-means++ clustering | not implemented | |
-| 575 | Kahan summation | not implemented | |
+| 575 | Kahan summation | breaks jmcc | SIGSEGV |
 | 576 | Kaprekar numbers | not implemented | |
 | 577 | Kernighans large earthquake problem | not implemented | |
 | 578 | Keyboard input/Flush the keyboard buffer | not implemented | |
@@ -648,17 +649,17 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 625 | Literals/String | not implemented | |
 | 626 | Logical operations | not implemented | |
 | 627 | Logistic curve fitting in epidemiology | not implemented | |
-| 628 | Long multiplication | not implemented | |
+| 628 | Long multiplication | breaks jmcc | compile error: parse failure |
 | 629 | Long primes | not implemented | |
 | 630 | Long stairs | not implemented | |
 | 631 | Long year | not implemented | |
-| 632 | Longest common prefix | not implemented | |
+| 632 | Longest common prefix | breaks jmcc | compile error: parse failure |
 | 633 | Longest common subsequence | not implemented | |
 | 634 | Longest common substring | not implemented | |
 | 635 | Longest common suffix | not implemented | |
 | 636 | Longest increasing subsequence | not implemented | |
 | 637 | Longest string challenge | not implemented | |
-| 638 | Longest substrings without repeating characters | not implemented | |
+| 638 | Longest substrings without repeating characters | breaks jmcc | compile error: expected type specifier |
 | 639 | Look-and-say sequence | not implemented | |
 | 640 | Loop over multiple arrays simultaneously | not implemented | |
 | 641 | Loops/Break | not implemented | |
@@ -678,7 +679,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 655 | LU decomposition | not implemented | |
 | 656 | Lucas-Lehmer test | not implemented | |
 | 657 | Lucky and even lucky numbers | not implemented | |
-| 658 | Ludic numbers | not implemented | |
+| 658 | Ludic numbers | breaks jmcc | compile error: parse failure |
 | 659 | Luhn test of credit card numbers | not implemented | |
 | 660 | LZW compression | not implemented | |
 | 661 | MAC vendor lookup | not implemented | |
@@ -686,24 +687,24 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 663 | Mad Libs | not implemented | |
 | 664 | Magic 8-ball | not implemented | |
 | 665 | Magic constant | not implemented | |
-| 666 | Magic squares of doubly even order | not implemented | |
+| 666 | Magic squares of doubly even order | breaks jmcc | wrong output |
 | 667 | Magic squares of odd order | not implemented | |
-| 668 | Magic squares of singly even order | not implemented | |
+| 668 | Magic squares of singly even order | breaks jmcc | wrong output |
 | 669 | Magnanimous numbers | not implemented | |
 | 670 | Main step of GOST 28147-89 | not implemented | |
-| 671 | Make directory path | not implemented | |
-| 672 | Man or boy test | not implemented | |
+| 671 | Make directory path | breaks jmcc | link error |
+| 672 | Man or boy test | breaks jmcc | compile error: lvalue check |
 | 673 | Mandelbrot set | not implemented | |
 | 674 | Map range | not implemented | |
 | 675 | Matrix chain multiplication | not implemented | |
 | 676 | Matrix digital rain | not implemented | |
-| 677 | Matrix multiplication | not implemented | |
-| 678 | Matrix transposition | not implemented | |
+| 677 | Matrix multiplication | breaks jmcc | SIGSEGV |
+| 678 | Matrix transposition | breaks jmcc | SIGSEGV |
 | 679 | Matrix with two diagonals | not implemented | |
 | 680 | Matrix-exponentiation operator | not implemented | |
 | 681 | Maximum difference between adjacent elements of list | not implemented | |
 | 682 | Maximum triangle path sum | not implemented | |
-| 683 | Mayan numerals | not implemented | |
+| 683 | Mayan numerals | breaks jmcc | compile error: unexpected token |
 | 684 | Maze generation | not implemented | |
 | 685 | Maze solving | not implemented | |
 | 686 | McNuggets problem | not implemented | |
@@ -719,7 +720,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 696 | Metaprogramming | not implemented | |
 | 697 | Metered concurrency | not implemented | |
 | 698 | Metronome | not implemented | |
-| 699 | Mian-Chowla sequence | not implemented | |
+| 699 | Mian-Chowla sequence | breaks jmcc | wrong output |
 | 700 | Middle three digits | not implemented | |
 | 701 | Miller-Rabin primality test | not implemented | |
 | 702 | Mind boggling card trick | not implemented | |
@@ -731,9 +732,9 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 708 | Minimum primes | not implemented | |
 | 709 | Modular arithmetic | not implemented | |
 | 710 | Modular exponentiation | not implemented | |
-| 711 | Modular inverse | not implemented | |
+| 711 | Modular inverse | breaks jmcc | compile error: parse failure |
 | 712 | Modulinos | not implemented | |
-| 713 | Monads/List monad | not implemented | |
+| 713 | Monads/List monad | breaks jmcc | SIGSEGV |
 | 714 | Monads/Maybe monad | not implemented | |
 | 715 | Monte Carlo methods | not implemented | |
 | 716 | Montgomery reduction | not implemented | |
@@ -744,7 +745,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 721 | Motor | not implemented | |
 | 722 | Motzkin numbers | not implemented | |
 | 723 | Mouse position | not implemented | |
-| 724 | Move-to-front algorithm | not implemented | |
+| 724 | Move-to-front algorithm | breaks jmcc | SIGSEGV |
 | 725 | Multi-dimensional array | not implemented | |
 | 726 | Multifactorial | not implemented | |
 | 727 | Multiline shebang | not implemented | |
@@ -760,10 +761,10 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 737 | Mutex | not implemented | |
 | 738 | Mutual recursion | not implemented | |
 | 739 | Möbius function | not implemented | |
-| 740 | N'th | not implemented | |
+| 740 | N'th | breaks jmcc | compile error: expected type specifier |
 | 741 | N-body problem | not implemented | |
 | 742 | N-grams | not implemented | |
-| 743 | N-queens problem | not implemented | |
+| 743 | N-queens problem | breaks jmcc | compile error: expected type specifier |
 | 744 | N-smooth numbers | not implemented | |
 | 745 | Named parameters | not implemented | |
 | 746 | Naming conventions | not implemented | |
@@ -774,7 +775,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 751 | Nautical bell | not implemented | |
 | 752 | Negative base numbers | not implemented | |
 | 753 | Nested function | not implemented | |
-| 754 | Nested templated data | not implemented | |
+| 754 | Nested templated data | breaks jmcc | compile error |
 | 755 | Next highest int from digits | not implemented | |
 | 756 | Next special primes | not implemented | |
 | 757 | Nice primes | not implemented | |
@@ -785,9 +786,9 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 762 | Non-decimal radices/Input | not implemented | |
 | 763 | Non-decimal radices/Output | not implemented | |
 | 764 | Nonoblock | not implemented | |
-| 765 | Nth root | not implemented | |
+| 765 | Nth root | breaks jmcc | wrong output |
 | 766 | Null object | not implemented | |
-| 767 | Number names | not implemented | |
+| 767 | Number names | breaks jmcc | compile error: parse failure |
 | 768 | Number reversal game | not implemented | |
 | 769 | Numbers divisible by their individual digits, but not by the product of their digits | not implemented | |
 | 770 | Numbers in base 10 that are palindromic in bases 2, 4, and 16 | not implemented | |
@@ -808,7 +809,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 785 | O'Halloran numbers | not implemented | |
 | 786 | Odd and square numbers | not implemented | |
 | 787 | Odd word problem | not implemented | |
-| 788 | Old lady swallowed a fly | not implemented | |
+| 788 | Old lady swallowed a fly | breaks jmcc | compile error: parse failure |
 | 789 | Old Russian measure of length | not implemented | |
 | 790 | One of n lines in a file | not implemented | |
 | 791 | One-dimensional cellular automata | not implemented | |
@@ -828,7 +829,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 805 | Ormiston triples | not implemented | |
 | 806 | Own digits power sum | not implemented | |
 | 807 | P-value correction | not implemented | |
-| 808 | Padovan n-step number sequences | not implemented | |
+| 808 | Padovan n-step number sequences | breaks jmcc | compile error: expected type specifier |
 | 809 | Padovan sequence | not implemented | |
 | 810 | Pairs with common factors | not implemented | |
 | 811 | Palindrome dates | not implemented | |
@@ -880,8 +881,8 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 857 | Permutations/Derangements | not implemented | |
 | 858 | Permutations/Rank of a permutation | not implemented | |
 | 859 | Permuted multiples | not implemented | |
-| 860 | Pernicious numbers | not implemented | |
-| 861 | Phrase reversals | not implemented | |
+| 860 | Pernicious numbers | breaks jmcc | compile error: parse failure |
+| 861 | Phrase reversals | breaks jmcc | compile error: expected type specifier |
 | 862 | User:Phunanon | not implemented | |
 | 863 | Pi | not implemented | |
 | 864 | Pick random element | not implemented | |
@@ -902,7 +903,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 879 | Polynomial long division | not implemented | |
 | 880 | Polynomial regression | not implemented | |
 | 881 | Polyspiral | not implemented | |
-| 882 | Population count | not implemented | |
+| 882 | Population count | breaks jmcc | link error |
 | 883 | Power set | not implemented | |
 | 884 | Pragmatic directives | not implemented | |
 | 885 | Price fraction | not implemented | |
@@ -913,7 +914,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 890 | Prime groups | not implemented | |
 | 891 | Prime numbers whose neighboring pairs are tetraprimes | not implemented | |
 | 892 | Prime reciprocal sum | not implemented | |
-| 893 | Prime triangle | not implemented | |
+| 893 | Prime triangle | breaks jmcc | wrong output |
 | 894 | Primes - allocate descendants to their ancestors | not implemented | |
 | 895 | Primes whose first and last number is 3 | not implemented | |
 | 896 | Primes whose sum of digits is 25 | not implemented | |
@@ -923,8 +924,8 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 900 | Probabilistic choice | not implemented | |
 | 901 | Problem of Apollonius | not implemented | |
 | 902 | Product of divisors | not implemented | |
-| 903 | Product of min and max prime factors | not implemented | |
-| 904 | Program name | not implemented | |
+| 903 | Product of min and max prime factors | breaks jmcc | wrong output |
+| 904 | Program name | breaks jmcc | wrong output |
 | 905 | Program termination | not implemented | |
 | 906 | Proper divisors | not implemented | |
 | 907 | Pseudo-random numbers/Combined recursive generator MRG32k3a | not implemented | |
@@ -946,16 +947,16 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 923 | Quickselect algorithm | not implemented | |
 | 924 | Quine | not implemented | |
 | 925 | Radical of an integer | not implemented | |
-| 926 | Rainbow | not implemented | |
+| 926 | Rainbow | breaks jmcc | wrong output |
 | 927 | Ramer-Douglas-Peucker line simplification | not implemented | |
 | 928 | Ramsey's theorem | not implemented | |
 | 929 | Random Latin squares | not implemented | |
 | 930 | Random number generator (device) | not implemented | |
 | 931 | Random number generator (included) | not implemented | |
 | 932 | Random numbers | not implemented | |
-| 933 | Range consolidation | not implemented | |
+| 933 | Range consolidation | breaks jmcc | compile error: expected type specifier |
 | 934 | Range expansion | not implemented | |
-| 935 | Range extraction | not implemented | |
+| 935 | Range extraction | breaks jmcc | compile error: unexpected token |
 | 936 | Ranking methods | not implemented | |
 | 937 | Rate counter | not implemented | |
 | 938 | Rational calculator | not implemented | |
@@ -971,7 +972,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 948 | Recaman's sequence | not implemented | |
 | 949 | Record sound | not implemented | |
 | 950 | Reduced row echelon form | not implemented | |
-| 951 | Regular expressions | not implemented | |
+| 951 | Regular expressions | breaks jmcc | SIGSEGV |
 | 952 | Remote agent/Agent interface | not implemented | |
 | 953 | Remote agent/Agent logic | not implemented | |
 | 954 | Remote agent/Simulation | not implemented | |
@@ -980,13 +981,13 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 957 | Remove vowels from a string | not implemented | |
 | 958 | Rename a file | not implemented | |
 | 959 | Rendezvous | not implemented | |
-| 960 | Rep-string | not implemented | |
+| 960 | Rep-string | breaks jmcc | compile error: parse failure |
 | 961 | Repeat | not implemented | |
-| 962 | Repeat a string | not implemented | |
-| 963 | Resistor mesh | not implemented | |
+| 962 | Repeat a string | breaks jmcc | compile error: parse failure |
+| 963 | Resistor mesh | breaks jmcc | compile error: parse failure |
 | 964 | Retrieve and search chat history | not implemented | |
-| 965 | Return multiple values | not implemented | |
-| 966 | Reverse a string | not implemented | |
+| 965 | Return multiple values | breaks jmcc | wrong output |
+| 966 | Reverse a string | breaks jmcc | SIGSEGV |
 | 967 | Reverse words in a string | not implemented | |
 | 968 | RIPEMD-160 | not implemented | |
 | 969 | User:Roboticist-Tav | not implemented | |
@@ -1016,16 +1017,16 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 993 | Scope/Function names and labels | not implemented | |
 | 994 | Sealed classes and methods | not implemented | |
 | 995 | Search a list | not implemented | |
-| 996 | Search a list of records | not implemented | |
+| 996 | Search a list of records | breaks jmcc | SIGSEGV |
 | 997 | Search in paragraph's text | not implemented | |
 | 998 | Secure temporary file | not implemented | |
 | 999 | SEDOLs | not implemented | |
 | 1000 | Selectively replace multiple instances of a character within a string | not implemented | |
-| 1001 | Self numbers | not implemented | |
+| 1001 | Self numbers | breaks jmcc | timeout |
 | 1002 | Self-contained numbers | not implemented | |
 | 1003 | Self-describing numbers | not implemented | |
 | 1004 | Semaphore | not implemented | |
-| 1005 | Semiprime | not implemented | |
+| 1005 | Semiprime | breaks jmcc | compile error: parse failure |
 | 1006 | Semordnilap | not implemented | |
 | 1007 | SEND + MORE = MONEY | not implemented | |
 | 1008 | Send email | not implemented | |
@@ -1036,7 +1037,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1013 | Sequence: smallest number greater than previous term with exactly n divisors | not implemented | |
 | 1014 | Sequence: smallest number with exactly n divisors | not implemented | |
 | 1015 | Set | not implemented | |
-| 1016 | Set consolidation | not implemented | |
+| 1016 | Set consolidation | breaks jmcc | compile error: parse failure |
 | 1017 | Set of real numbers | not implemented | |
 | 1018 | Set puzzle | not implemented | |
 | 1019 | Seven-sided dice from five-sided dice | not implemented | |
@@ -1046,10 +1047,10 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1023 | SHA-256 | not implemented | |
 | 1024 | SHA-256 Merkle tree | not implemented | |
 | 1025 | Shell one-liner | not implemented | |
-| 1026 | Shift list elements to left by 3 | not implemented | |
+| 1026 | Shift list elements to left by 3 | breaks jmcc | compile error: expected type specifier |
 | 1027 | Shoelace formula for polygonal area | not implemented | |
-| 1028 | Short-circuit evaluation | not implemented | |
-| 1029 | Shortest common supersequence | not implemented | |
+| 1028 | Short-circuit evaluation | breaks jmcc | wrong output |
+| 1029 | Shortest common supersequence | breaks jmcc | compile error |
 | 1030 | Show ASCII table | not implemented | |
 | 1031 | Show the (decimal) value of a number of 1s appended with a 3, then squared | not implemented | |
 | 1032 | Show the epoch | not implemented | |
@@ -1087,7 +1088,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1064 | Sockets | not implemented | |
 | 1065 | Sokoban | not implemented | |
 | 1066 | Soloway's recurring rainfall | not implemented | |
-| 1067 | Solve a Hidato puzzle | not implemented | |
+| 1067 | Solve a Hidato puzzle | breaks jmcc | compile error: parse failure |
 | 1068 | Solve the no connection puzzle | not implemented | |
 | 1069 | Sort a list of object identifiers | not implemented | |
 | 1070 | Sort an array of composite structures | not implemented | |
@@ -1095,34 +1096,34 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1072 | Sort disjoint sublist | not implemented | |
 | 1073 | Sort numbers lexicographically | not implemented | |
 | 1074 | Sort stability | not implemented | |
-| 1075 | Sort the letters of string in alphabetical order | not implemented | |
+| 1075 | Sort the letters of string in alphabetical order | breaks jmcc | SIGSEGV |
 | 1076 | Sort three variables | not implemented | |
-| 1077 | Sort using a custom comparator | not implemented | |
+| 1077 | Sort using a custom comparator | breaks jmcc | SIGSEGV |
 | 1078 | Sorting algorithms/Bead sort | not implemented | |
 | 1079 | Sorting algorithms/Bogosort | not implemented | |
 | 1080 | Sorting algorithms/Bubble sort | not implemented | |
-| 1081 | Sorting algorithms/Circle sort | not implemented | |
-| 1082 | Sorting algorithms/Cocktail sort | not implemented | |
+| 1081 | Sorting algorithms/Circle sort | breaks jmcc | compile error: parse failure |
+| 1082 | Sorting algorithms/Cocktail sort | breaks jmcc | compile error: expected type specifier |
 | 1083 | Sorting algorithms/Cocktail sort with shifting bounds | not implemented | |
 | 1084 | Sorting algorithms/Comb sort | not implemented | |
 | 1085 | Sorting algorithms/Counting sort | not implemented | |
-| 1086 | Sorting algorithms/Cycle sort | not implemented | |
+| 1086 | Sorting algorithms/Cycle sort | breaks jmcc | compile error: expected type specifier |
 | 1087 | Sorting algorithms/Gnome sort | not implemented | |
 | 1088 | Sorting algorithms/Heapsort | not implemented | |
-| 1089 | Sorting algorithms/Insertion sort | not implemented | |
+| 1089 | Sorting algorithms/Insertion sort | breaks jmcc | compile error: expected type specifier |
 | 1090 | Sorting algorithms/Merge sort | not implemented | |
 | 1091 | Sorting algorithms/Pancake sort | not implemented | |
 | 1092 | Sorting algorithms/Patience sort | not implemented | |
-| 1093 | Sorting algorithms/Permutation sort | not implemented | |
+| 1093 | Sorting algorithms/Permutation sort | breaks jmcc | compile error: expected type specifier |
 | 1094 | Sorting algorithms/Quicksort | not implemented | |
 | 1095 | Sorting algorithms/Radix sort | not implemented | |
 | 1096 | Sorting algorithms/Selection sort | not implemented | |
 | 1097 | Sorting algorithms/Shell sort | not implemented | |
 | 1098 | Sorting algorithms/Sleep sort | not implemented | |
 | 1099 | Sorting algorithms/Stooge sort | not implemented | |
-| 1100 | Sorting algorithms/Strand sort | not implemented | |
+| 1100 | Sorting algorithms/Strand sort | breaks jmcc | compile error: parse failure |
 | 1101 | Sorting algorithms/Tree sort on a linked list | not implemented | |
-| 1102 | Soundex | not implemented | |
+| 1102 | Soundex | breaks jmcc | wrong output |
 | 1103 | Sparkline in unicode | not implemented | |
 | 1104 | Special characters | not implemented | |
 | 1105 | Special divisors | not implemented | |
@@ -1140,12 +1141,12 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1117 | Square but not cube | not implemented | |
 | 1118 | Square form factorization | not implemented | |
 | 1119 | Square-free integers | not implemented | |
-| 1120 | Stable marriage problem | not implemented | |
+| 1120 | Stable marriage problem | breaks jmcc | SIGSEGV |
 | 1121 | Stack | not implemented | |
 | 1122 | Stack traces | not implemented | |
 | 1123 | Stair-climbing puzzle | not implemented | |
 | 1124 | Start from a main routine | not implemented | |
-| 1125 | State name puzzle | not implemented | |
+| 1125 | State name puzzle | breaks jmcc | wrong output |
 | 1126 | Statistics/Basic | not implemented | |
 | 1127 | Statistics/Normal distribution | not implemented | |
 | 1128 | Steady squares | not implemented | |
@@ -1165,7 +1166,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1142 | String concatenation | not implemented | |
 | 1143 | String interpolation (included) | not implemented | |
 | 1144 | String length | not implemented | |
-| 1145 | String matching | not implemented | |
+| 1145 | String matching | breaks jmcc | compile error: parse failure |
 | 1146 | String prepend | not implemented | |
 | 1147 | Strip a set of characters from a string | not implemented | |
 | 1148 | Strip block comments | not implemented | |
@@ -1193,7 +1194,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1170 | Sum of first n cubes | not implemented | |
 | 1171 | Sum of primes in odd positions is prime | not implemented | |
 | 1172 | Sum of square and cube digits of an integer are primes | not implemented | |
-| 1173 | Sum of squares | not implemented | |
+| 1173 | Sum of squares | breaks jmcc | SIGSEGV |
 | 1174 | Sum of the digits of n is substring of n | not implemented | |
 | 1175 | Sum of two adjacent numbers are primes | not implemented | |
 | 1176 | Sum to 100 | not implemented | |
@@ -1205,16 +1206,16 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1182 | Superellipse | not implemented | |
 | 1183 | Superpermutation minimisation | not implemented | |
 | 1184 | Sutherland-Hodgman polygon clipping | not implemented | |
-| 1185 | Symmetric difference | not implemented | |
+| 1185 | Symmetric difference | breaks jmcc | wrong output |
 | 1186 | Synchronous concurrency | not implemented | |
-| 1187 | System time | not implemented | |
+| 1187 | System time | breaks jmcc | compile error: parse failure |
 | 1188 | Table creation | not implemented | |
 | 1189 | Table creation/Postal addresses | not implemented | |
 | 1190 | Take notes on the command line | not implemented | |
 | 1191 | Tarjan | not implemented | |
 | 1192 | Tau function | not implemented | |
 | 1193 | Tau number | not implemented | |
-| 1194 | Taxicab numbers | not implemented | |
+| 1194 | Taxicab numbers | breaks jmcc | compile error: lvalue check |
 | 1195 | Teacup rim text | not implemented | |
 | 1196 | Temperature conversion | not implemented | |
 | 1197 | Terminal control/Clear the screen | not implemented | |
@@ -1222,13 +1223,13 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1199 | Terminal control/Cursor movement | not implemented | |
 | 1200 | Terminal control/Cursor positioning | not implemented | |
 | 1201 | Terminal control/Dimensions | not implemented | |
-| 1202 | Terminal control/Display an extended character | not implemented | |
+| 1202 | Terminal control/Display an extended character | breaks jmcc | binary output |
 | 1203 | Terminal control/Hiding the cursor | not implemented | |
 | 1204 | Terminal control/Inverse video | not implemented | |
 | 1205 | Terminal control/Positional read | not implemented | |
 | 1206 | Terminal control/Preserve screen | not implemented | |
 | 1207 | Terminal control/Ringing the terminal bell | not implemented | |
-| 1208 | Terminal control/Unicode output | not implemented | |
+| 1208 | Terminal control/Unicode output | breaks jmcc | compile error: unicode escapes unsupported |
 | 1209 | Ternary logic | not implemented | |
 | 1210 | Test a function | not implemented | |
 | 1211 | Test integerness | not implemented | |
@@ -1241,7 +1242,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1218 | The ISAAC cipher | not implemented | |
 | 1219 | The Name Game | not implemented | |
 | 1220 | The sieve of Sundaram | not implemented | |
-| 1221 | The Twelve Days of Christmas | not implemented | |
+| 1221 | The Twelve Days of Christmas | breaks jmcc | binary output |
 | 1222 | Thiele's interpolation formula | not implemented | |
 | 1223 | Three word location | not implemented | |
 | 1224 | Thue-Morse | not implemented | |
@@ -1270,7 +1271,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1247 | Two sum | not implemented | |
 | 1248 | Two's complement | not implemented | |
 | 1249 | Type detection | not implemented | |
-| 1250 | Ulam numbers | not implemented | |
+| 1250 | Ulam numbers | breaks jmcc | timeout |
 | 1251 | Ulam spiral (for primes) | not implemented | |
 | 1252 | User:Uli Bellgardt | not implemented | |
 | 1253 | Ultra useful primes | not implemented | |
@@ -1315,7 +1316,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1292 | Vile and Dopey numbers | not implemented | |
 | 1293 | Visualize a tree | not implemented | |
 | 1294 | VList | not implemented | |
-| 1295 | Vogel's approximation method | not implemented | |
+| 1295 | Vogel's approximation method | breaks jmcc | wrong output |
 | 1296 | Voronoi diagram | not implemented | |
 | 1297 | Wagstaff primes | not implemented | |
 | 1298 | Walk a directory/Non-recursively | not implemented | |
@@ -1323,7 +1324,7 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1300 | Water collected between towers | not implemented | |
 | 1301 | Wave function collapse | not implemented | |
 | 1302 | Web scraping | not implemented | |
-| 1303 | Weird numbers | not implemented | |
+| 1303 | Weird numbers | breaks jmcc | compile error: expected type specifier |
 | 1304 | Welch's t-test | not implemented | |
 | 1305 | Wieferich primes | not implemented | |
 | 1306 | WiktionaryDumps to words | not implemented | |
@@ -1336,14 +1337,14 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1313 | Word frequency | not implemented | |
 | 1314 | Word wheel | not implemented | |
 | 1315 | Word wrap | not implemented | |
-| 1316 | Wordle comparison | not implemented | |
+| 1316 | Wordle comparison | breaks jmcc | SIGSEGV |
 | 1317 | Words containing "the" substring | not implemented | |
 | 1318 | Words from neighbour ones | not implemented | |
-| 1319 | World Cup group stage | not implemented | |
+| 1319 | World Cup group stage | breaks jmcc | compile error: parse failure |
 | 1320 | Write entire file | not implemented | |
 | 1321 | Write float arrays to a text file | not implemented | |
 | 1322 | Write language name in 3D ASCII | not implemented | |
-| 1323 | Write to Windows event log | not implemented | |
+| 1323 | Write to Windows event log | breaks jmcc | wrong output |
 | 1324 | Xiaolin Wu's line algorithm | not implemented | |
 | 1325 | XML validation | not implemented | |
 | 1326 | XML/DOM serialization | not implemented | |
@@ -1357,8 +1358,8 @@ Total: 1341 | Implemented: 1 | Skipped: 1 | Remaining: 1339
 | 1334 | Yin and yang | not implemented | |
 | 1335 | Zebra puzzle | not implemented | |
 | 1336 | Zeckendorf arithmetic | not implemented | |
-| 1337 | Zeckendorf number representation | not implemented | |
+| 1337 | Zeckendorf number representation | breaks jmcc | compile error: parse failure |
 | 1338 | Zero to the zero power | not implemented | |
 | 1339 | Zhang-Suen thinning algorithm | not implemented | |
 | 1340 | Zig-zag matrix | not implemented | |
-| 1341 | Zsigmondy numbers | not implemented | |
+| 1341 | Zsigmondy numbers | breaks jmcc | compile error: parse failure |
