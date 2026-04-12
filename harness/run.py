@@ -153,11 +153,13 @@ def compile_with_reference(source_path, compiler, output_path, std="c11"):
     }
 
 
-def compile_with_jmcc(source_path, output_asm_path, defines=None):
+def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=None):
     """Compile a C file with JMCC (runs on host, Python)."""
     cmd = [sys.executable, str(PROJECT_DIR / "jmcc.py"), source_path, "-o", output_asm_path]
     for d in (defines or []):
         cmd.extend(["-D", d])
+    for p in (include_paths or []):
+        cmd.extend(["-I", p])
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -260,6 +262,7 @@ def parse_test_metadata(source_path):
         "standard_ref": "",
         "multi_file": [],
         "defines": [],
+        "include_paths": [],
     }
 
     stdout_lines = []
@@ -313,6 +316,10 @@ def parse_test_metadata(source_path):
                 defs = comment[8:].strip()
                 metadata["defines"] = [d.strip() for d in defs.replace(",", " ").split() if d.strip()]
                 in_stdout = False
+            elif comment.startswith("INCLUDE_PATHS:"):
+                paths = comment[14:].strip()
+                metadata["include_paths"] = [p.strip() for p in paths.replace(",", " ").split() if p.strip()]
+                in_stdout = False
             elif comment.startswith("MULTI_FILE:"):
                 files = comment[11:].strip()
                 metadata["multi_file"] = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
@@ -351,8 +358,20 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
         asm_path = str(output_dir / f"{test_name}.s")
         bin_path = str(output_dir / f"{test_name}")
 
+        # Resolve include paths relative to test file directory
+        test_dir = os.path.dirname(os.path.abspath(source_path))
+        inc_paths = []
+        for p in metadata.get("include_paths", []):
+            inc_paths.append(os.path.join(test_dir, p) if not os.path.isabs(p) else p)
+        # Auto-add subdirectories of the test file's directory
+        for entry in os.listdir(test_dir):
+            subdir = os.path.join(test_dir, entry)
+            if os.path.isdir(subdir) and entry != "helpers":
+                inc_paths.append(subdir)
+
         # Compile with JMCC
-        comp = compile_with_jmcc(source_path, asm_path, defines=metadata.get("defines"))
+        comp = compile_with_jmcc(source_path, asm_path, defines=metadata.get("defines"),
+                                 include_paths=inc_paths if inc_paths else None)
 
         if metadata["expect_compile_fail"]:
             if not comp["success"]:

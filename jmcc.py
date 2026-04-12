@@ -11,7 +11,7 @@ from jmcc.preprocessor import Preprocessor, Macro
 from jmcc.errors import JMCCError
 
 
-def compile_file(source_path: str, output_path: str, defines: list = None) -> bool:
+def compile_file(source_path: str, output_path: str, defines: list = None, include_paths: list = None) -> bool:
     """Compile a C source file to x86-64 assembly."""
     try:
         with open(source_path, "r") as f:
@@ -23,11 +23,17 @@ def compile_file(source_path: str, output_path: str, defines: list = None) -> bo
     try:
         # Preprocessing
         source_dir = os.path.dirname(os.path.abspath(source_path))
-        include_paths = [source_dir]
+        inc_paths = [source_dir]
         # Also search helpers/ subdirectory if it exists
         helpers_dir = os.path.join(source_dir, "helpers")
         if os.path.isdir(helpers_dir):
-            include_paths.append(helpers_dir)
+            inc_paths.append(helpers_dir)
+        # Add user-specified include paths
+        for p in (include_paths or []):
+            abs_p = os.path.abspath(p)
+            if abs_p not in inc_paths:
+                inc_paths.append(abs_p)
+        include_paths = inc_paths
         pp = Preprocessor(filename=source_path, include_paths=include_paths)
         # Apply -D defines
         for d in (defines or []):
@@ -68,9 +74,12 @@ def main():
                         help="Output assembly file (default: output.s)")
     parser.add_argument("-D", action="append", default=[], dest="defines",
                         help="Define preprocessor macro (-DNAME or -DNAME=VALUE)")
+    parser.add_argument("-I", action="append", default=[], dest="include_paths",
+                        help="Add directory to include search path")
     args = parser.parse_args()
 
-    success = compile_file(args.input, args.output, defines=args.defines)
+    success = compile_file(args.input, args.output, defines=args.defines,
+                           include_paths=args.include_paths)
     sys.exit(0 if success else 1)
 
 
