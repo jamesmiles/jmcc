@@ -514,7 +514,11 @@ class CodeGen:
                         elif ch == '\0': asm_str += "\\0"
                         elif ch == '"': asm_str += '\\"'
                         elif ch == '\\': asm_str += "\\\\"
-                        elif ord(ch) < 32 or ord(ch) > 126: asm_str += f"\\{ord(ch):03o}"
+                        elif ord(ch) > 126:
+                            # Encode non-ASCII as UTF-8 bytes
+                            for b in ch.encode('utf-8'):
+                                asm_str += f"\\{b:03o}"
+                        elif ord(ch) < 32: asm_str += f"\\{ord(ch):03o}"
                         else: asm_str += ch
                     self.emit(f'    .string "{asm_str}"')
 
