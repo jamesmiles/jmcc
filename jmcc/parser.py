@@ -1602,7 +1602,9 @@ class Parser:
             self.expect(TokenType.RBRACKET, "']'")
         self.typedefs[name] = type_spec
         self.skip_attribute()
-        # Handle comma-separated typedef names: typedef struct X *A, *B;
+        # Handle comma-separated typedef names: typedef struct X *A, B;
+        # Each name starts from the BASE type (without pointer from first declarator)
+        base_pd = type_spec.pointer_depth - (type_spec.pointer_depth if type_spec.pointer_depth > 0 else 0)
         while self.match(TokenType.COMMA):
             extra_ptrs = 0
             while self.match(TokenType.STAR):
@@ -1610,7 +1612,8 @@ class Parser:
             extra_name = self.expect(TokenType.IDENTIFIER, "typedef name").value
             from copy import copy
             extra_ts = copy(type_spec)
-            extra_ts.pointer_depth += extra_ptrs
+            # Reset to base type, then add this declarator's pointer depth
+            extra_ts.pointer_depth = extra_ptrs
             self.typedefs[extra_name] = extra_ts
         self.expect(TokenType.SEMICOLON, "';'")
         return TypedefDecl(type_spec=type_spec, name=name, line=t.line, col=t.col)
