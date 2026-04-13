@@ -221,6 +221,7 @@ class Parser:
                     is_extern=is_extern, struct_def=td.struct_def,
                     enum_def=td.enum_def,
                     is_func_ptr=td.is_func_ptr if pointer_depth == td.pointer_depth else False,
+                    array_sizes=td.array_sizes,
                 )
             elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
                             TokenType.INT, TokenType.LONG, TokenType.FLOAT,
@@ -1815,4 +1816,8 @@ class Parser:
                 self.expect(TokenType.RBRACKET, "']'")
             if inner_dims:
                 type_spec.array_sizes = inner_dims
+        # Typedef'd array type decays to pointer in function parameters
+        elif type_spec.is_array() and type_spec.array_sizes:
+            type_spec.pointer_depth += 1
+            type_spec.array_sizes = None
         return Param(type_spec=type_spec, name=name)
