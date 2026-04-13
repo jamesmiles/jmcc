@@ -758,7 +758,9 @@ class Parser:
             return IntLiteral(value=val, suffix=suffix, line=t.line, col=t.col)
 
         if self.match(TokenType.FLOAT_LITERAL):
-            return FloatLiteral(value=float(t.value.rstrip('fFlL')), line=t.line, col=t.col)
+            raw = t.value
+            is_single = raw[-1] in 'fF' if raw else False
+            return FloatLiteral(value=float(raw.rstrip('fFlL')), is_single=is_single, line=t.line, col=t.col)
 
         if self.match(TokenType.CHAR_LITERAL):
             return IntLiteral(value=ord(t.value), line=t.line, col=t.col)

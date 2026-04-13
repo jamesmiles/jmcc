@@ -282,6 +282,7 @@ class StringLiteral(Expr):
 @dataclass
 class FloatLiteral(Expr):
     value: float = 0.0
+    is_single: bool = False  # True for float (f suffix), False for double
 
 
 @dataclass

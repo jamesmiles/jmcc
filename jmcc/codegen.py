@@ -1096,6 +1096,7 @@ class CodeGen:
         self.params = {}
         self.static_locals = {}
         self.vla_sizes = {}  # VLA name -> stack offset of saved size
+        self.vla_dim_offsets = {}  # VLA name -> list of stack offsets for runtime inner dims
         self.stack_offset = -8  # -8(%rbp) is used by saved %rbx
         if hasattr(self, '_va_area_offset'):
             del self._va_area_offset
@@ -1377,7 +1378,12 @@ class CodeGen:
                 # Variable-length array: runtime stack allocation
                 self.gen_expr(first)  # size expression in %eax
                 elem_size = size
-                # Multiply by all remaining constant dimensions (e.g., char a[n][15])
+                # Check for struct element size
+                if decl.type_spec.struct_def:
+                    elem_size = decl.type_spec.struct_def.size_bytes()
+                # Collect runtime inner dimensions that need runtime multiply
+                runtime_inner_dims = []
+                # Multiply by all remaining dimensions (e.g., char a[n][15] or a[n][m])
                 for dim in decl.type_spec.array_sizes[1:]:
                     if isinstance(dim, IntLiteral):
                         elem_size *= dim.value
@@ -1385,14 +1391,38 @@ class CodeGen:
                         cv = self._try_eval_const(dim) if dim else None
                         if cv:
                             elem_size *= cv
+                        elif dim is not None:
+                            runtime_inner_dims.append(dim)
                 if elem_size != 1:
                     self.emit(f"    imull ${elem_size}, %eax")
+                # Multiply by runtime inner dimensions
+                for rdim in runtime_inner_dims:
+                    self.emit("    pushq %rax")  # save current total
+                    self.gen_expr(rdim)
+                    self.emit("    movl %eax, %ecx")
+                    self.emit("    popq %rax")
+                    self.emit("    imull %ecx, %eax")
                 # Save unaligned total size for sizeof
                 self.emit("    movslq %eax, %rax")
                 self.stack_offset -= 8
                 vla_size_off = self.stack_offset
                 self.emit(f"    movq %rax, {vla_size_off}(%rbp)")
                 self.vla_sizes[decl.name] = vla_size_off
+                # Save runtime inner dimension values for stride calculation during indexing
+                vla_dim_offsets = []
+                for rdim in runtime_inner_dims:
+                    self.emit("    pushq %rax")  # save size
+                    self.gen_expr(rdim)
+                    self.emit("    movslq %eax, %rax")
+                    self.stack_offset -= 8
+                    dim_off = self.stack_offset
+                    self.emit(f"    movq %rax, {dim_off}(%rbp)")
+                    self.emit("    popq %rax")  # restore size
+                    vla_dim_offsets.append(dim_off)
+                if not hasattr(self, 'vla_dim_offsets'):
+                    self.vla_dim_offsets = {}
+                if vla_dim_offsets:
+                    self.vla_dim_offsets[decl.name] = vla_dim_offsets
                 # Align to 16
                 self.emit("    addl $15, %eax")
                 self.emit("    andl $-16, %eax")
@@ -2818,6 +2848,13 @@ class CodeGen:
         if expr_type:
             is_unsigned = expr_type.is_unsigned
 
+        # Check for float element type — need special SSE load
+        if expr_type and expr_type.base == "float" and not expr_type.is_pointer() and elem_size == 4:
+            self.emit("    movss (%rax), %xmm0")
+            self.emit("    cvtss2sd %xmm0, %xmm0")
+            self.emit("    movq %xmm0, %rax")
+            return
+
         if elem_size == 1:
             if is_unsigned:
                 self.emit("    movzbl (%rax), %eax")
@@ -2865,7 +2902,7 @@ class CodeGen:
         if isinstance(expr, StringLiteral):
             return TypeSpec(base="char", pointer_depth=1)
         if isinstance(expr, FloatLiteral):
-            return TypeSpec(base="double")
+            return TypeSpec(base="float" if expr.is_single else "double")
         if isinstance(expr, UnaryOp) and expr.op == "-":
             return self.get_expr_type(expr.operand)
         if isinstance(expr, UnaryOp) and expr.op == "*":
@@ -2940,10 +2977,15 @@ class CodeGen:
             if rt and (rt.is_pointer() or rt.is_array()) and expr.op in ("+", "-"):
                 return TypeSpec(base=rt.base, pointer_depth=rt.pointer_depth + (1 if rt.is_array() else 0),
                                 struct_def=rt.struct_def, is_unsigned=rt.is_unsigned)
-            # Float arithmetic returns float
-            if (lt and lt.base in ("float", "double", "long double") and not lt.is_array()) or \
-               (rt and rt.base in ("float", "double", "long double") and not rt.is_array()) or \
-               isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral):
+            # Float arithmetic returns float or double based on operand types
+            l_is_fp = (lt and lt.base in ("float", "double", "long double") and not lt.is_array()) or isinstance(expr.left, FloatLiteral)
+            r_is_fp = (rt and rt.base in ("float", "double", "long double") and not rt.is_array()) or isinstance(expr.right, FloatLiteral)
+            if l_is_fp or r_is_fp:
+                # Both float -> float; otherwise double
+                l_single = (lt and lt.base == "float" and not lt.is_pointer() and not lt.is_array()) or (isinstance(expr.left, FloatLiteral) and expr.left.is_single)
+                r_single = (rt and rt.base == "float" and not rt.is_pointer() and not rt.is_array()) or (isinstance(expr.right, FloatLiteral) and expr.right.is_single)
+                if l_single and r_single:
+                    return TypeSpec(base="float")
                 return TypeSpec(base="double")
             # Shifts: result type is promoted type of LEFT operand only
             if expr.op in ("<<", ">>"):
@@ -3114,33 +3156,64 @@ class CodeGen:
         et = self.get_expr_type(expr)
         return et and et.base in ("float", "double", "long double") and not et.is_pointer() and not et.is_array()
 
-    def _gen_float_operands(self, expr):
-        """Load binary op operands into xmm0 (left) and xmm1 (right)."""
+    def _is_single_float(self, expr):
+        """Check if expression has specifically 'float' (single-precision) type."""
+        et = self.get_expr_type(expr)
+        return et and et.base == "float" and not et.is_pointer() and not et.is_array()
+
+    def _gen_float_operands(self, expr, use_single=False):
+        """Load binary op operands into xmm0 (left) and xmm1 (right).
+        If use_single is True, operands are kept/converted to single precision."""
         lt = self.get_expr_type(expr.left)
         if lt and lt.base in ("float", "double", "long double") and not lt.is_pointer() and not lt.is_array():
             self.gen_expr(expr.left)
             self.emit("    movq %rax, %xmm0")
+            # gen_load_var promotes float->double; convert back if we need single
+            if use_single and lt.base != "float":
+                self.emit("    cvtsd2ss %xmm0, %xmm0")
+            elif use_single and lt.base == "float":
+                # Value was promoted to double by gen_load_var; convert back to single
+                self.emit("    cvtsd2ss %xmm0, %xmm0")
         elif isinstance(expr.left, FloatLiteral):
             self.gen_expr(expr.left)
-            # Already in xmm0 from FloatLiteral codegen
+            # FloatLiteral codegen loads as double into xmm0
+            if use_single:
+                self.emit("    cvtsd2ss %xmm0, %xmm0")
         else:
             self.gen_expr(expr.left)
-            self.emit("    cvtsi2sd %eax, %xmm0")
+            if use_single:
+                self.emit("    cvtsi2ss %eax, %xmm0")
+            else:
+                self.emit("    cvtsi2sd %eax, %xmm0")
         self.emit("    subq $8, %rsp")
-        self.emit("    movsd %xmm0, (%rsp)")  # save left
+        if use_single:
+            self.emit("    movss %xmm0, (%rsp)")  # save left (single)
+        else:
+            self.emit("    movsd %xmm0, (%rsp)")  # save left
 
         rt = self.get_expr_type(expr.right)
         if rt and rt.base in ("float", "double", "long double") and not rt.is_pointer() and not rt.is_array():
             self.gen_expr(expr.right)
             self.emit("    movq %rax, %xmm1")
+            if use_single:
+                self.emit("    cvtsd2ss %xmm1, %xmm1")
         elif isinstance(expr.right, FloatLiteral):
             self.gen_expr(expr.right)
-            self.emit("    movsd %xmm0, %xmm1")
+            if use_single:
+                self.emit("    cvtsd2ss %xmm0, %xmm1")
+            else:
+                self.emit("    movsd %xmm0, %xmm1")
         else:
             self.gen_expr(expr.right)
-            self.emit("    cvtsi2sd %eax, %xmm1")
+            if use_single:
+                self.emit("    cvtsi2ss %eax, %xmm1")
+            else:
+                self.emit("    cvtsi2sd %eax, %xmm1")
 
-        self.emit("    movsd (%rsp), %xmm0")  # restore left
+        if use_single:
+            self.emit("    movss (%rsp), %xmm0")  # restore left (single)
+        else:
+            self.emit("    movsd (%rsp), %xmm0")  # restore left
         self.emit("    addq $8, %rsp")
 
     def gen_binary_op(self, expr: BinaryOp):
@@ -3148,16 +3221,28 @@ class CodeGen:
         is_float_op = (self._is_float_type(expr.left) or self._is_float_type(expr.right) or
                         isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral))
         if is_float_op and expr.op in ("+", "-", "*", "/", "<", ">", "<=", ">=", "==", "!="):
-            self._gen_float_operands(expr)
+            # Use single-precision when BOTH operands are float (not double)
+            both_single = (self._is_single_float(expr.left) or (isinstance(expr.left, FloatLiteral) and expr.left.is_single)) and \
+                          (self._is_single_float(expr.right) or (isinstance(expr.right, FloatLiteral) and expr.right.is_single))
+            self._gen_float_operands(expr, use_single=both_single)
 
             if expr.op in ("+", "-", "*", "/"):
-                sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
-                self.emit(f"    {sse_ops[expr.op]} %xmm1, %xmm0")
+                if both_single:
+                    sse_ops = {"+": "addss", "-": "subss", "*": "mulss", "/": "divss"}
+                    self.emit(f"    {sse_ops[expr.op]} %xmm1, %xmm0")
+                    # Convert back to double for storage in %rax (codegen convention)
+                    self.emit("    cvtss2sd %xmm0, %xmm0")
+                else:
+                    sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
+                    self.emit(f"    {sse_ops[expr.op]} %xmm1, %xmm0")
                 self.emit(f"    movq %xmm0, %rax")  # result in rax for push/pop
                 return
             else:
                 # Comparison
-                self.emit("    ucomisd %xmm1, %xmm0")
+                if both_single:
+                    self.emit("    ucomiss %xmm1, %xmm0")
+                else:
+                    self.emit("    ucomisd %xmm1, %xmm0")
                 if expr.op == "==":
                     # NaN-aware: equal only if ZF=1 AND PF=0 (ordered)
                     self.emit("    sete %al")
