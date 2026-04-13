@@ -582,6 +582,9 @@ int inet_aton(const char *cp, struct in_addr *inp);
         if not parts:
             return [""]
         cmd = parts[0]
+        # Handle #include<file> (no space after include)
+        if cmd.startswith("include") and len(cmd) > 7 and cmd[7] in '<"':
+            return ["include", cmd[7:]] + (parts[1].split() if len(parts) > 1 else [])
         if len(parts) > 1:
             return [cmd] + parts[1].split()
         return [cmd]

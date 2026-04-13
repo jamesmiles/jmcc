@@ -446,6 +446,16 @@ class Parser:
                 return ops[expr.op](l, r)
         if isinstance(expr, CastExpr):
             return self._eval_const(expr.operand)
+        if isinstance(expr, SizeofExpr):
+            if expr.is_type:
+                ts = expr.operand
+                size = ts.size_bytes()
+                if ts.array_sizes:
+                    for dim in ts.array_sizes:
+                        cv = self._eval_const(dim) if dim else None
+                        if cv is not None:
+                            size *= cv
+                return size
         return None
 
     # ---- Expression parsing (precedence climbing) ----
@@ -1311,7 +1321,7 @@ class Parser:
                 if self.at(TokenType.LBRACE):
                     init = self.parse_init_list()
                 else:
-                    init = self.parse_expr()
+                    init = self.parse_assignment()
             self.expect(TokenType.SEMICOLON, "';'")
             return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
@@ -1458,7 +1468,7 @@ class Parser:
             if self.at(TokenType.LBRACE):
                 init = self.parse_init_list()
             else:
-                init = self.parse_expr()
+                init = self.parse_assignment()
 
         first = GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
@@ -1472,15 +1482,17 @@ class Parser:
                     extra_ptrs += 1
                 ename = self.expect(TokenType.IDENTIFIER, "identifier").value
                 ets = TypeSpec(base=type_spec.base, pointer_depth=extra_ptrs,
-                               is_unsigned=type_spec.is_unsigned, struct_def=type_spec.struct_def)
-                # Array declarator
-                if self.match(TokenType.LBRACKET):
-                    arr_sizes = []
+                               is_unsigned=type_spec.is_unsigned, struct_def=type_spec.struct_def,
+                               is_static=type_spec.is_static, is_extern=type_spec.is_extern)
+                # Array declarator (supports multidimensional)
+                arr_sizes = []
+                while self.match(TokenType.LBRACKET):
                     if self.at(TokenType.RBRACKET):
                         arr_sizes.append(None)
                     else:
                         arr_sizes.append(self.parse_expr())
                     self.expect(TokenType.RBRACKET, "']'")
+                if arr_sizes:
                     ets.array_sizes = arr_sizes
                 einit = None
                 if self.match(TokenType.ASSIGN):
@@ -1716,6 +1728,7 @@ class Parser:
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
         # Array parameter: int a[] or int a[100] or int a[const 5] — decays to pointer
+        # Supports multidimensional: int a[][2], int a[n][m]
         if self.match(TokenType.LBRACKET):
             # Skip qualifiers (const, static, volatile, restrict) inside brackets
             while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC, TokenType.RESTRICT):
@@ -1727,4 +1740,9 @@ class Parser:
                 self.parse_expr()  # skip the size expression
             self.expect(TokenType.RBRACKET, "']'")
             type_spec.pointer_depth += 1  # arrays decay to pointers in params
+            # Skip additional dimensions (e.g. [][2], [n][m])
+            while self.match(TokenType.LBRACKET):
+                if not self.at(TokenType.RBRACKET):
+                    self.parse_expr()
+                self.expect(TokenType.RBRACKET, "']'")
         return Param(type_spec=type_spec, name=name)
