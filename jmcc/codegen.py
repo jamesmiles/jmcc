@@ -3557,7 +3557,14 @@ class CodeGen:
                not target_is_ptr_element:
                 struct_size = target_type.struct_def.size_bytes()
                 # Get source address (value is a struct, gen_expr puts address in rax)
-                self.gen_lvalue_addr(expr.value)
+                # If value is a bare InitList (compound literal without cast), wrap it
+                # with the target's type so gen_lvalue_addr knows the struct layout
+                src_value = expr.value
+                if isinstance(src_value, InitList) and target_type.struct_def:
+                    src_value = CastExpr(target_type=target_type, operand=src_value,
+                                        line=getattr(src_value, 'line', 0),
+                                        col=getattr(src_value, 'col', 0))
+                self.gen_lvalue_addr(src_value)
                 self.emit("    pushq %rax")     # source address
                 self.gen_lvalue_addr(expr.target)
                 self.emit("    movq %rax, %rdi") # dest
