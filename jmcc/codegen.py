@@ -2919,6 +2919,11 @@ class CodeGen:
             if inner and inner.is_pointer():
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def)
+            if inner and inner.is_array():
+                # Dereferencing array: element type (array decays to pointer, then deref)
+                return TypeSpec(base=inner.base, pointer_depth=0,
+                                struct_def=inner.struct_def, enum_def=inner.enum_def,
+                                is_unsigned=inner.is_unsigned)
         if isinstance(expr, UnaryOp) and expr.op == "&":
             inner = self.get_expr_type(expr.operand)
             if inner:
