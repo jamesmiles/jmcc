@@ -3463,6 +3463,22 @@ class CodeGen:
                 self.emit("    movq %rax, (%rcx)")
                 if not is_prefix:
                     self.emit("    movq %rdx, %rax")
+            elif operand_type and operand_type.base in ("float", "double") and not operand_type.is_pointer():
+                # Float/double increment/decrement
+                self.emit("    movsd (%rax), %xmm0")
+                if not is_prefix:
+                    self.emit("    movsd %xmm0, %xmm1")  # save old value
+                # Load 1.0 constant
+                self.emit("    movl $1, %eax")
+                self.emit("    cvtsi2sd %eax, %xmm2")
+                op = "addsd" if is_inc else "subsd"
+                self.emit(f"    {op} %xmm2, %xmm0")
+                self.emit("    popq %rcx")
+                self.emit("    movsd %xmm0, (%rcx)")
+                if is_prefix:
+                    self.emit("    movq %xmm0, %rax")
+                else:
+                    self.emit("    movq %xmm1, %rax")
             else:
                 store_size = self._type_store_size(operand_type)
                 self._emit_load("%rax", store_size, operand_type)
