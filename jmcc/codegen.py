@@ -3474,6 +3474,12 @@ class CodeGen:
                 self._emit_store("%rcx", store_size)
                 if not is_prefix:
                     self.emit("    movl %edx, %eax")
+                elif store_size == 1:
+                    # Truncate to byte for char/unsigned char prefix inc/dec
+                    if operand_type and operand_type.is_unsigned:
+                        self.emit("    movzbl %al, %eax")
+                    else:
+                        self.emit("    movsbl %al, %eax")
         else:
             self.error(f"unhandled unary operator '{expr.op}'", expr.line, expr.col)
 
