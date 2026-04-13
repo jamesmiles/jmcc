@@ -6,6 +6,7 @@
 // SOURCE: https://rosettacode.org/wiki/Currying#C
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
+// STDOUT:
 // STDOUT: Sum of factorials of [1,5] : 153
 // STDOUT: Sum of factorials of [3,5] : 150
 // STDOUT: Sum of factorials of [1,3] : 9
