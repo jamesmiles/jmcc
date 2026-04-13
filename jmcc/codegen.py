@@ -3158,12 +3158,22 @@ class CodeGen:
             else:
                 # Comparison
                 self.emit("    ucomisd %xmm1, %xmm0")
-                cond_map = {
-                    "<": "setb", ">": "seta",
-                    "<=": "setbe", ">=": "setae",
-                    "==": "sete", "!=": "setne",
-                }
-                self.emit(f"    {cond_map[expr.op]} %al")
+                if expr.op == "==":
+                    # NaN-aware: equal only if ZF=1 AND PF=0 (ordered)
+                    self.emit("    sete %al")
+                    self.emit("    setnp %cl")
+                    self.emit("    andb %cl, %al")
+                elif expr.op == "!=":
+                    # NaN-aware: not-equal if ZF=0 OR PF=1 (unordered)
+                    self.emit("    setne %al")
+                    self.emit("    setp %cl")
+                    self.emit("    orb %cl, %al")
+                else:
+                    cond_map = {
+                        "<": "setb", ">": "seta",
+                        "<=": "setbe", ">=": "setae",
+                    }
+                    self.emit(f"    {cond_map[expr.op]} %al")
             self.emit("    movzbl %al, %eax")
             return
 
