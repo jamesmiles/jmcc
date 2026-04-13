@@ -293,6 +293,26 @@ class Lexer:
             if not digits:
                 self.error("expected hex digit in escape sequence")
             return chr(int(''.join(digits), 16))
+        if ch == 'u':
+            # Unicode escape \uXXXX - 4 hex digits, encode as UTF-8
+            digits = []
+            for _ in range(4):
+                if self.pos < len(self.source) and self.source[self.pos] in '0123456789abcdefABCDEF':
+                    digits.append(self.advance())
+                else:
+                    self.error("expected 4 hex digits in \\u escape sequence")
+            codepoint = int(''.join(digits), 16)
+            return chr(codepoint)
+        if ch == 'U':
+            # Unicode escape \UXXXXXXXX - 8 hex digits, encode as UTF-8
+            digits = []
+            for _ in range(8):
+                if self.pos < len(self.source) and self.source[self.pos] in '0123456789abcdefABCDEF':
+                    digits.append(self.advance())
+                else:
+                    self.error("expected 8 hex digits in \\U escape sequence")
+            codepoint = int(''.join(digits), 16)
+            return chr(codepoint)
         if ch in '01234567':
             # Octal escape
             digits = [ch]

@@ -431,6 +431,7 @@ class CodeGen:
                                     if dv is not None:
                                         inner_count *= dv
                                 total_flat = total_elems * inner_count
+                            is_float_array = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
                             elems = [0] * total_flat
                             flat_idx = 0
                             for item in actual_init.items:
@@ -451,23 +452,51 @@ class CodeGen:
                                     if flat_idx < total_flat:
                                         elems[flat_idx] = 0
                                     flat_idx = row_start + inner_count
-                                elif isinstance(val, InitList) and inner_count > 1:
+                                elif isinstance(val, InitList) and inner_count >= 1:
                                     # Inner init list for multi-dim array
                                     row_start = flat_idx
                                     for sub_item in val.items:
-                                        cv = self._try_eval_const(sub_item.value)
-                                        if cv is not None and flat_idx < total_flat:
-                                            elems[flat_idx] = cv
+                                        sv = sub_item.value
+                                        while isinstance(sv, CastExpr):
+                                            sv = sv.operand
+                                        fv = self._try_eval_float_const(sv) if is_float_array else None
+                                        if fv is not None and flat_idx < total_flat:
+                                            elems[flat_idx] = ('float', fv)
+                                        else:
+                                            cv = self._try_eval_const(sv)
+                                            if cv is not None and flat_idx < total_flat:
+                                                if is_float_array:
+                                                    elems[flat_idx] = ('float', float(cv))
+                                                else:
+                                                    elems[flat_idx] = cv
                                         flat_idx += 1
                                     # Advance to next row boundary (zero-fill partial rows)
                                     flat_idx = row_start + inner_count
                                 else:
-                                    cv = self._try_eval_const(val)
-                                    if cv is not None and flat_idx < total_flat:
-                                        elems[flat_idx] = cv
+                                    fv = self._try_eval_float_const(val) if is_float_array else None
+                                    if fv is not None and flat_idx < total_flat:
+                                        elems[flat_idx] = ('float', fv)
+                                    else:
+                                        cv = self._try_eval_const(val)
+                                        if cv is not None and flat_idx < total_flat:
+                                            if is_float_array:
+                                                elems[flat_idx] = ('float', float(cv))
+                                            else:
+                                                elems[flat_idx] = cv
                                     flat_idx += 1
+                            import struct as _struct
                             for val in elems:
-                                if elem_size == 1:
+                                if isinstance(val, tuple) and val[0] == 'float':
+                                    fval = val[1]
+                                    if elem_size <= 4:
+                                        packed = _struct.pack('<f', fval)
+                                        ival = int.from_bytes(packed, 'little')
+                                        self.emit(f"    .long {ival}")
+                                    else:
+                                        packed = _struct.pack('<d', fval)
+                                        ival = int.from_bytes(packed, 'little')
+                                        self.emit(f"    .quad {ival}")
+                                elif elem_size == 1:
                                     self.emit(f"    .byte {val}")
                                 elif elem_size == 2:
                                     self.emit(f"    .word {val}")
@@ -688,6 +717,9 @@ class CodeGen:
             elif isinstance(unwrapped, Identifier) and unwrapped.name in self.global_vars:
                 # Global variable reference (array decaying to pointer)
                 relocs.append((mem_offset, unwrapped.name))
+            elif isinstance(unwrapped, Identifier) and unwrapped.name in self.static_locals:
+                # Static local variable reference (array decaying to pointer)
+                relocs.append((mem_offset, self.static_locals[unwrapped.name]))
             elif (isinstance(unwrapped, ArrayAccess) and
                   isinstance(unwrapped.array, Identifier) and
                   unwrapped.array.name in self.global_vars):
@@ -1065,6 +1097,24 @@ class CodeGen:
                         if isinstance(first, IntLiteral):
                             size *= first.value
                     return size
+            # sizeof(array[i]) — array element: get element type size
+            if isinstance(expr.operand, ArrayAccess) and isinstance(expr.operand.array, Identifier):
+                _, ts = self.get_var_location(expr.operand.array.name)
+                if ts:
+                    if ts.is_ptr_array or (ts.is_array() and ts.pointer_depth > 0):
+                        return 8  # element is a pointer
+                    elem_ts = TypeSpec(base=ts.base, pointer_depth=max(ts.pointer_depth - 1, 0),
+                                      is_unsigned=ts.is_unsigned, struct_def=ts.struct_def,
+                                      enum_def=ts.enum_def)
+                    # For multi-dim arrays, element includes remaining dimensions
+                    if ts.array_sizes and len(ts.array_sizes) > 1:
+                        size = elem_ts.size_bytes()
+                        for dim in ts.array_sizes[1:]:
+                            dv = self._dim_value(dim) if dim is not None else None
+                            if dv is not None:
+                                size *= dv
+                        return size
+                    return elem_ts.size_bytes()
             # sizeof(*expr) — dereference: get element type size
             if isinstance(expr.operand, UnaryOp) and expr.operand.op == "*":
                 inner = expr.operand.operand
@@ -1088,6 +1138,20 @@ class CodeGen:
                         elif ts.is_array():
                             return ts.size_bytes()
             return 4
+        return None
+
+    def _try_eval_float_const(self, expr) -> Optional[float]:
+        """Try to evaluate an expression as a compile-time float constant."""
+        if isinstance(expr, FloatLiteral):
+            return expr.value
+        if isinstance(expr, IntLiteral):
+            return float(expr.value)
+        if isinstance(expr, CastExpr):
+            return self._try_eval_float_const(expr.operand)
+        if isinstance(expr, UnaryOp) and expr.op == "-":
+            val = self._try_eval_float_const(expr.operand)
+            if val is not None:
+                return -val
         return None
 
     def gen_function(self, func: FuncDecl):
@@ -1222,6 +1286,22 @@ class CodeGen:
         if total_stack == 0:
             total_stack = 8
         self.output[stack_alloc_idx] = f"    subq ${total_stack}, %rsp"
+        # Zero-initialize stack frame to prevent UB from uninitialized locals
+        # Use rep stosb to zero the allocated region
+        if total_stack > 0:
+            zero_code = []
+            # Save %rdi and %rcx (may contain function args not yet stored)
+            zero_code.append("    pushq %rdi")
+            zero_code.append("    pushq %rcx")
+            zero_code.append(f"    leaq -{total_stack + 8}(%rbp), %rdi")
+            zero_code.append(f"    movl ${total_stack}, %ecx")
+            zero_code.append("    xorl %eax, %eax")
+            zero_code.append("    rep stosb")
+            zero_code.append("    popq %rcx")
+            zero_code.append("    popq %rdi")
+            # Insert after the subq instruction
+            for i, line in enumerate(zero_code):
+                self.output.insert(stack_alloc_idx + 1 + i, line)
 
     def gen_block(self, block: Block):
         # Only apply scope save/restore for blocks that contain non-declaration
@@ -1339,6 +1419,14 @@ class CodeGen:
         # Static local variable: store as a global with mangled name
         if decl.type_spec.is_static and self.current_func:
             mangled = f"__static_{self.current_func.name}_{decl.name}"
+            # Infer array size from initializer if unsized (e.g., static int a[] = {1,2,3})
+            ts = decl.type_spec
+            if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes and ts.array_sizes[0] is None:
+                if isinstance(decl.init, InitList):
+                    count = len(decl.init.items)
+                    ts.array_sizes[0] = IntLiteral(value=count)
+                elif isinstance(decl.init, StringLiteral):
+                    ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
             gdecl = GlobalVarDecl(type_spec=decl.type_spec, name=mangled, init=decl.init)
             self.global_vars[mangled] = gdecl
             self.static_locals[decl.name] = mangled
@@ -1986,7 +2074,7 @@ class CodeGen:
                 # Unwrap CastExpr
                 while isinstance(val, CastExpr):
                     val = val.operand
-                if isinstance(val, InitList) and inner_count > 1:
+                if isinstance(val, InitList) and inner_count >= 1:
                     # Inner init list for multi-dim array row
                     row_base = base_offset + idx * inner_count * elem_size
                     is_float_arr = type_spec.base in ("float", "double") and not type_spec.is_pointer()
@@ -3523,6 +3611,11 @@ class CodeGen:
                     self.emit("    movzwl (%rax), %eax")
                 else:
                     self.emit("    movswl (%rax), %eax")
+            elif inner_type and inner_type.base == "float" and inner_type.pointer_depth == 1:
+                # Load float and convert to double (our float convention uses double internally)
+                self.emit("    movss (%rax), %xmm0")
+                self.emit("    cvtss2sd %xmm0, %xmm0")
+                self.emit("    movq %xmm0, %rax")
             elif inner_type and inner_type.pointer_depth == 1 and (inner_type.base in ("long", "long long", "double") or inner_type.struct_def):
                 self.emit("    movq (%rax), %rax")
             else:

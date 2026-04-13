@@ -6,14 +6,15 @@
 // SOURCE: https://rosettacode.org/wiki/Longest_common_prefix#C
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
+// STDOUT:
 // STDOUT: Longest common prefix : inter
 // STDOUT: Longest common prefix : throne
-// STDOUT: Longest common prefix : 
-// STDOUT: Longest common prefix : 
+// STDOUT: Longest common prefix :
+// STDOUT: Longest common prefix :
 // STDOUT: Longest common prefix : cheese
-// STDOUT: Longest common prefix : 
-// STDOUT: Longest common prefix : 
-// STDOUT: Longest common prefix : 
+// STDOUT: Longest common prefix :
+// STDOUT: Longest common prefix :
+// STDOUT: Longest common prefix :
 // STDOUT: Longest common prefix : foo
 
 

@@ -83,6 +83,9 @@ class Parser:
         # Typedef names are also type specifiers
         if self.current().type == TokenType.IDENTIFIER and self.current().value in self.typedefs:
             return True
+        # __typeof__ / typeof are type specifiers
+        if self.current().type == TokenType.IDENTIFIER and self.current().value in ("__typeof__", "__typeof", "typeof"):
+            return True
         return False
 
     def parse_type_spec(self) -> TypeSpec:
@@ -132,6 +135,63 @@ class Parser:
             elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
                 self.skip_attribute()
                 continue
+            elif t.type == TokenType.IDENTIFIER and t.value in ("__typeof__", "__typeof", "typeof") and not base_parts:
+                # __typeof__(expr) - deduce type from expression
+                self.advance()  # consume __typeof__
+                self.expect(TokenType.LPAREN, "'('")
+                # Try to parse as a type first, then as expression
+                saved = self.pos
+                try:
+                    if self.is_type_start():
+                        ts = self.parse_type_spec()
+                        self.expect(TokenType.RPAREN, "')'")
+                        # Apply qualifiers parsed before __typeof__
+                        pointer_depth = ts.pointer_depth
+                        while self.match(TokenType.STAR):
+                            pointer_depth += 1
+                            while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                                pass
+                        return TypeSpec(
+                            base=ts.base, pointer_depth=pointer_depth,
+                            is_unsigned=ts.is_unsigned, is_const=is_const or ts.is_const,
+                            is_volatile=is_volatile, is_static=is_static,
+                            is_extern=is_extern, struct_def=ts.struct_def,
+                            enum_def=ts.enum_def,
+                        )
+                except:
+                    self.pos = saved
+                # Parse as expression to deduce type
+                expr = self.parse_expr()
+                self.expect(TokenType.RPAREN, "')'")
+                # Deduce type from expression
+                if isinstance(expr, FloatLiteral):
+                    base_type = "double"
+                elif isinstance(expr, IntLiteral):
+                    base_type = "int"
+                elif isinstance(expr, CharLiteral):
+                    base_type = "int"  # in C, char literals are int
+                elif isinstance(expr, StringLiteral):
+                    base_type = "char"
+                    pointer_depth = 0
+                    while self.match(TokenType.STAR):
+                        pointer_depth += 1
+                        while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                            pass
+                    return TypeSpec(base=base_type, pointer_depth=pointer_depth + 1,
+                                   is_const=is_const, is_static=is_static, is_extern=is_extern)
+                else:
+                    base_type = "int"  # fallback
+                pointer_depth = 0
+                while self.match(TokenType.STAR):
+                    pointer_depth += 1
+                    while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                        pass
+                return TypeSpec(
+                    base=base_type, pointer_depth=pointer_depth,
+                    is_unsigned=is_unsigned, is_const=is_const,
+                    is_volatile=is_volatile, is_static=is_static,
+                    is_extern=is_extern,
+                )
             elif t.type in (TokenType.STRUCT, TokenType.UNION):
                 is_union = t.type == TokenType.UNION
                 self.advance()
@@ -1745,9 +1805,14 @@ class Parser:
                 self.parse_expr()  # skip the size expression
             self.expect(TokenType.RBRACKET, "']'")
             type_spec.pointer_depth += 1  # arrays decay to pointers in params
-            # Skip additional dimensions (e.g. [][2], [n][m])
+            # Parse additional dimensions (e.g. [][2], [n][m]) and preserve them
+            inner_dims = []
             while self.match(TokenType.LBRACKET):
                 if not self.at(TokenType.RBRACKET):
-                    self.parse_expr()
+                    inner_dims.append(self.parse_expr())
+                else:
+                    inner_dims.append(None)
                 self.expect(TokenType.RBRACKET, "']'")
+            if inner_dims:
+                type_spec.array_sizes = inner_dims
         return Param(type_spec=type_spec, name=name)
