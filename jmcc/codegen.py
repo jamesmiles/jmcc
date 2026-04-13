@@ -4311,11 +4311,26 @@ class CodeGen:
         false_label = self.new_label("tern_f")
         end_label = self.new_label("tern_e")
 
+        # Check if one branch is float and the other is int (need promotion)
+        true_type = self.get_expr_type(expr.true_expr)
+        false_type = self.get_expr_type(expr.false_expr)
+        true_is_float = (true_type and true_type.base in ("float", "double") and not true_type.is_pointer()) or isinstance(expr.true_expr, FloatLiteral)
+        false_is_float = (false_type and false_type.base in ("float", "double") and not false_type.is_pointer()) or isinstance(expr.false_expr, FloatLiteral)
+        needs_promote = true_is_float != false_is_float
+
         self.gen_expr(expr.condition)
         self._emit_cond_test(expr.condition)
         self.emit(f"    je {false_label}")
         self.gen_expr(expr.true_expr)
+        if needs_promote and not true_is_float:
+            # int -> double promotion for true branch
+            self.emit("    cvtsi2sd %eax, %xmm0")
+            self.emit("    movq %xmm0, %rax")
         self.emit(f"    jmp {end_label}")
         self.label(false_label)
         self.gen_expr(expr.false_expr)
+        if needs_promote and not false_is_float:
+            # int -> double promotion for false branch
+            self.emit("    cvtsi2sd %eax, %xmm0")
+            self.emit("    movq %xmm0, %rax")
         self.label(end_label)
