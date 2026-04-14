@@ -4031,6 +4031,21 @@ class CodeGen:
             self._gen_va_copy(expr)
             return
 
+        # __builtin_bswap16/32/64: byte-swap intrinsics
+        if func_name == "__builtin_bswap16" and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    rolw $8, %ax")  # swap bytes of 16-bit value
+            self.emit("    movzwl %ax, %eax")
+            return
+        if func_name == "__builtin_bswap32" and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    bswap %eax")
+            return
+        if func_name == "__builtin_bswap64" and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    bswap %rax")
+            return
+
         is_indirect = not isinstance(expr.name, Identifier)
         is_fptr = False
         if isinstance(expr.name, Identifier):
