@@ -368,6 +368,9 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["__CHAR_BIT__"] = Macro("__CHAR_BIT__", body="8")
         # Prevent system limits.h from trying to include GCC's internal limits.h
         self.macros["_GCC_LIMITS_H_"] = Macro("_GCC_LIMITS_H_", body="1")
+        # __has_builtin must be in macros so #ifdef __has_builtin works
+        self.macros["__has_builtin"] = Macro("__has_builtin", body="__has_builtin",
+                                              is_func=True, params=["x"], is_variadic=False)
         self.macros["__SIZE_TYPE__"] = Macro("__SIZE_TYPE__", body="unsigned long")
         self.macros["__PTRDIFF_TYPE__"] = Macro("__PTRDIFF_TYPE__", body="long")
         self.macros["__WCHAR_TYPE__"] = Macro("__WCHAR_TYPE__", body="int")

@@ -1316,20 +1316,20 @@ class CodeGen:
         if total_stack == 0:
             total_stack = 8
         self.output[stack_alloc_idx] = f"    subq ${total_stack}, %rsp"
-        # Zero-initialize stack frame to prevent UB from uninitialized locals
-        # Use rep stosb to zero the allocated region
-        if total_stack > 0:
+        # Zero-initialize declared local variables area (not the full frame
+        # padding) to prevent UB from uninitialized locals.
+        # Only zero the actual locals region, not alignment padding beyond it.
+        locals_size = -self.stack_offset - 8  # subtract saved rbx at -8
+        if locals_size > 0:
             zero_code = []
-            # Save %rdi and %rcx (may contain function args not yet stored)
             zero_code.append("    pushq %rdi")
             zero_code.append("    pushq %rcx")
-            zero_code.append(f"    leaq -{total_stack + 8}(%rbp), %rdi")
-            zero_code.append(f"    movl ${total_stack}, %ecx")
+            zero_code.append(f"    leaq -{locals_size + 8}(%rbp), %rdi")
+            zero_code.append(f"    movl ${locals_size}, %ecx")
             zero_code.append("    xorl %eax, %eax")
             zero_code.append("    rep stosb")
             zero_code.append("    popq %rcx")
             zero_code.append("    popq %rdi")
-            # Insert after the subq instruction
             for i, line in enumerate(zero_code):
                 self.output.insert(stack_alloc_idx + 1 + i, line)
 
