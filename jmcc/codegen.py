@@ -623,7 +623,11 @@ class CodeGen:
                     store_byte(null_off, 0)
                 return
 
-            if isinstance(value, InitList) and mem_ts.struct_def and not mem_ts.is_pointer():
+            if isinstance(value, InitList) and mem_ts.is_array():
+                # Array init list (check BEFORE struct to handle struct arrays correctly)
+                pass  # fall through to array handler below
+
+            elif isinstance(value, InitList) and mem_ts.struct_def and not mem_ts.is_pointer():
                 # Nested struct/union init
                 sub_buf, sub_relocs = self._build_data_bytes(
                     mem_ts.struct_def, value, is_union=mem_ts.struct_def.is_union)
@@ -755,7 +759,19 @@ class CodeGen:
                     end_idx = item.designator_end
                 for j in range(idx, end_idx + 1):
                     if j < arr_count:
-                        fill_scalar_or_val(arr_offset + j * elem_size, elem_size, item.value)
+                        val = self._unwrap_compound_literal(item.value)
+                        if arr_ts.struct_def and isinstance(val, InitList):
+                            # Struct array element: fill struct members
+                            elem_off = arr_offset + j * elem_size
+                            sub_buf, sub_relocs = self._build_data_bytes(
+                                arr_ts.struct_def, val, is_union=arr_ts.struct_def.is_union)
+                            for bi, bv in enumerate(sub_buf):
+                                if elem_off + bi < total_size:
+                                    buf[elem_off + bi] = bv
+                            for r_off, r_sym in sub_relocs:
+                                relocs.append((elem_off + r_off, r_sym))
+                        else:
+                            fill_scalar_or_val(arr_offset + j * elem_size, elem_size, item.value)
                 idx = end_idx + 1
 
         def fill_scalar_or_val(off, size, value):
