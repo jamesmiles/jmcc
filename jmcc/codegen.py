@@ -1133,6 +1133,18 @@ class CodeGen:
                                 size *= dv
                         return size
                     return elem_ts.size_bytes()
+            # sizeof(compound_literal) — e.g., sizeof((struct ntd[]){...})
+            if isinstance(expr.operand, CastExpr) and isinstance(expr.operand.operand, InitList):
+                cl_type = expr.operand.target_type
+                if cl_type.is_array():
+                    elem_size = cl_type.size_bytes()
+                    if cl_type.struct_def:
+                        elem_size = cl_type.struct_def.size_bytes()
+                    n_items = len(expr.operand.operand.items)
+                    return elem_size * n_items
+                elif cl_type.struct_def:
+                    return cl_type.struct_def.size_bytes()
+                return cl_type.size_bytes()
             # sizeof(*expr) — dereference: get element type size
             if isinstance(expr.operand, UnaryOp) and expr.operand.op == "*":
                 inner = expr.operand.operand
@@ -1892,6 +1904,19 @@ class CodeGen:
 
             # Consume the item
             consume()
+
+            # Handle compound literal arrays as pointer values
+            # e.g., .t = (struct ntd[]){...} where .t is a pointer
+            if (isinstance(it.value, CastExpr) and isinstance(it.value.operand, InitList)
+                    and it.value.target_type.is_array()):
+                # Array compound literal: allocate on stack, store address
+                self.gen_expr(it.value)
+                self.emit(f"    movq %rax, {abs_off}(%rbp)")
+                if sdef.is_union:
+                    break
+                mem_idx += 1
+                continue
+
             val = self._unwrap_compound_literal(it.value)
 
             if isinstance(val, InitList):
@@ -2485,6 +2510,21 @@ class CodeGen:
                 if isinstance(expr.operand, Identifier) and expr.operand.name in self.vla_sizes:
                     off = self.vla_sizes[expr.operand.name]
                     self.emit(f"    movq {off}(%rbp), %rax")
+                    return
+                # sizeof(compound_literal) — e.g., sizeof((struct ntd[]){...})
+                if isinstance(expr.operand, CastExpr) and isinstance(expr.operand.operand, InitList):
+                    cl_type = expr.operand.target_type
+                    if cl_type.is_array():
+                        elem_size = cl_type.size_bytes()
+                        if cl_type.struct_def:
+                            elem_size = cl_type.struct_def.size_bytes()
+                        n_items = len(expr.operand.operand.items)
+                        size = elem_size * n_items
+                    elif cl_type.struct_def:
+                        size = cl_type.struct_def.size_bytes()
+                    else:
+                        size = cl_type.size_bytes()
+                    self.emit(f"    movl ${size}, %eax")
                     return
                 # sizeof on an expression — infer type
                 et = self.get_expr_type(expr.operand)
