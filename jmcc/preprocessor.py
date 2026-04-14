@@ -58,7 +58,33 @@ typedef __va_list_tag va_list[1];
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
 #define va_copy(dest, src) __builtin_va_copy(dest, src)
 """,
-        # limits.h — use real system header
+        "limits.h": """
+#ifndef _JMCC_LIMITS_H
+#define _JMCC_LIMITS_H
+#define CHAR_BIT 8
+#define SCHAR_MIN (-128)
+#define SCHAR_MAX 127
+#define UCHAR_MAX 255
+#define CHAR_MIN SCHAR_MIN
+#define CHAR_MAX SCHAR_MAX
+#define SHRT_MIN (-32768)
+#define SHRT_MAX 32767
+#define USHRT_MAX 65535
+#define INT_MIN (-2147483647-1)
+#define INT_MAX 2147483647
+#define UINT_MAX 4294967295U
+#define LONG_MIN (-9223372036854775807L-1L)
+#define LONG_MAX 9223372036854775807L
+#define ULONG_MAX 18446744073709551615UL
+#define LLONG_MIN (-9223372036854775807LL-1LL)
+#define LLONG_MAX 9223372036854775807LL
+#define ULLONG_MAX 18446744073709551615ULL
+#define LONG_LONG_MIN LLONG_MIN
+#define LONG_LONG_MAX LLONG_MAX
+#define MB_LEN_MAX 16
+#define PATH_MAX 4096
+#endif
+""",
         "stdnoreturn.h": """
 #define noreturn _Noreturn
 """,
@@ -316,6 +342,19 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["NULL"] = Macro("NULL", body="((void*)0)")
         self.macros["EOF"] = Macro("EOF", body="(-1)")
         self.macros["__LP64__"] = Macro("__LP64__", body="1")
+        self.macros["__GNUC__"] = Macro("__GNUC__", body="4")
+        self.macros["__GNUC_MINOR__"] = Macro("__GNUC_MINOR__", body="0")
+        self.macros["__GNUC_PATCHLEVEL__"] = Macro("__GNUC_PATCHLEVEL__", body="0")
+        # GCC builtin type limits (needed when __GNUC__ is defined, limits.h uses these)
+        self.macros["__INT_MAX__"] = Macro("__INT_MAX__", body="2147483647")
+        self.macros["__LONG_MAX__"] = Macro("__LONG_MAX__", body="9223372036854775807L")
+        self.macros["__LONG_LONG_MAX__"] = Macro("__LONG_LONG_MAX__", body="9223372036854775807LL")
+        self.macros["__SHRT_MAX__"] = Macro("__SHRT_MAX__", body="32767")
+        self.macros["__SCHAR_MAX__"] = Macro("__SCHAR_MAX__", body="127")
+        self.macros["__SIZEOF_INT__"] = Macro("__SIZEOF_INT__", body="4")
+        self.macros["__SIZEOF_LONG__"] = Macro("__SIZEOF_LONG__", body="8")
+        self.macros["__SIZEOF_POINTER__"] = Macro("__SIZEOF_POINTER__", body="8")
+        self.macros["__SIZEOF_SHORT__"] = Macro("__SIZEOF_SHORT__", body="2")
         self.macros["__extension__"] = Macro("__extension__", body="")  # GCC extension prefix, ignored
         # Size/byte-order macros needed by glibc headers
         self.macros["__BYTE_ORDER__"] = Macro("__BYTE_ORDER__", body="1234")
@@ -327,6 +366,8 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["__SIZEOF_SHORT__"] = Macro("__SIZEOF_SHORT__", body="2")
         self.macros["__SIZEOF_LONG_LONG__"] = Macro("__SIZEOF_LONG_LONG__", body="8")
         self.macros["__CHAR_BIT__"] = Macro("__CHAR_BIT__", body="8")
+        # Prevent system limits.h from trying to include GCC's internal limits.h
+        self.macros["_GCC_LIMITS_H_"] = Macro("_GCC_LIMITS_H_", body="1")
         self.macros["__SIZE_TYPE__"] = Macro("__SIZE_TYPE__", body="unsigned long")
         self.macros["__PTRDIFF_TYPE__"] = Macro("__PTRDIFF_TYPE__", body="long")
         self.macros["__WCHAR_TYPE__"] = Macro("__WCHAR_TYPE__", body="int")
