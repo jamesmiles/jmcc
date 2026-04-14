@@ -844,13 +844,24 @@ int inet_aton(const char *cp, struct in_addr *inp);
 
         return args, i
 
+    _SUPPORTED_BUILTINS = {
+        "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64",
+        "__builtin_va_start", "__builtin_va_end", "__builtin_va_arg",
+        "__builtin_va_copy", "__builtin_alloca", "__builtin_expect",
+        "__builtin_offsetof",
+    }
+
     def _eval_if_expr(self, expr: str) -> bool:
         """Evaluate a simple #if expression."""
+        # Handle __has_builtin(name)
+        expr = re.sub(r'__has_builtin\s*\(\s*(\w+)\s*\)',
+                       lambda m: '1' if m.group(1) in self._SUPPORTED_BUILTINS else '0', expr)
         # Handle defined(NAME) and defined NAME
+        # __has_builtin itself counts as "defined"
         expr = re.sub(r'defined\s*\(\s*(\w+)\s*\)',
-                       lambda m: '1' if m.group(1) in self.macros else '0', expr)
+                       lambda m: '1' if m.group(1) in self.macros or m.group(1) == '__has_builtin' else '0', expr)
         expr = re.sub(r'defined\s+(\w+)',
-                       lambda m: '1' if m.group(1) in self.macros else '0', expr)
+                       lambda m: '1' if m.group(1) in self.macros or m.group(1) == '__has_builtin' else '0', expr)
 
         # Expand macros in the expression
         expr = self._expand_macros(expr)
