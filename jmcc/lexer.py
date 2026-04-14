@@ -286,13 +286,15 @@ class Lexer:
         if ch in escapes:
             return escapes[ch]
         if ch == 'x':
-            # Hex escape
+            # Hex escape - produces a raw byte
             digits = []
             while self.pos < len(self.source) and self.source[self.pos] in '0123456789abcdefABCDEF':
                 digits.append(self.advance())
             if not digits:
                 self.error("expected hex digit in escape sequence")
-            return chr(int(''.join(digits), 16))
+            val = int(''.join(digits), 16) & 0xFF
+            # Use PUA codepoint to preserve raw byte identity (U+F700-U+F7FF)
+            return chr(0xF700 + val) if val >= 0x80 else chr(val)
         if ch == 'u':
             # Unicode escape \uXXXX - 4 hex digits, encode as UTF-8
             digits = []
@@ -314,12 +316,14 @@ class Lexer:
             codepoint = int(''.join(digits), 16)
             return chr(codepoint)
         if ch in '01234567':
-            # Octal escape
+            # Octal escape - produces a raw byte
             digits = [ch]
             for _ in range(2):
                 if self.pos < len(self.source) and self.source[self.pos] in '01234567':
                     digits.append(self.advance())
-            return chr(int(''.join(digits), 8))
+            val = int(''.join(digits), 8) & 0xFF
+            # Use PUA codepoint to preserve raw byte identity (U+F700-U+F7FF)
+            return chr(0xF700 + val) if val >= 0x80 else chr(val)
         self.error(f"unknown escape sequence '\\{ch}'")
 
     def read_number(self, first_char: str) -> Token:
@@ -402,8 +406,12 @@ class Lexer:
             ch = self.advance()
 
             # Wide string/char prefix: L"..." or L'...'
+            # UTF-8 string prefix: u8"..."
             is_wide = False
-            if ch == 'L' and self.pos < len(self.source) and self.source[self.pos] in '"\'':
+            if ch == 'u' and self.pos + 1 < len(self.source) and self.source[self.pos] == '8' and self.source[self.pos + 1] == '"':
+                self.advance()  # skip '8'
+                ch = self.advance()  # consume '"'
+            elif ch == 'L' and self.pos < len(self.source) and self.source[self.pos] in '"\'':
                 is_wide = True
                 ch = self.advance()  # skip L, consume the quote
 

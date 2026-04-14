@@ -545,6 +545,9 @@ class CodeGen:
                         elif ch == '\0': asm_str += "\\0"
                         elif ch == '"': asm_str += '\\"'
                         elif ch == '\\': asm_str += "\\\\"
+                        elif 0xF700 <= ord(ch) <= 0xF7FF:
+                            # Raw byte from octal/hex escape (stored in PUA)
+                            asm_str += f"\\{ord(ch) - 0xF700:03o}"
                         elif ord(ch) > 126:
                             # Encode non-ASCII as UTF-8 bytes
                             for b in ch.encode('utf-8'):
