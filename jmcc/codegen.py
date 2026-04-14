@@ -224,11 +224,13 @@ class CodeGen:
                     else:
                         self.emit(f"    .quad {const_val}")
                 elif (decl.init and isinstance(decl.init, UnaryOp) and
-                      decl.init.op == "&" and isinstance(decl.init.operand, InitList)):
+                      decl.init.op == "&" and
+                      (isinstance(decl.init.operand, InitList) or
+                       (isinstance(decl.init.operand, CastExpr) and isinstance(decl.init.operand.operand, InitList)))):
                     # &(struct S){1, 2} — compound literal with address-of
                     # Create anonymous static for the compound literal
                     anon_name = self.new_label("compound")
-                    anon_init = decl.init.operand
+                    anon_init = self._unwrap_compound_literal(decl.init.operand)
                     sdef = decl.type_spec.struct_def  # pointer to struct
                     self.emit("    .data")
                     self.emit(f"    .align 8")
@@ -2046,9 +2048,9 @@ class CodeGen:
                         self.emit(f"    movl %eax, {off}(%rbp)")
             idx = end_idx + 1
 
-    def gen_array_init(self, var_name: str, type_spec: TypeSpec, init: 'InitList'):
+    def gen_array_init(self, var_name: str, type_spec: TypeSpec, init: 'InitList', override_offset=None):
         """Generate code for array initialization from { ... }."""
-        base_offset = self.locals[var_name][0]
+        base_offset = override_offset if override_offset is not None else self.locals[var_name][0]
         elem_size = type_spec.size_bytes()
         # Zero-fill first
         total_size = self._get_member_total_size(type_spec)
@@ -2376,6 +2378,10 @@ class CodeGen:
         elif isinstance(expr, TernaryOp):
             self.gen_ternary(expr)
 
+        elif isinstance(expr, CastExpr) and isinstance(expr.operand, InitList):
+            # Compound literal: (type){init} — allocate on stack, return address
+            self.gen_lvalue_addr(expr)
+
         elif isinstance(expr, CastExpr):
             self.gen_expr(expr.operand)
             src_type = self.get_expr_type(expr.operand)
@@ -2621,14 +2627,31 @@ class CodeGen:
             size = ts.size_bytes()
             if ts.struct_def:
                 size = ts.struct_def.size_bytes()
-            alloc = (size + 7) & ~7
-            self.stack_offset -= alloc
-            temp_off = self.stack_offset
-            self._emit_zero_fill(temp_off, size)
-            if ts.struct_def:
-                self._gen_struct_init_sequential(
-                    ts.struct_def, temp_off, expr.operand.items, [0])
-            self.emit(f"    leaq {temp_off}(%rbp), %rax")
+            if ts.is_array() and ts.array_sizes:
+                # Array compound literal: (int[]){1, 2, 3}
+                elem_size = size
+                n_items = len(expr.operand.items)
+                arr_count = n_items
+                for dim in ts.array_sizes:
+                    if dim and isinstance(dim, IntLiteral):
+                        arr_count = dim.value
+                total = elem_size * arr_count
+                alloc = (total + 7) & ~7
+                self.stack_offset -= alloc
+                temp_off = self.stack_offset
+                self._emit_zero_fill(temp_off, total)
+                self.gen_array_init("__compound_arr__", ts, expr.operand,
+                                    override_offset=temp_off)
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
+            else:
+                alloc = (size + 7) & ~7
+                self.stack_offset -= alloc
+                temp_off = self.stack_offset
+                self._emit_zero_fill(temp_off, size)
+                if ts.struct_def:
+                    self._gen_struct_init_sequential(
+                        ts.struct_def, temp_off, expr.operand.items, [0])
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
         elif isinstance(expr, FuncCall):
             # Function call returning struct: call the function, store result
             # to a temp on the stack, and return the temp's address.
@@ -4029,6 +4052,13 @@ class CodeGen:
             return
         if func_name == "__builtin_va_copy":
             self._gen_va_copy(expr)
+            return
+
+        # __builtin_constant_p: always return 0 (conservative)
+        if func_name == "__builtin_constant_p":
+            if expr.args:
+                self.gen_expr(expr.args[0])  # evaluate for side effects
+            self.emit("    xorl %eax, %eax")  # return 0
             return
 
         # __builtin_bswap16/32/64: byte-swap intrinsics

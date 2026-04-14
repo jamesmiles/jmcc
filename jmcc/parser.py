@@ -713,15 +713,32 @@ class Parser:
         if self.at(TokenType.LPAREN) and self.is_cast():
             self.advance()  # (
             target_type = self.parse_type_spec()
+            # Handle array type in cast: (int[]) or (int[N])
+            while self.match(TokenType.LBRACKET):
+                if not self.at(TokenType.RBRACKET):
+                    dim = self.parse_expr()
+                    if target_type.array_sizes is None:
+                        target_type.array_sizes = [dim]
+                    else:
+                        target_type.array_sizes.append(dim)
+                else:
+                    if target_type.array_sizes is None:
+                        target_type.array_sizes = [None]
+                    else:
+                        target_type.array_sizes.append(None)
+                self.expect(TokenType.RBRACKET, "']'")
             self.expect(TokenType.RPAREN, "')'")
             # Compound literal: (type){ ... }
             if self.at(TokenType.LBRACE):
                 init = self.parse_init_list()
-                # For scalar compound literals, extract the value
-                if isinstance(init, InitList) and init.items and not target_type.struct_def:
+                # For scalar compound literals (not struct/array), extract the value
+                if isinstance(init, InitList) and init.items and not target_type.struct_def and not target_type.is_array():
                     return init.items[0].value if init.items[0].value else IntLiteral(value=0, line=t.line, col=t.col)
-                # For struct compound literals, return as InitList (codegen needs to handle)
-                return init
+                # For scalar compound literals (not struct/array), extract the value
+                if isinstance(init, InitList) and init.items and not target_type.struct_def and not target_type.is_array():
+                    return init.items[0].value if init.items[0].value else IntLiteral(value=0, line=t.line, col=t.col)
+                # For struct compound literals, return as CastExpr (preserves type info)
+                return CastExpr(target_type=target_type, operand=init, line=t.line, col=t.col)
             operand = self.parse_unary()
             return CastExpr(target_type=target_type, operand=operand, line=t.line, col=t.col)
 
