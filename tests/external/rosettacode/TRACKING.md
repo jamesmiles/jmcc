@@ -17,22 +17,11 @@ Status is based on a full scan against the current jmcc build.
 | Category | Count |
 |----------|-------|
 | Total tasks | 1341 |
-| Implemented as test | 48 |
+| Implemented as test | 87 |
 | Passes jmcc (no test) | 410 |
-| Breaks jmcc | 47 |
-| Skipped | 641 |
+| Breaks jmcc | 0 |
+| Skipped | 649 |
 | Fetch/parse error | 195 |
-
-### Break breakdown
-
-| Type | Count |
-|------|-------|
-| compile | 25 |
-| wrong_output | 12 |
-| runtime | 5 |
-| exit | 2 |
-| SIGSEGV | 2 |
-| link | 1 |
 
 ### Skip breakdown
 
@@ -52,15 +41,18 @@ Status is based on a full scan against the current jmcc build.
 | requires_openssl | 7 |
 | windows_only | 7 |
 | requires_curl | 7 |
+| slow_not_a_bug | 5 |
 | gcc_exit_-11 | 4 |
 | requires_wchar | 4 |
 | requires_x11 | 4 |
 | requires_opengl | 3 |
 | requires_socket | 2 |
 | requires_sdl | 2 |
+| intentional_ub | 2 |
 | requires_regex | 2 |
 | gcc_exit_-6 | 1 |
 | requires_complex | 1 |
+| oob_ub_in_source | 1 |
 | gcc_exit_255 | 1 |
 | gcc_exit_-8 | 1 |
 | gcc_exit_11 | 1 |
@@ -78,8 +70,8 @@ Status is based on a full scan against the current jmcc build.
 | 6 | 2048 | skipped | requires_unistd |
 | 7 | 21 game | skipped | non_deterministic |
 | 8 | 24 game | skipped | non_deterministic |
-| 9 | 24 game/Solve | breaks jmcc | compile: 86:2: error: expected declaration, got ';' |
-| 10 | 4-rings or 4-squares puzzle | breaks jmcc | compile: 98:1: error: expected declaration, got 'main' |
+| 9 | 24 game/Solve | implemented | 24_game_solve.c |
+| 10 | 4-rings or 4-squares puzzle | implemented | 4_rings_or_4_squares_puzzle.c |
 | 11 | 9 billion names of God the integer | skipped | requires_gmp |
 | 12 | 99 bottles of beer | passes jmcc |  |
 | 13 | A* search algorithm | skipped | requires_math |
@@ -120,7 +112,7 @@ Status is based on a full scan against the current jmcc build.
 | 48 | Animate a pendulum | skipped | requires_opengl |
 | 49 | Animated Spinners | skipped | gcc_compile_fail |
 | 50 | Animation | skipped | gcc_compile_fail |
-| 51 | Anonymous recursion | breaks jmcc | compile: 24:28: error: expected ';', got '{' (LBRACE) |
+| 51 | Anonymous recursion | implemented | anonymous_recursion.c |
 | 52 | Anti-primes | passes jmcc |  |
 | 53 | Append a record to the end of a text file | skipped | interactive |
 | 54 | Append numbers at same position in strings | passes jmcc |  |
@@ -130,14 +122,14 @@ Status is based on a full scan against the current jmcc build.
 | 58 | Arbitrary-precision integers (included) | skipped | requires_gmp |
 | 59 | Archimedean spiral | skipped | requires_math |
 | 60 | Arena storage pool | fetch_error | no_main |
-| 61 | Arithmetic derivative | breaks jmcc | wrong_output: 1562b vs 1562b |
+| 61 | Arithmetic derivative | implemented | arithmetic_derivative.c |
 | 62 | Arithmetic evaluation | fetch_error | no_code_block |
 | 63 | Arithmetic numbers | passes jmcc |  |
 | 64 | Arithmetic-geometric mean | skipped | requires_math |
 | 65 | Arithmetic-geometric mean/Calculate Pi | skipped | gcc_compile_fail |
 | 66 | Arithmetic/Complex | fetch_error | no_main |
 | 67 | Arithmetic/Integer | skipped | gcc_exit_1 |
-| 68 | Arithmetic/Rational | breaks jmcc | compile: 69:96: error: expected declaration, got ';' |
+| 68 | Arithmetic/Rational | implemented | arithmetic_rational.c |
 | 69 | Array concatenation | skipped | gcc_compile_fail |
 | 70 | Array length | passes jmcc |  |
 | 71 | Arrays | fetch_error | no_main |
@@ -205,7 +197,7 @@ Status is based on a full scan against the current jmcc build.
 | 133 | Boolean values | fetch_error | no_code_block |
 | 134 | Box the compass | passes jmcc |  |
 | 135 | Brace expansion | passes jmcc |  |
-| 136 | Brazilian numbers | breaks jmcc | runtime: timeout |
+| 136 | Brazilian numbers | skipped | slow_not_a_bug |
 | 137 | Brownian tree | skipped | requires_math |
 | 138 | Bulls and cows | fetch_error | no_main |
 | 139 | Bulls and cows/Player | skipped | non_deterministic |
@@ -262,7 +254,7 @@ Status is based on a full scan against the current jmcc build.
 | 190 | Classes | fetch_error | no_main |
 | 191 | Closest-pair problem | fetch_error | no_code_block |
 | 192 | Closures/Value capture | passes jmcc |  |
-| 193 | Code Golf | breaks jmcc | compile: 1:1: error: expected declaration, got 'main' |
+| 193 | Code Golf | implemented | code_golf.c |
 | 194 | Collections | fetch_error | no_main |
 | 195 | Color Difference CIE ΔE2000 | fetch_error | fetch_error |
 | 196 | Color of a screen pixel | fetch_error | no_main |
@@ -287,7 +279,7 @@ Status is based on a full scan against the current jmcc build.
 | 215 | Compiler/lexical analyzer | skipped | requires_file_io |
 | 216 | Compiler/Simple file inclusion pre processor | skipped | interactive |
 | 217 | Compiler/syntax analyzer | skipped | requires_file_io |
-| 218 | Compiler/Verifying syntax | breaks jmcc | compile: 1593:34: error: unterminated character literal |
+| 218 | Compiler/Verifying syntax | implemented | compiler_verifying_syntax.c |
 | 219 | Compiler/virtual machine interpreter | skipped | requires_file_io |
 | 220 | Composite numbers k with no single digit factors whose factors are all substrings of k | skipped | gcc_timeout |
 | 221 | Compound data type | fetch_error | no_main |
@@ -318,7 +310,7 @@ Status is based on a full scan against the current jmcc build.
 | 246 | Count occurrences of a substring | passes jmcc |  |
 | 247 | Count the coins | skipped | gcc_exit_-11 |
 | 248 | Count the occurrence of each digit in e | passes jmcc |  |
-| 249 | Cousin primes | breaks jmcc | wrong_output: 495b vs 506b |
+| 249 | Cousin primes | skipped | oob_ub_in_source |
 | 250 | Cramer's rule | skipped | requires_math |
 | 251 | CRC-32 | skipped | gcc_compile_fail |
 | 252 | Create a file | skipped | requires_file_io |
@@ -338,7 +330,7 @@ Status is based on a full scan against the current jmcc build.
 | 266 | Cut a rectangle | implemented | cut_a_rectangle.c |
 | 267 | Cycle detection | passes jmcc |  |
 | 268 | Damm algorithm | passes jmcc |  |
-| 269 | Data Encryption Standard | breaks jmcc | compile: 270:27: error: expected ';', got '[' (LBRACKET) |
+| 269 | Data Encryption Standard | implemented | data_encryption_standard.c |
 | 270 | Date format | skipped | non_deterministic |
 | 271 | Date manipulation | passes jmcc |  |
 | 272 | Day of the week | passes jmcc |  |
@@ -357,7 +349,7 @@ Status is based on a full scan against the current jmcc build.
 | 285 | Delete a file | passes jmcc |  |
 | 286 | Department numbers | passes jmcc |  |
 | 287 | Descending primes | passes jmcc |  |
-| 288 | Detect division by zero | breaks jmcc | compile: 1635:25: error: expected type specifier |
+| 288 | Detect division by zero | implemented | detect_division_by_zero.c |
 | 289 | Determinant and permanent | implemented | determinant_and_permanent.c |
 | 290 | Determine if a string has all the same characters | passes jmcc |  |
 | 291 | Determine if a string has all unique characters | passes jmcc |  |
@@ -371,7 +363,7 @@ Status is based on a full scan against the current jmcc build.
 | 299 | Digital root | passes jmcc |  |
 | 300 | Digital root/Multiplicative digital root | passes jmcc |  |
 | 301 | Dijkstra's algorithm | passes jmcc |  |
-| 302 | Dinesman's multiple-dwelling problem | breaks jmcc | compile: 64:49: error: expected declaration, got ';' |
+| 302 | Dinesman's multiple-dwelling problem | implemented | dinesmans_multiple_dwelling_problem.c |
 | 303 | Dining philosophers | skipped | requires_pthread |
 | 304 | Diophantine linear system solving | skipped | requires_math |
 | 305 | Disarium numbers | skipped | requires_math |
@@ -399,7 +391,7 @@ Status is based on a full scan against the current jmcc build.
 | 327 | Draw a sphere | skipped | requires_math |
 | 328 | Draw pixel 2 | skipped | non_deterministic |
 | 329 | Dutch national flag problem | skipped | non_deterministic |
-| 330 | Eban numbers | breaks jmcc | runtime: timeout |
+| 330 | Eban numbers | skipped | slow_not_a_bug |
 | 331 | Echo server | skipped | requires_unistd |
 | 332 | Egyptian division | passes jmcc |  |
 | 333 | EKG sequence convergence | passes jmcc |  |
@@ -410,7 +402,7 @@ Status is based on a full scan against the current jmcc build.
 | 338 | Elliptic Curve Digital Signature Algorithm | skipped | non_deterministic |
 | 339 | Emirp primes | passes jmcc |  |
 | 340 | Empty directory | skipped | gcc_exit_255 |
-| 341 | Empty program | breaks jmcc | compile: 1:1: error: expected declaration, got 'main' |
+| 341 | Empty program | implemented | empty_program.c |
 | 342 | Empty string | fetch_error | no_main |
 | 343 | Endless maze | skipped | non_deterministic |
 | 344 | Enforced immutability | fetch_error | no_main |
@@ -421,7 +413,7 @@ Status is based on a full scan against the current jmcc build.
 | 349 | Equilibrium index | passes jmcc |  |
 | 350 | Erdős-Nicolas numbers | fetch_error | fetch_error |
 | 351 | Erdős-primes | fetch_error | fetch_error |
-| 352 | Esthetic numbers | breaks jmcc | wrong_output: 4296b vs 4326b |
+| 352 | Esthetic numbers | implemented | esthetic_numbers.c |
 | 353 | Ethiopian multiplication | passes jmcc |  |
 | 354 | Euler method | skipped | requires_math |
 | 355 | Euler's constant 0.5772... | skipped | requires_math |
@@ -452,7 +444,7 @@ Status is based on a full scan against the current jmcc build.
 | 380 | Extreme primes | skipped | requires_gmp |
 | 381 | Factorial | fetch_error | no_main |
 | 382 | Factorions | passes jmcc |  |
-| 383 | Factors of a Mersenne number | breaks jmcc | compile: 12:1: error: expected declaration, got 'main' |
+| 383 | Factors of a Mersenne number | implemented | factors_of_a_mersenne_number.c |
 | 384 | Factors of an integer | passes jmcc |  |
 | 385 | Fairshare between two and more | skipped | gcc_compile_fail |
 | 386 | Farey sequence | implemented | farey_sequence.c |
@@ -510,7 +502,7 @@ Status is based on a full scan against the current jmcc build.
 | 438 | Forest fire | skipped | requires_pthread |
 | 439 | Fork | skipped | requires_unistd |
 | 440 | Formal power series | skipped | requires_math |
-| 441 | Formatted numeric output | breaks jmcc | compile: 21:1: error: expected declaration, got 'main' |
+| 441 | Formatted numeric output | implemented | formatted_numeric_output.c |
 | 442 | Fortunate numbers | skipped | requires_gmp |
 | 443 | Forward difference | passes jmcc |  |
 | 444 | Four bit adder | passes jmcc |  |
@@ -579,11 +571,11 @@ Status is based on a full scan against the current jmcc build.
 | 507 | Hickerson series of almost integers | skipped | gcc_compile_fail |
 | 508 | Higher-order functions | fetch_error | no_main |
 | 509 | Hilbert curve | passes jmcc |  |
-| 510 | History variables | breaks jmcc | compile: 120:2: error: expression is not an lvalue |
+| 510 | History variables | implemented | history_variables.c |
 | 511 | Hofstadter Figure-Figure sequences | passes jmcc |  |
 | 512 | Hofstadter Q sequence | passes jmcc |  |
 | 513 | Hofstadter-Conway $10,000 sequence | fetch_error | no_main |
-| 514 | Holidays related to Easter | breaks jmcc | compile: 107:22: error: expression is not an lvalue |
+| 514 | Holidays related to Easter | implemented | holidays_related_to_easter.c |
 | 515 | Honaker primes | passes jmcc |  |
 | 516 | Honeycombs | skipped | requires_math |
 | 517 | Horizontal sundial calculations | skipped | requires_math |
@@ -606,7 +598,7 @@ Status is based on a full scan against the current jmcc build.
 | 534 | Image convolution | fetch_error | no_main |
 | 535 | Image noise | skipped | requires_sdl |
 | 536 | Imaginary base numbers | skipped | requires_math |
-| 537 | Implicit type conversion | breaks jmcc | compile: 21:1: error: expected declaration, got 'main' |
+| 537 | Implicit type conversion | implemented | implicit_type_conversion.c |
 | 538 | Include a file | fetch_error | no_c_section |
 | 539 | Increasing gaps between consecutive Niven numbers | skipped | gcc_compile_fail |
 | 540 | Increment a numerical string | passes jmcc |  |
@@ -617,13 +609,13 @@ Status is based on a full scan against the current jmcc build.
 | 545 | Input/Output for lines of text | skipped | interactive |
 | 546 | Input/Output for pairs of numbers | skipped | interactive |
 | 547 | Integer comparison | skipped | interactive |
-| 548 | Integer overflow | breaks jmcc | exit: gcc=0 jmcc=-8 |
+| 548 | Integer overflow | skipped | intentional_ub |
 | 549 | Integer roots | skipped | requires_math |
 | 550 | Integer sequence | skipped | gcc_timeout |
 | 551 | Intersecting number wheels | passes jmcc |  |
 | 552 | Introspection | fetch_error | no_main |
 | 553 | Inverted index | skipped | interactive |
-| 554 | Inverted syntax | breaks jmcc | compile: 43:1: error: expected declaration, got 'main' |
+| 554 | Inverted syntax | implemented | inverted_syntax.c |
 | 555 | IPC via named pipe | skipped | requires_pthread |
 | 556 | ISBN13 check digit | passes jmcc |  |
 | 557 | Isqrt (integer square root) of X | passes jmcc |  |
@@ -717,12 +709,12 @@ Status is based on a full scan against the current jmcc build.
 | 645 | Loops/For | fetch_error | no_main |
 | 646 | Loops/For with a specified step | fetch_error | no_main |
 | 647 | Loops/Foreach | fetch_error | no_main |
-| 648 | Loops/Increment loop index within loop body | breaks jmcc | wrong_output: 1176b vs 1176b |
+| 648 | Loops/Increment loop index within loop body | implemented | loops_increment_loop_index_within_loop_body.c |
 | 649 | Loops/Infinite | fetch_error | no_main |
 | 650 | Loops/N plus one half | passes jmcc |  |
 | 651 | Loops/Nested | skipped | non_deterministic |
 | 652 | Loops/While | fetch_error | no_main |
-| 653 | Loops/With multiple ranges | breaks jmcc | compile: 1696:18: error: expected type specifier |
+| 653 | Loops/With multiple ranges | implemented | loops_with_multiple_ranges.c |
 | 654 | Loops/Wrong ranges | passes jmcc |  |
 | 655 | LU decomposition | skipped | requires_math |
 | 656 | Lucas-Lehmer test | skipped | requires_gmp |
@@ -743,7 +735,7 @@ Status is based on a full scan against the current jmcc build.
 | 671 | Make directory path | skipped | argv0_dependent |
 | 672 | Man or boy test | implemented | man_or_boy_test.c |
 | 673 | Mandelbrot set | skipped | requires_math |
-| 674 | Map range | breaks jmcc | compile: 31:43: error: expected ')', got '1' (INT_LITERAL) |
+| 674 | Map range | implemented | map_range.c |
 | 675 | Matrix chain multiplication | passes jmcc |  |
 | 676 | Matrix digital rain | skipped | requires_unistd |
 | 677 | Matrix multiplication | implemented | matrix_multiplication.c |
@@ -776,7 +768,7 @@ Status is based on a full scan against the current jmcc build.
 | 704 | Minimum multiple of m where digital sum equals m | passes jmcc |  |
 | 705 | Minimum number of cells after, before, above and below NxN squares | passes jmcc |  |
 | 706 | Minimum numbers of three lists | passes jmcc |  |
-| 707 | Minimum positive multiple in base 10 using only 0 and 1 | breaks jmcc | compile: 2325:1: error: expected declaration, got '__int128' |
+| 707 | Minimum positive multiple in base 10 using only 0 and 1 | implemented | minimum_positive_multiple_in_base_10_using_only_0_and_1.c |
 | 708 | Minimum primes | passes jmcc |  |
 | 709 | Modular arithmetic | passes jmcc |  |
 | 710 | Modular exponentiation | skipped | requires_gmp |
@@ -821,8 +813,8 @@ Status is based on a full scan against the current jmcc build.
 | 749 | Native shebang | skipped | requires_unistd |
 | 750 | Natural sorting | skipped | requires_wchar |
 | 751 | Nautical bell | skipped | requires_unistd |
-| 752 | Negative base numbers | breaks jmcc | wrong_output: 388b vs 388b |
-| 753 | Nested function | breaks jmcc | compile: 46:17: error: expected ';', got '{' (LBRACE) |
+| 752 | Negative base numbers | implemented | negative_base_numbers.c |
+| 753 | Nested function | implemented | nested_function.c |
 | 754 | Nested templated data | implemented | nested_templated_data.c |
 | 755 | Next highest int from digits | passes jmcc |  |
 | 756 | Next special primes | passes jmcc |  |
@@ -830,7 +822,7 @@ Status is based on a full scan against the current jmcc build.
 | 758 | Nim game | skipped | interactive |
 | 759 | Nimber arithmetic | passes jmcc |  |
 | 760 | Non-continuous subsequences | passes jmcc |  |
-| 761 | Non-decimal radices/Convert | breaks jmcc | wrong_output: 118b vs 35b |
+| 761 | Non-decimal radices/Convert | implemented | non_decimal_radices_convert.c |
 | 762 | Non-decimal radices/Input | skipped | interactive |
 | 763 | Non-decimal radices/Output | passes jmcc |  |
 | 764 | Nonoblock | passes jmcc |  |
@@ -882,7 +874,7 @@ Status is based on a full scan against the current jmcc build.
 | 810 | Pairs with common factors | passes jmcc |  |
 | 811 | Palindrome dates | skipped | non_deterministic |
 | 812 | Palindrome detection | fetch_error | no_main |
-| 813 | Palindromic gapful numbers | breaks jmcc | SIGSEGV |
+| 813 | Palindromic gapful numbers | implemented | palindromic_gapful_numbers.c |
 | 814 | Palindromic primes | skipped | gcc_compile_fail |
 | 815 | Pan base non-primes | passes jmcc |  |
 | 816 | Pancake numbers | passes jmcc |  |
@@ -944,17 +936,17 @@ Status is based on a full scan against the current jmcc build.
 | 872 | Playing cards | skipped | non_deterministic |
 | 873 | Plot coordinate pairs | skipped | requires_math |
 | 874 | Pointers and references | fetch_error | no_c_section |
-| 875 | Poker hand analyser | breaks jmcc | wrong_output: 269b vs 259b |
+| 875 | Poker hand analyser | implemented | poker_hand_analyser.c |
 | 876 | Pollard's rho algorithm | skipped | requires_math |
 | 877 | Polymorphic copy | passes jmcc |  |
 | 878 | Polymorphism | fetch_error | no_code_block |
 | 879 | Polynomial long division | fetch_error | no_main |
 | 880 | Polynomial regression | fetch_error | no_main |
 | 881 | Polyspiral | skipped | requires_math |
-| 882 | Population count | breaks jmcc | link: undef ref  to `__builtin_popcountll' |
+| 882 | Population count | implemented | population_count.c |
 | 883 | Power set | passes jmcc |  |
 | 884 | Pragmatic directives | passes jmcc |  |
-| 885 | Price fraction | breaks jmcc | exit: gcc=0 jmcc=-6 |
+| 885 | Price fraction | implemented | price_fraction.c |
 | 886 | Primality by trial division | fetch_error | no_main |
 | 887 | Primality by Wilson's theorem | passes jmcc |  |
 | 888 | Prime conspiracy | passes jmcc |  |
@@ -981,7 +973,7 @@ Status is based on a full scan against the current jmcc build.
 | 909 | Pseudo-random numbers/PCG32 | skipped | requires_math |
 | 910 | Pseudo-random numbers/Splitmix64 | skipped | requires_math |
 | 911 | Pseudo-random numbers/Xorshift star | skipped | requires_math |
-| 912 | Punched cards | breaks jmcc | compile: 82:6: error: unterminated character literal |
+| 912 | Punched cards | implemented | punched_cards.c |
 | 913 | User:PureFox | fetch_error | no_c_section |
 | 914 | User:Pwmiller74 | fetch_error | no_c_section |
 | 915 | Pythagoras tree | skipped | non_deterministic |
@@ -1019,7 +1011,7 @@ Status is based on a full scan against the current jmcc build.
 | 947 | Real constants and functions | fetch_error | no_main |
 | 948 | Recaman's sequence | skipped | gcc_compile_fail |
 | 949 | Record sound | skipped | requires_unistd |
-| 950 | Reduced row echelon form | breaks jmcc | SIGSEGV |
+| 950 | Reduced row echelon form | implemented | reduced_row_echelon_form.c |
 | 951 | Regular expressions | implemented | regular_expressions.c |
 | 952 | Remote agent/Agent interface | fetch_error | no_code_block |
 | 953 | Remote agent/Agent logic | fetch_error | no_code_block |
@@ -1054,11 +1046,11 @@ Status is based on a full scan against the current jmcc build.
 | 982 | Run as a daemon or service | skipped | requires_unistd |
 | 983 | Run-length encoding | skipped | requires_file_io |
 | 984 | Runge-Kutta method | skipped | requires_math |
-| 985 | S-expressions | breaks jmcc | wrong_output: 350b vs 107b |
+| 985 | S-expressions | implemented | s_expressions.c |
 | 986 | Safe addition | skipped | gcc_compile_fail |
 | 987 | Safe and Sophie Germain primes | passes jmcc |  |
-| 988 | Safe primes and unsafe primes | breaks jmcc | runtime: timeout |
-| 989 | Sailors, coconuts and a monkey problem | breaks jmcc | runtime: timeout |
+| 988 | Safe primes and unsafe primes | skipped | slow_not_a_bug |
+| 989 | Sailors, coconuts and a monkey problem | skipped | slow_not_a_bug |
 | 990 | Same fringe | skipped | gcc_compile_fail |
 | 991 | Sattolo cycle | skipped | argv0_dependent |
 | 992 | Scope modifiers | fetch_error | no_main |
@@ -1298,9 +1290,9 @@ Status is based on a full scan against the current jmcc build.
 | 1226 | Time a function | skipped | non_deterministic |
 | 1227 | Tokenize a string | passes jmcc |  |
 | 1228 | Tokenize a string with escaping | passes jmcc |  |
-| 1229 | Tonelli-Shanks algorithm | breaks jmcc | wrong_output: 208b vs 188b |
+| 1229 | Tonelli-Shanks algorithm | implemented | tonelli_shanks_algorithm.c |
 | 1230 | Top rank per group | passes jmcc |  |
-| 1231 | Topological sort | breaks jmcc | wrong_output: 197b vs 15b |
+| 1231 | Topological sort | implemented | topological_sort.c |
 | 1232 | Topological sort/Extracted top item | skipped | gcc_compile_fail |
 | 1233 | Topswops | passes jmcc |  |
 | 1234 | Total circles area | skipped | requires_math |
@@ -1324,8 +1316,8 @@ Status is based on a full scan against the current jmcc build.
 | 1252 | User:Uli Bellgardt | fetch_error | no_c_section |
 | 1253 | Ultra useful primes | skipped | requires_gmp |
 | 1254 | Unbias a random generator | skipped | non_deterministic |
-| 1255 | Undefined values | breaks jmcc | wrong_output: 22b vs 18b |
-| 1256 | Unicode strings | breaks jmcc | wrong_output: 27b vs 25b |
+| 1255 | Undefined values | skipped | intentional_ub |
+| 1256 | Unicode strings | implemented | unicode_strings.c |
 | 1257 | Unicode variable names | passes jmcc |  |
 | 1258 | Unique characters | passes jmcc |  |
 | 1259 | Universal Lambda Machine | skipped | interactive |
@@ -1339,10 +1331,10 @@ Status is based on a full scan against the current jmcc build.
 | 1267 | URL decoding | skipped | interactive |
 | 1268 | URL encoding | passes jmcc |  |
 | 1269 | Use another language to call a function | skipped | gcc_compile_fail |
-| 1270 | Useless instructions | breaks jmcc | compile: 29:5: error: unexpected token 'auto' |
+| 1270 | Useless instructions | implemented | useless_instructions.c |
 | 1271 | User input/Graphical | skipped | gcc_compile_fail |
 | 1272 | User input/Text | skipped | interactive |
-| 1273 | UTF-8 encode and decode | breaks jmcc | compile: 2747:18: error: expected '}', got 'b00111111' (IDENTIFIER) |
+| 1273 | UTF-8 encode and decode | implemented | utf_8_encode_and_decode.c |
 | 1274 | Validate International Securities Identification Number | passes jmcc |  |
 | 1275 | Vampire number | skipped | requires_math |
 | 1276 | Van der Corput sequence | passes jmcc |  |
@@ -1384,7 +1376,7 @@ Status is based on a full scan against the current jmcc build.
 | 1312 | Wolstenholme numbers | skipped | requires_gmp |
 | 1313 | Word frequency | skipped | argv0_dependent |
 | 1314 | Word wheel | skipped | interactive |
-| 1315 | Word wrap | breaks jmcc | compile: 145:55: error: expected ';', got '{' (LBRACE) |
+| 1315 | Word wrap | implemented | word_wrap.c |
 | 1316 | Wordle comparison | passes jmcc |  |
 | 1317 | Words containing "the" substring | skipped | interactive |
 | 1318 | Words from neighbour ones | skipped | interactive |
@@ -1404,10 +1396,10 @@ Status is based on a full scan against the current jmcc build.
 | 1332 | Y combinator | passes jmcc |  |
 | 1333 | Yellowstone sequence | skipped | gcc_compile_fail |
 | 1334 | Yin and yang | passes jmcc |  |
-| 1335 | Zebra puzzle | breaks jmcc | compile: 215:20: error: expected ')', got 'b11111' (IDENTIFIER) |
+| 1335 | Zebra puzzle | implemented | zebra_puzzle.c |
 | 1336 | Zeckendorf arithmetic | skipped | gcc_compile_fail |
 | 1337 | Zeckendorf number representation | passes jmcc |  |
 | 1338 | Zero to the zero power | skipped | requires_math |
 | 1339 | Zhang-Suen thinning algorithm | skipped | interactive |
 | 1340 | Zig-zag matrix | passes jmcc |  |
-| 1341 | Zsigmondy numbers | breaks jmcc | runtime: timeout |
+| 1341 | Zsigmondy numbers | skipped | slow_not_a_bug |
