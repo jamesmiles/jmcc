@@ -893,6 +893,10 @@ int inet_aton(const char *cp, struct in_addr *inp);
         "__builtin_va_start", "__builtin_va_end", "__builtin_va_arg",
         "__builtin_va_copy", "__builtin_alloca", "__builtin_expect",
         "__builtin_offsetof",
+        "__builtin_popcount", "__builtin_popcountl", "__builtin_popcountll",
+        "__builtin_clz", "__builtin_clzl", "__builtin_clzll",
+        "__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll",
+        "__builtin_constant_p",
     }
 
     def _eval_if_expr(self, expr: str) -> bool:

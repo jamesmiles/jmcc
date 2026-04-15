@@ -286,15 +286,18 @@ class Lexer:
         if ch in escapes:
             return escapes[ch]
         if ch == 'x':
-            # Hex escape - produces a raw byte
+            # Hex escape - takes all subsequent hex digits (C11)
             digits = []
             while self.pos < len(self.source) and self.source[self.pos] in '0123456789abcdefABCDEF':
                 digits.append(self.advance())
             if not digits:
                 self.error("expected hex digit in escape sequence")
-            val = int(''.join(digits), 16) & 0xFF
-            # Use PUA codepoint to preserve raw byte identity (U+F700-U+F7FF)
-            return chr(0xF700 + val) if val >= 0x80 else chr(val)
+            val = int(''.join(digits), 16)
+            # For values 0x80-0xFF, use PUA to preserve raw byte identity in char strings
+            # Larger values are Unicode codepoints (for wide strings)
+            if 0x80 <= val <= 0xFF:
+                return chr(0xF700 + val)
+            return chr(val)
         if ch == 'u':
             # Unicode escape \uXXXX - 4 hex digits, encode as UTF-8
             digits = []

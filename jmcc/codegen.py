@@ -4119,6 +4119,36 @@ class CodeGen:
             self.emit("    bswap %rax")
             return
 
+        # __builtin_popcount/popcountl/popcountll: count set bits
+        if func_name == "__builtin_popcount" and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    popcntl %eax, %eax")
+            return
+        if func_name in ("__builtin_popcountl", "__builtin_popcountll") and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    popcntq %rax, %rax")
+            return
+
+        # __builtin_clz/ctz: count leading/trailing zeros
+        if func_name == "__builtin_clz" and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    bsrl %eax, %eax")
+            self.emit("    xorl $31, %eax")
+            return
+        if func_name in ("__builtin_clzl", "__builtin_clzll") and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    bsrq %rax, %rax")
+            self.emit("    xorq $63, %rax")
+            return
+        if func_name == "__builtin_ctz" and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    bsfl %eax, %eax")
+            return
+        if func_name in ("__builtin_ctzl", "__builtin_ctzll") and expr.args:
+            self.gen_expr(expr.args[0])
+            self.emit("    bsfq %rax, %rax")
+            return
+
         is_indirect = not isinstance(expr.name, Identifier)
         is_fptr = False
         if isinstance(expr.name, Identifier):

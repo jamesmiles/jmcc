@@ -1686,13 +1686,22 @@ class Parser:
             return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
 
         name = self.expect(TokenType.IDENTIFIER, "typedef name").value
-        # Handle typedef for arrays: typedef int arr_t[10];
+        # Handle typedef for arrays: typedef int arr_t[10]; or typedef int mat_t[3][4];
         if self.match(TokenType.LBRACKET):
+            dims = []
             if self.at(TokenType.RBRACKET):
-                type_spec.array_sizes = [None]
+                dims.append(None)
             else:
-                type_spec.array_sizes = [self.parse_expr()]
+                dims.append(self.parse_expr())
             self.expect(TokenType.RBRACKET, "']'")
+            # Additional dimensions
+            while self.match(TokenType.LBRACKET):
+                if self.at(TokenType.RBRACKET):
+                    dims.append(None)
+                else:
+                    dims.append(self.parse_expr())
+                self.expect(TokenType.RBRACKET, "']'")
+            type_spec.array_sizes = dims
         self.typedefs[name] = type_spec
         self.skip_attribute()
         # Handle comma-separated typedef names: typedef struct X *A, B;
