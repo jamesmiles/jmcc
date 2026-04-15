@@ -817,7 +817,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
                     result.append(f'"{getattr(self, "_current_file", "<unknown>")}"')
                     i = j
                     continue
-                elif word in self.macros and word not in expanding:
+                elif word in self.macros and word not in expanding and word != "__has_builtin":
                     macro = self.macros[word]
                     if macro.is_func:
                         # Function-like macro — look for (args)
@@ -909,6 +909,11 @@ int inet_aton(const char *cp, struct in_addr *inp);
 
         # Expand macros in the expression
         expr = self._expand_macros(expr)
+
+        # Re-apply __has_builtin substitution after macro expansion
+        # (macros that wrap __has_builtin only produce it after expansion)
+        expr = re.sub(r'__has_builtin\s*\(\s*(\w+)\s*\)',
+                       lambda m: '1' if m.group(1) in self._SUPPORTED_BUILTINS else '0', expr)
 
         # Replace remaining identifiers with 0 (per C standard)
         expr = re.sub(r'\b[a-zA-Z_]\w*\b', '0', expr)
