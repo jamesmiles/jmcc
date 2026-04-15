@@ -63,19 +63,26 @@ class Parser:
     }
 
     def skip_attribute(self):
-        """Skip GCC __attribute__((...)) annotations."""
+        """Skip GCC __attribute__((...)) annotations.
+        Returns a set of recognized attribute names (e.g., {'packed'})."""
+        attrs = set()
         while (self.at(TokenType.IDENTIFIER) and
                self.current().value in ("__attribute__", "__attribute")):
             self.advance()  # __attribute__
             if self.match(TokenType.LPAREN):
                 depth = 1
                 while depth > 0 and not self.at(TokenType.EOF):
+                    if self.at(TokenType.IDENTIFIER):
+                        name = self.current().value
+                        if name in ("packed", "__packed__"):
+                            attrs.add("packed")
                     if self.match(TokenType.LPAREN):
                         depth += 1
                     elif self.match(TokenType.RPAREN):
                         depth -= 1
                     else:
                         self.advance()
+        return attrs
 
     def is_type_start(self) -> bool:
         if self.current().type in self.TYPE_SPECIFIERS:
@@ -326,7 +333,7 @@ class Parser:
 
     def parse_struct_spec(self, is_union=False) -> StructDef:
         """Parse struct/union specifier: struct Name { members }"""
-        self.skip_attribute()  # union/struct __attribute__((packed)) Name {
+        attrs = self.skip_attribute() or set()  # union/struct __attribute__((packed)) Name {
         name = None
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
@@ -425,6 +432,10 @@ class Parser:
 
             self.expect(TokenType.RBRACE, "'}'")
             sdef.members = members
+            # Handle trailing __attribute__((packed)) after the struct body
+            trailing_attrs = self.skip_attribute() or set()
+            if "packed" in attrs or "packed" in trailing_attrs:
+                sdef.is_packed = True
             return sdef
         elif name and name in self.struct_defs:
             return self.struct_defs[name]
@@ -1644,7 +1655,9 @@ class Parser:
     def parse_typedef(self) -> TypedefDecl:
         t = self.advance()  # typedef
         type_spec = self.parse_type_spec()
-        self.skip_attribute()  # } __attribute__((packed)) Name;
+        td_attrs = self.skip_attribute() or set()  # } __attribute__((packed)) Name;
+        if "packed" in td_attrs and type_spec.struct_def:
+            type_spec.struct_def.is_packed = True
 
         # Function pointer typedef: typedef int (*name)(params);
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:

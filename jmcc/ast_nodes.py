@@ -12,6 +12,7 @@ class StructDef:
     name: Optional[str] = None  # None for anonymous structs
     members: List['StructMember'] = field(default_factory=list)
     is_union: bool = False
+    is_packed: bool = False
 
     @staticmethod
     def _eval_dim(dim):
@@ -60,6 +61,8 @@ class StructDef:
 
     def alignment(self):
         """Return the alignment of this struct/union."""
+        if self.is_packed:
+            return 1
         max_align = 1
         for m in self.members:
             ma = self._member_align(m.type_spec)
@@ -102,7 +105,8 @@ class StructDef:
                 bf_bits_used = 0
                 align = self._member_align(m.type_spec)
                 actual_size = self._member_total_size(m.type_spec)
-                if align > 0:
+                # Packed structs: no alignment padding between members
+                if align > 0 and not self.is_packed:
                     total = (total + align - 1) & ~(align - 1)
                 result.append((total, actual_size))
                 total += actual_size
