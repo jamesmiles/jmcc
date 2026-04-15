@@ -1,0 +1,192 @@
+// TEST: rosetta_esthetic_numbers
+// DESCRIPTION: Rosetta Code - Esthetic numbers (wrong_output)
+// EXPECTED_EXIT: 0
+// ENVIRONMENT: hosted
+// PHASE: 5
+// SOURCE: https://rosettacode.org/wiki/Esthetic_numbers#C
+// LICENSE: GFDL 1.2
+// EXPECTED_STDOUT:
+// STDOUT: Base 2: 8th to 12th esthetic numbers:
+// STDOUT: 10101010 101010101 1010101010 10101010101 101010101010 
+// STDOUT:
+// STDOUT: Base 3: 12th to 18th esthetic numbers:
+// STDOUT: 1210 1212 2101 2121 10101 10121 12101 
+// STDOUT:
+// STDOUT: Base 4: 16th to 24th esthetic numbers:
+// STDOUT: 323 1010 1012 1210 1212 1232 2101 2121 2123 
+// STDOUT:
+// STDOUT: Base 5: 20th to 30th esthetic numbers:
+// STDOUT: 323 343 432 434 1010 1012 1210 1212 1232 1234 2101 
+// STDOUT:
+// STDOUT: Base 6: 24th to 36th esthetic numbers:
+// STDOUT: 343 345 432 434 454 543 545 1010 1012 1210 1212 1232 1234 
+// STDOUT:
+// STDOUT: Base 7: 28th to 42th esthetic numbers:
+// STDOUT: 345 432 434 454 456 543 545 565 654 656 1010 1012 1210 1212 1232 
+// STDOUT:
+// STDOUT: Base 8: 32th to 48th esthetic numbers:
+// STDOUT: 432 434 454 456 543 545 565 567 654 656 676 765 767 1010 1012 1210 1212 
+// STDOUT:
+// STDOUT: Base 9: 36th to 54th esthetic numbers:
+// STDOUT: 434 454 456 543 545 565 567 654 656 676 678 765 767 787 876 878 1010 1012 1210 
+// STDOUT:
+// STDOUT: Base 10: 40th to 60th esthetic numbers:
+// STDOUT: 454 456 543 545 565 567 654 656 676 678 765 767 787 789 876 878 898 987 989 1010 1012 
+// STDOUT:
+// STDOUT: Base 11: 44th to 66th esthetic numbers:
+// STDOUT: 456 543 545 565 567 654 656 676 678 765 767 787 789 876 878 898 89a 987 989 9a9 a98 a9a 1010 
+// STDOUT:
+// STDOUT: Base 12: 48th to 72th esthetic numbers:
+// STDOUT: 543 545 565 567 654 656 676 678 765 767 787 789 876 878 898 89a 987 989 9a9 9ab a98 a9a aba ba9 bab 
+// STDOUT:
+// STDOUT: Base 13: 52th to 78th esthetic numbers:
+// STDOUT: 545 565 567 654 656 676 678 765 767 787 789 876 878 898 89a 987 989 9a9 9ab a98 a9a aba abc ba9 bab bcb cba 
+// STDOUT:
+// STDOUT: Base 14: 56th to 84th esthetic numbers:
+// STDOUT: 565 567 654 656 676 678 765 767 787 789 876 878 898 89a 987 989 9a9 9ab a98 a9a aba abc ba9 bab bcb bcd cba cbc cdc 
+// STDOUT:
+// STDOUT: Base 15: 60th to 90th esthetic numbers:
+// STDOUT: 567 654 656 676 678 765 767 787 789 876 878 898 89a 987 989 9a9 9ab a98 a9a aba abc ba9 bab bcb bcd cba cbc cdc cde dcb dcd 
+// STDOUT:
+// STDOUT: Base 16: 64th to 96th esthetic numbers:
+// STDOUT: 654 656 676 678 765 767 787 789 876 878 898 89a 987 989 9a9 9ab a98 a9a aba abc ba9 bab bcb bcd cba cbc cdc cde dcb dcd ded def edc 
+// STDOUT:
+// STDOUT: Base 10: 61 esthetic numbers between 1000 and 9999:
+// STDOUT: 1010 1012 1210 1212 1232 1234 2101 2121 2123 2321 2323 2343 2345 3210 3212 3232 3234 3432 3434 3454 3456 4321 4323 4343 4345 4543 4545 4565 4567 5432 5434 5454 5456 5654 5656 5676 5678 6543 6545 6565 6567 6765 6767 6787 6789 7654 7656 7676 7678 7876 7878 7898 8765 8767 8787 8789 8987 8989 9876 9878 9898 
+// STDOUT:
+// STDOUT: Base 10: 126 esthetic numbers between 100000000 and 130000000:
+// STDOUT: 101010101 101010121 101010123 101012101 101012121 101012123 101012321 101012323 101012343 101012345 101210101 101210121 101210123 101212101 101212121 101212123 101212321 101212323 101212343 101212345 101232101 101232121 101232123 101232321 101232323 101232343 101232345 101234321 101234323 101234343 101234345 101234543 101234545 101234565 101234567 121010101 121010121 121010123 121012101 121012121 121012123 121012321 121012323 121012343 121012345 121210101 121210121 121210123 121212101 121212121 121212123 121212321 121212323 121212343 121212345 121232101 121232121 121232123 121232321 121232323 121232343 121232345 121234321 121234323 121234343 121234345 121234543 121234545 121234565 121234567 123210101 123210121 123210123 123212101 123212121 123212123 123212321 123212323 123212343 123212345 123232101 123232121 123232123 123232321 123232323 123232343 123232345 123234321 123234323 123234343 123234345 123234543 123234545 123234565 123234567 123432101 123432121 123432123 123432321 123432323 123432343 123432345 123434321 123434323 123434343 123434345 123434543 123434545 123434565 123434567 123454321 123454323 123454343 123454345 123454543 123454545 123454565 123454567 123456543 123456545 123456565 123456567 123456765 123456767 123456787 123456789 
+// STDOUT:
+// STDOUT: Base 10: 911 esthetic numbers between 100000000000 and 130000000000:
+// STDOUT: 101010101010 101010101012 101010101210 101010101212 101010101232 101010101234 101010121010 
+// STDOUT: ............
+// STDOUT: 123456787678 123456787876 123456787878 123456787898 123456789876 123456789878 123456789898 
+// STDOUT:
+// STDOUT: Base 10: 6225 esthetic numbers between 100000000000000 and 130000000000000:
+// STDOUT: 101010101010101 101010101010121 101010101010123 101010101012101 101010101012121 
+// STDOUT: ............
+// STDOUT: 123456789898767 123456789898787 123456789898789 123456789898987 123456789898989 
+// STDOUT:
+// STDOUT: Base 10: 44744 esthetic numbers between 100000000000000000 and 130000000000000000:
+// STDOUT: 101010101010101010 101010101010101012 101010101010101210 101010101010101212 
+// STDOUT: ............
+// STDOUT: 123456789898987898 123456789898989876 123456789898989878 123456789898989898 
+
+#include <stdio.h> 
+#include <string.h>
+#include <locale.h>
+
+typedef int bool;
+typedef unsigned long long ull;
+
+#define TRUE 1
+#define FALSE 0
+
+char as_digit(int d) { 
+    return (d >= 0 && d <= 9) ? d + '0' : d - 10 + 'a';  
+}
+
+void revstr(char *str) { 
+    int i, len = strlen(str);
+    char t; 
+    for (i = 0; i < len/2; ++i) { 
+        t = str[i]; 
+        str[i] = str[len - i - 1]; 
+        str[len - i - 1] = t; 
+    } 
+}  
+
+char* to_base(char s[], ull n, int b) { 
+    int i = 0; 
+    while (n) { 
+        s[i++] = as_digit(n % b); 
+        n /= b; 
+    } 
+    s[i] = '\0'; 
+    revstr(s);
+    return s;  
+} 
+
+ull uabs(ull a, ull  b) {
+    return a > b ? a - b : b - a;
+}
+
+bool is_esthetic(ull n, int b) {
+    int i, j;
+    if (!n) return FALSE;
+    i = n % b;
+    n /= b;
+    while (n) {
+        j = n % b;
+        if (uabs(i, j) != 1) return FALSE;
+        n /= b;
+        i = j;
+    }
+    return TRUE;
+}
+
+ull esths[45000];
+int le = 0;
+
+void dfs(ull n, ull m, ull i) {
+    ull d, i1, i2;
+    if (i >= n && i <= m) esths[le++] = i;
+    if (i == 0 || i > m) return; 
+    d = i % 10;
+    i1 = i * 10 + d - 1;
+    i2 = i1 + 2;
+    if (d == 0) {
+        dfs(n, m, i2);
+    } else if (d == 9) {
+        dfs(n, m, i1);
+    } else {
+        dfs(n, m, i1);
+        dfs(n, m, i2);
+    }
+}
+
+void list_esths(ull n, ull n2, ull m, ull m2, int per_line, bool all) {
+    int i;
+    le = 0;
+    for (i = 0; i < 10; ++i) {
+        dfs(n2, m2, i);
+    }
+    printf("Base 10: %'d esthetic numbers between %'llu and %'llu:\n", le, n, m);
+    if (all) {
+        for (i = 0; i < le; ++i) {
+            printf("%llu ", esths[i]);
+            if (!(i+1)%per_line) printf("\n");
+        }
+    } else {
+        for (i = 0; i < per_line; ++i) printf("%llu ", esths[i]);
+        printf("\n............\n");
+        for (i = le - per_line; i < le; ++i) printf("%llu ", esths[i]);
+    }
+    printf("\n\n");
+}
+
+int main() {
+    ull n;
+    int b, c;
+    char ch[15] = {0};
+    for (b = 2; b <= 16; ++b) {
+        printf("Base %d: %dth to %dth esthetic numbers:\n", b, 4*b, 6*b);
+        for (n = 1, c = 0; c < 6 * b; ++n) {
+            if (is_esthetic(n, b)) {
+                if (++c >= 4 * b) printf("%s ", to_base(ch, n, b));
+            }
+        }
+        printf("\n\n");
+    }
+    char *oldLocale = setlocale(LC_NUMERIC, NULL);
+    setlocale(LC_NUMERIC, ""); 
+
+    // the following all use the obvious range limitations for the numbers in question
+    list_esths(1000, 1010, 9999, 9898, 16, TRUE);
+    list_esths(1e8, 101010101, 13*1e7, 123456789, 9, TRUE);
+    list_esths(1e11, 101010101010, 13*1e10, 123456789898, 7, FALSE);
+    list_esths(1e14, 101010101010101, 13*1e13, 123456789898989, 5, FALSE);
+    list_esths(1e17, 101010101010101010, 13*1e16, 123456789898989898, 4, FALSE);
+    setlocale(LC_NUMERIC, oldLocale);
+    return 0;
+}
