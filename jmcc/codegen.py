@@ -16,6 +16,7 @@ class CodeGen:
     def __init__(self):
         self.output: List[str] = []
         self.string_literals: List[Tuple[str, str]] = []  # (label, value)
+        self.pending_compound_literals = []  # (label, struct_def, init_list) for anonymous compound literals
         self.global_vars: Dict[str, GlobalVarDecl] = {}
         self.known_functions: set = set()  # function names
         self.func_return_types: Dict[str, TypeSpec] = {}  # func name -> return type
@@ -374,6 +375,19 @@ class CodeGen:
                                     end_idx = item.designator_end
                                 for j in range(idx, end_idx + 1):
                                     if j < total_elems:
+                                        orig_val = item.value
+                                        # Check for &(Type){...} — anonymous compound literal
+                                        # (must check BEFORE unwrapping CastExpr which would lose the &)
+                                        if (isinstance(orig_val, UnaryOp) and orig_val.op == "&" and
+                                                isinstance(orig_val.operand, CastExpr) and
+                                                isinstance(orig_val.operand.operand, InitList)):
+                                            cl_type = orig_val.operand.target_type
+                                            cl_init = orig_val.operand.operand
+                                            if cl_type.struct_def:
+                                                anon = self.new_label("compound")
+                                                self.pending_compound_literals.append((anon, cl_type.struct_def, cl_init))
+                                                elems[j] = anon
+                                                continue
                                         val = self._unwrap_compound_literal(item.value)
                                         # Unwrap casts
                                         while isinstance(val, CastExpr):
@@ -524,6 +538,15 @@ class CodeGen:
                     self.emit(f"    .align {align}")
                     self.label(name)
                     self.emit(f"    .zero {size}")
+
+        # Emit pending anonymous compound literals (from global array inits)
+        if self.pending_compound_literals:
+            self.emit("")
+            self.emit("    .data")
+            for anon, sdef, init_list in self.pending_compound_literals:
+                self.emit(f"    .align 8")
+                self.label(anon)
+                self._emit_struct_init_data(sdef, init_list)
 
         # Generate string literals (at the end, after globals which may add more)
         if self.string_literals:
@@ -794,6 +817,15 @@ class CodeGen:
                 lbl = self.new_label("str")
                 self.string_literals.append((lbl, unwrapped.value, unwrapped.wide))
                 relocs.append((off, lbl))
+            elif (isinstance(value, UnaryOp) and value.op == "&" and
+                  isinstance(value.operand, CastExpr) and isinstance(value.operand.operand, InitList)):
+                # &(struct T){...} — anonymous compound literal, emit as static
+                cl_type = value.operand.target_type
+                cl_init = value.operand.operand
+                if cl_type.struct_def:
+                    anon = self.new_label("compound")
+                    self.pending_compound_literals.append((anon, cl_type.struct_def, cl_init))
+                    relocs.append((off, anon))
             elif (isinstance(unwrapped, UnaryOp) and unwrapped.op == "&" and
                   isinstance(unwrapped.operand, Identifier)):
                 relocs.append((off, unwrapped.operand.name))
