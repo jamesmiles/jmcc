@@ -396,6 +396,10 @@ class Parser:
                 if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
                     self.advance()  # (
                     self.advance()  # *
+                    # Multiple stars: void (**name)(params) — pointer to function pointer
+                    member_extra_stars = 0
+                    while self.match(TokenType.STAR):
+                        member_extra_stars += 1
                     # Function returning function pointer: void (*(*name)(args1))(args2)
                     # After `(*` we see another `(` instead of an identifier
                     if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
@@ -441,7 +445,7 @@ class Parser:
                             else:
                                 arr_sizes.append(None)
                             self.expect(TokenType.RBRACKET, "']'")
-                        mem_type = TypeSpec(base=mem_type.base, pointer_depth=mem_type.pointer_depth + 1,
+                        mem_type = TypeSpec(base=mem_type.base, pointer_depth=mem_type.pointer_depth + 1 + member_extra_stars,
                                            is_unsigned=mem_type.is_unsigned,
                                            array_sizes=arr_sizes if arr_sizes else None)
                     else:
@@ -452,7 +456,8 @@ class Parser:
                                 if self.match(TokenType.LPAREN): depth += 1
                                 elif self.match(TokenType.RPAREN): depth -= 1
                                 else: self.advance()
-                        mem_type = TypeSpec(base="void", pointer_depth=1)
+                        # Function pointer with extra stars: void (**fp)(args) is ptr to fp
+                        mem_type = TypeSpec(base="void", pointer_depth=1 + member_extra_stars)
                 elif self.at(TokenType.IDENTIFIER):
                     mem_name = self.advance().value
 
