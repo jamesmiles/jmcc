@@ -114,6 +114,14 @@ extern FILE *stderr;
 #define SEEK_CUR 1
 #define SEEK_END 2
 #define BUFSIZ 8192
+#define EOF (-1)
+#define FILENAME_MAX 4096
+#define FOPEN_MAX 16
+#define L_tmpnam 20
+#define TMP_MAX 238328
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
 #endif
 """,
         "stdlib.h": """
