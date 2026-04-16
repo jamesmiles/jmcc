@@ -1181,8 +1181,12 @@ class Macro:
         for param, marker in markers.items():
             temp = re.sub(r'\b' + re.escape(param) + r'\b', marker, temp)
 
-        # Handle ## (token paste): remove ## and join adjacent markers
-        temp = re.sub(r'\s*##\s*', '', temp)
+        # Handle ## (token paste): mark adjacent markers with a no-space sentinel
+        # We use '\x03' as an indicator that "no space should be inserted" on that side
+        # First insert the sentinel into the markers that are pasted
+        # Then strip the ## tokens
+        # \x03MARKER means no space before; MARKER\x03 means no space after.
+        temp = re.sub(r'\s*##\s*', '\x03', temp)
 
         # Handle # (stringify): #MARKER -> "arg" (use raw/unexpanded args)
         for param, marker in markers.items():
@@ -1191,14 +1195,38 @@ class Macro:
                 temp = temp.replace('#' + marker,
                     '"' + arg.replace('\\', '\\\\').replace('"', '\\"') + '"')
 
-        # Replace remaining markers with args
+        # Replace remaining markers with args.
+        # Use regex to look at adjacent \x03 sentinels - if marker is preceded
+        # or followed by \x03, don't insert padding spaces on that side.
+        # We must do all replacements together (regex with callback) so that
+        # an adjacent \x03 stays in place to inform the next replacement.
+        marker_to_arg = {}
         for param, marker in markers.items():
             if param in param_map:
-                arg = param_map[param]
-                # For ## paste: if arg is empty, use space to prevent token merging
-                if arg == "" and '##' in self.body:
-                    temp = temp.replace(marker, ' ')
-                else:
-                    temp = temp.replace(marker, arg)
+                marker_to_arg[marker] = param_map[param]
+
+        if marker_to_arg:
+            # Use lookbehind/lookahead so \x03 sentinels aren't consumed and
+            # remain visible to neighboring replacements.
+            marker_pat = re.compile(
+                '(?<=\x03)?(' + '|'.join(re.escape(m) for m in marker_to_arg) + ')'
+            )
+            # Simpler: handle adjacency via match, look at characters around
+            marker_pat = re.compile('(' + '|'.join(re.escape(m) for m in marker_to_arg) + ')')
+
+            def repl(mo):
+                m = mo.group(1)
+                start, end = mo.start(), mo.end()
+                arg = marker_to_arg[m]
+                pre_paste = start > 0 and temp[start - 1] == '\x03'
+                post_paste = end < len(temp) and temp[end] == '\x03'
+                left = '' if pre_paste else ' '
+                right = '' if post_paste else ' '
+                return left + arg + right
+
+            temp = marker_pat.sub(repl, temp)
+
+        # Drop any remaining \x03 sentinels (between non-marker tokens, e.g. ident##ident)
+        temp = temp.replace('\x03', '')
 
         return temp

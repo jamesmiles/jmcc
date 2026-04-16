@@ -1409,6 +1409,33 @@ class CodeGen:
                         self.emit(f"    leaq {mangled}(%rip), %rcx")
                     else:
                         self.emit(f"    leaq {stmt.value.name}(%rip), %rcx")
+                elif isinstance(stmt.value, FuncCall):
+                    # FuncCall returning a struct
+                    # Allocate temp space and call - then copy/return via hidden ptr if needed
+                    if size > 16:
+                        # Pass our own hidden ret ptr to the called function so it
+                        # writes the result directly to where our caller expects it.
+                        self.emit(f"    movq {self._hidden_ret_ptr_offset}(%rbp), %rdi")
+                        # Generate call - it writes to the buffer and returns the pointer in %rax
+                        # We need to ensure the FuncCall codegen uses our %rdi as hidden ptr.
+                        # Save and restore: easier approach is to allocate temp space
+                        # and copy. But for now: allocate temp and copy.
+                        self.stack_offset -= ((size + 15) & ~15)
+                        tmp_off = self.stack_offset
+                        # Tell gen_func_call to use this temp as the hidden ret ptr
+                        self._struct_ret_dest = tmp_off
+                        self.gen_expr(stmt.value)
+                        self._struct_ret_dest = None
+                        self.emit(f"    leaq {tmp_off}(%rbp), %rcx")
+                    else:
+                        self.gen_expr(stmt.value)
+                        # For size<=16, return value is in rax/rdx; need to put on stack to address
+                        self.stack_offset -= 16
+                        tmp_off = self.stack_offset
+                        self.emit(f"    movq %rax, {tmp_off}(%rbp)")
+                        if size > 8:
+                            self.emit(f"    movq %rdx, {tmp_off + 8}(%rbp)")
+                        self.emit(f"    leaq {tmp_off}(%rbp), %rcx")
                 else:
                     self.gen_lvalue_addr(stmt.value)
                     self.emit("    movq %rax, %rcx")
@@ -1435,10 +1462,26 @@ class CodeGen:
                     self.emit("    movq %rdi, %rax")
             else:
                 self.gen_expr(stmt.value)
-                # Result is in %rax/%eax — move to xmm0 if returning float/double
+                # Result is in %rax/%eax — convert/move to xmm0 if returning float/double
                 if ret_type and ret_type.base in ("float", "double") and not ret_type.is_pointer():
                     if not (ret_type.struct_def and ret_type.pointer_depth == 0):
-                        self.emit("    movq %rax, %xmm0")
+                        # If the returned expression is an integer type, convert to float
+                        val_is_float = self._is_float_type(stmt.value)
+                        if not val_is_float:
+                            # Integer value in %eax/%rax — convert to double
+                            val_type = self.get_expr_type(stmt.value)
+                            if val_type and (val_type.base in ("long", "long long") or val_type.is_pointer()):
+                                if val_type.is_unsigned:
+                                    # Unsigned 64-bit -> double (cvtsi2sd treats as signed)
+                                    self.emit("    cvtsi2sdq %rax, %xmm0")
+                                else:
+                                    self.emit("    cvtsi2sdq %rax, %xmm0")
+                            else:
+                                self.emit("    cvtsi2sd %eax, %xmm0")
+                            if ret_type.base == "float":
+                                self.emit("    cvtsd2ss %xmm0, %xmm0")
+                        else:
+                            self.emit("    movq %rax, %xmm0")
         self.emit("    movq -8(%rbp), %rbx")  # restore callee-saved %rbx
         self.emit("    leave")
         self.emit("    ret")
@@ -1667,6 +1710,17 @@ class CodeGen:
                 elif size <= 4 and not decl.type_spec.is_pointer():
                     self.emit(f"    movl %eax, {offset}(%rbp)")
                 else:
+                    # 64-bit target: if init is a narrower int, extend to 64 bits
+                    init_type = self.get_expr_type(decl.init)
+                    init_is_narrow = (init_type is not None and not is_float_init and
+                                      init_type.base not in ("long", "long long") and
+                                      not init_type.is_pointer() and
+                                      not init_type.is_array())
+                    if init_is_narrow:
+                        if init_type.is_unsigned:
+                            self.emit("    movl %eax, %eax")  # zero-extend
+                        else:
+                            self.emit("    cltq")  # sign-extend
                     self.emit(f"    movq %rax, {offset}(%rbp)")
 
     def _emit_zero_fill(self, offset, size):
@@ -3073,8 +3127,10 @@ class CodeGen:
             return TypeSpec(base="char", pointer_depth=1)
         if isinstance(expr, FloatLiteral):
             return TypeSpec(base="float" if expr.is_single else "double")
-        if isinstance(expr, UnaryOp) and expr.op == "-":
+        if isinstance(expr, UnaryOp) and expr.op in ("-", "+", "~"):
             return self.get_expr_type(expr.operand)
+        if isinstance(expr, UnaryOp) and expr.op == "!":
+            return TypeSpec(base="int")
         if isinstance(expr, UnaryOp) and expr.op == "*":
             inner = self.get_expr_type(expr.operand)
             if inner and (inner.is_ptr_array or (inner.is_array() and inner.pointer_depth > 0)):
@@ -3199,7 +3255,14 @@ class CodeGen:
         if isinstance(expr, CastExpr):
             return expr.target_type
         if isinstance(expr, TernaryOp):
-            return self.get_expr_type(expr.true_expr)
+            tt = self.get_expr_type(expr.true_expr)
+            ft = self.get_expr_type(expr.false_expr)
+            # Prefer float branch type (matches gen_ternary's promotion behavior)
+            t_is_float = tt and tt.base in ("float", "double", "long double") and not tt.is_pointer()
+            f_is_float = ft and ft.base in ("float", "double", "long double") and not ft.is_pointer()
+            if f_is_float and not t_is_float:
+                return ft
+            return tt
         if isinstance(expr, BuiltinVaArg):
             return expr.target_type
         return None
@@ -3747,14 +3810,25 @@ class CodeGen:
             else:
                 store_size = self._type_store_size(operand_type)
                 self._emit_load("%rax", store_size, operand_type)
+                use_q = store_size == 8
                 if not is_prefix:
-                    self.emit("    movl %eax, %edx")
-                op = "addl" if is_inc else "subl"
-                self.emit(f"    {op} ${elem_size}, %eax")
+                    if use_q:
+                        self.emit("    movq %rax, %rdx")
+                    else:
+                        self.emit("    movl %eax, %edx")
+                if use_q:
+                    op = "addq" if is_inc else "subq"
+                    self.emit(f"    {op} ${elem_size}, %rax")
+                else:
+                    op = "addl" if is_inc else "subl"
+                    self.emit(f"    {op} ${elem_size}, %eax")
                 self.emit("    popq %rcx")
                 self._emit_store("%rcx", store_size)
                 if not is_prefix:
-                    self.emit("    movl %edx, %eax")
+                    if use_q:
+                        self.emit("    movq %rdx, %rax")
+                    else:
+                        self.emit("    movl %edx, %eax")
                 elif store_size == 1:
                     # Truncate to byte for char/unsigned char prefix inc/dec
                     if operand_type and operand_type.is_unsigned:
@@ -4320,16 +4394,40 @@ class CodeGen:
                 self._push_struct_arg(arg, arg_struct_size[idx])
             else:
                 self.gen_expr(arg)
+                arg_type = self.get_expr_type(arg)
+                pt = param_types[idx] if idx < len(param_types) else None
                 if arg_needs_convert[idx]:
-                    arg_type = self.get_expr_type(arg)
                     arg_actually_float = (arg_type and arg_type.base in ("float", "double", "long double")) or isinstance(arg, FloatLiteral)
                     if arg_actually_float and not arg_is_float[idx]:
+                        # Float -> int: convert. Use 64-bit destination if param is wide.
                         self.emit("    movq %rax, %xmm0")
-                        self.emit("    cvttsd2si %xmm0, %eax")
-                        self.emit("    cltq")
+                        param_is_wide = (pt and (pt.base in ("long", "long long") or pt.is_pointer()))
+                        if param_is_wide:
+                            self.emit("    cvttsd2siq %xmm0, %rax")
+                        else:
+                            self.emit("    cvttsd2si %xmm0, %eax")
+                            self.emit("    cltq")
                     elif not arg_actually_float and arg_is_float[idx]:
-                        self.emit("    cvtsi2sd %eax, %xmm0")
+                        # Int -> float: convert. Use 64-bit source if arg is wide.
+                        arg_is_wide = (arg_type and (arg_type.base in ("long", "long long") or arg_type.is_pointer()))
+                        if arg_is_wide:
+                            self.emit("    cvtsi2sdq %rax, %xmm0")
+                        else:
+                            self.emit("    cvtsi2sd %eax, %xmm0")
                         self.emit("    movq %xmm0, %rax")
+                else:
+                    # No float<->int convert needed, but may still need int width extension.
+                    arg_is_narrow_int = (arg_type and not arg_is_float[idx] and not arg_is_struct[idx] and
+                                         arg_type.base not in ("long", "long long") and
+                                         not arg_type.is_pointer() and
+                                         not arg_type.is_array())
+                    param_is_wide_int = (pt and (pt.base in ("long", "long long") or pt.is_pointer()) and
+                                         not (pt.base in ("float", "double", "long double") and not pt.is_pointer()))
+                    if arg_is_narrow_int and param_is_wide_int:
+                        if arg_type.is_unsigned:
+                            self.emit("    movl %eax, %eax")  # zero-extend
+                        else:
+                            self.emit("    cltq")  # sign-extend
                 self.emit("    pushq %rax")
 
         # Pop into registers (long doubles stay on stack)
@@ -4389,15 +4487,20 @@ class CodeGen:
                                 and ret_type.size_bytes() > 16)
         hidden_ret_off = None
         if needs_hidden_ret_ptr:
-            # Allocate temp space for the returned struct
-            ret_size = ret_type.size_bytes()
-            alloc = (ret_size + 15) & ~15
-            self.stack_offset -= alloc
-            hidden_ret_off = self.stack_offset
             # Shift existing int regs: rdi->rsi, rsi->rdx, etc.
-            # We need to push the existing regs down by one
             for ri in range(min(int_idx, 5), 0, -1):
                 self.emit(f"    movq {self.ARG_REGS_64[ri - 1]}, {self.ARG_REGS_64[ri]}")
+            # If caller has reserved a destination for the struct return, use it
+            preset_dest = getattr(self, '_struct_ret_dest', None)
+            if preset_dest is not None:
+                hidden_ret_off = preset_dest
+                self._struct_ret_dest = None  # consume
+            else:
+                # Allocate temp space for the returned struct
+                ret_size = ret_type.size_bytes()
+                alloc = (ret_size + 15) & ~15
+                self.stack_offset -= alloc
+                hidden_ret_off = self.stack_offset
             self.emit(f"    leaq {hidden_ret_off}(%rbp), %rdi")
 
         # Set %al to number of xmm registers used (required for variadic calls)

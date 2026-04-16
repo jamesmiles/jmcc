@@ -60,6 +60,7 @@ class Parser:
         TokenType.UNSIGNED, TokenType.BOOL, TokenType.STRUCT, TokenType.UNION,
         TokenType.ENUM, TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC,
         TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER, TokenType.ATOMIC,
+        TokenType.AUTO,
     }
 
     def skip_attribute(self):
@@ -137,6 +138,10 @@ class Parser:
                 has_storage_class = True
                 self.advance()
             elif t.type == TokenType.REGISTER:
+                has_storage_class = True
+                self.advance()
+            elif t.type == TokenType.AUTO:
+                # 'auto' storage class (no-op in C)
                 has_storage_class = True
                 self.advance()
             elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
@@ -358,6 +363,40 @@ class Parser:
                 if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
                     self.advance()  # (
                     self.advance()  # *
+                    # Function returning function pointer: void (*(*name)(args1))(args2)
+                    # After `(*` we see another `(` instead of an identifier
+                    if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+                        self.advance()  # inner (
+                        self.advance()  # inner *
+                        mem_name = self.expect(TokenType.IDENTIFIER, "member name").value
+                        self.expect(TokenType.RPAREN, "')'")  # close inner (*name)
+                        # Skip inner param list (args1)
+                        if self.match(TokenType.LPAREN):
+                            depth = 1
+                            while depth > 0 and not self.at(TokenType.EOF):
+                                if self.match(TokenType.LPAREN): depth += 1
+                                elif self.match(TokenType.RPAREN): depth -= 1
+                                else: self.advance()
+                        self.expect(TokenType.RPAREN, "')'")  # close outer (
+                        # Skip outer param list (args2)
+                        if self.match(TokenType.LPAREN):
+                            depth = 1
+                            while depth > 0 and not self.at(TokenType.EOF):
+                                if self.match(TokenType.LPAREN): depth += 1
+                                elif self.match(TokenType.RPAREN): depth -= 1
+                                else: self.advance()
+                        # Type: pointer to function returning function pointer
+                        # Use pointer_depth=2 so calling it returns a pointer (depth=1)
+                        mem_type = TypeSpec(base="void", pointer_depth=2)
+                        # Bit-field width or end of declaration
+                        bit_width = None
+                        if self.match(TokenType.COLON):
+                            bw_expr = self.parse_expr()
+                            if isinstance(bw_expr, IntLiteral):
+                                bit_width = bw_expr.value
+                        members.append(StructMember(type_spec=mem_type, name=mem_name, bit_width=bit_width))
+                        self.expect(TokenType.SEMICOLON, "';'")
+                        continue
                     mem_name = self.expect(TokenType.IDENTIFIER, "member name").value
                     self.expect(TokenType.RPAREN, "')'")
                     if self.at(TokenType.LBRACKET):
@@ -1369,6 +1408,10 @@ class Parser:
             self._skip_static_assert()
             return None
 
+        # Stray semicolon at top-level (e.g., trailing `;` after function definition)
+        if self.match(TokenType.SEMICOLON):
+            return None
+
         # Typedef
         if self.at(TokenType.TYPEDEF):
             return self.parse_typedef()
@@ -1417,6 +1460,12 @@ class Parser:
             return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
         if not self.is_type_start():
+            # K&R-style implicit int: identifier '(' is a function definition with implicit int return type
+            if (t.type == TokenType.IDENTIFIER
+                    and self.peek(1).type == TokenType.LPAREN):
+                type_spec = TypeSpec(base="int")
+                name = self.advance().value
+                return self.parse_func_decl(type_spec, name, t)
             self.error(f"expected declaration, got '{t.value}'")
 
         type_spec = self.parse_type_spec()

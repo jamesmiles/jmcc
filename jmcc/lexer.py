@@ -344,6 +344,18 @@ class Lexer:
             result.append(self.advance())
             while self.pos < len(self.source) and self.source[self.pos] in '0123456789abcdefABCDEF':
                 result.append(self.advance())
+        # Binary (GCC extension): 0b1010 / 0B1010
+        elif first_char == '0' and self.pos < len(self.source) and self.source[self.pos] in 'bB':
+            # Save position so we can roll back if not actually binary
+            self.advance()  # consume b/B (don't add to result)
+            bin_digits = []
+            while self.pos < len(self.source) and self.source[self.pos] in '01':
+                bin_digits.append(self.advance())
+            if not bin_digits:
+                self.error("expected binary digit after 0b")
+            # Convert to decimal string for downstream consumers
+            val = int(''.join(bin_digits), 2)
+            result = [str(val)]
         # Octal or decimal
         else:
             while self.pos < len(self.source) and self.source[self.pos] in '0123456789':
