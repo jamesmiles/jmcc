@@ -1292,7 +1292,13 @@ class Parser:
                     init = self.parse_assignment()
             return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
 
-        name = self.expect(TokenType.IDENTIFIER, "variable name").value
+        # Handle parenthesized name: int (name) = 42; — strip the parens
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.RPAREN:
+            self.advance()  # (
+            name = self.expect(TokenType.IDENTIFIER, "variable name").value
+            self.expect(TokenType.RPAREN, "')'")
+        else:
+            name = self.expect(TokenType.IDENTIFIER, "variable name").value
 
         # Local function declaration: int f(char *);
         if self.at(TokenType.LPAREN):

@@ -463,7 +463,8 @@ int inet_aton(const char *cp, struct in_addr *inp);
         lines = source.split('\n')
         output = []
         self._process_lines(lines, output, filename or self.filename)
-        return '\n'.join(output)
+        # Strip blue-paint sentinels (used internally to prevent re-expansion)
+        return '\n'.join(output).replace('\x00', '')
 
     def _process_lines(self, lines: List[str], output: List[str],
                        filename: str, if_stack: List[dict] = None):
@@ -808,6 +809,8 @@ int inet_aton(const char *cp, struct in_addr *inp);
                 while j < len(line) and (line[j].isalnum() or line[j] == '_'):
                     j += 1
                 word = line[i:j]
+                # Blue-paint: identifier surrounded by \x00 sentinels is inhibited
+                inhibited = (i > 0 and line[i-1] == '\x00' and j < len(line) and line[j] == '\x00')
 
                 if word == "__LINE__":
                     result.append(str(getattr(self, '_current_line', 0)))
@@ -817,7 +820,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
                     result.append(f'"{getattr(self, "_current_file", "<unknown>")}"')
                     i = j
                     continue
-                elif word in self.macros and word not in expanding and word != "__has_builtin":
+                elif word in self.macros and word not in expanding and word != "__has_builtin" and not inhibited:
                     macro = self.macros[word]
                     if macro.is_func:
                         # Function-like macro — look for (args)
@@ -828,8 +831,9 @@ int inet_aton(const char *cp, struct in_addr *inp);
                             args, end = self._parse_macro_args(line, k)
                             raw_args = list(args)  # save unexpanded for stringify
                             # Pre-expand args (unless used with ## in the body)
+                            # Propagate blue-paint set to prevent infinite recursion
                             if '##' not in macro.body:
-                                args = [self._expand_macros(a) for a in args]
+                                args = [self._expand_macros(a, expanding=expanding | {word}) for a in args]
                             expanded = macro.expand(args, raw_args=raw_args)
                             expanded = self._expand_macros(expanded, expanding=expanding | {word})
                             result.append(expanded)
@@ -842,6 +846,13 @@ int inet_aton(const char *cp, struct in_addr *inp);
                     else:
                         expanded = macro.body
                         expanded = self._expand_macros(expanded, expanding=expanding | {word})
+                        # If expanded result contains our macro name verbatim, the outer
+                        # re-scan would re-expand it — instead, leave it as a literal
+                        # identifier (blue-paint per C standard).
+                        if re.search(r'\b' + re.escape(word) + r'\b', expanded):
+                            # Use \x00<word>\x00 sentinel to inhibit further expansion
+                            expanded = re.sub(r'\b' + re.escape(word) + r'\b',
+                                             '\x00' + word + '\x00', expanded)
                         result.append(expanded)
                         i = j
                         continue
@@ -856,7 +867,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
         final = ''.join(result)
         # Re-scan: if expansion changed the line and there are still macros, re-expand
         if final != line and depth < 20:
-            return self._expand_macros(final, depth + 1)
+            return self._expand_macros(final, depth + 1, expanding=expanding)
         return final
 
     def _parse_macro_args(self, line: str, start: int) -> Tuple[List[str], int]:
