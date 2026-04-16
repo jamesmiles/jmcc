@@ -2775,6 +2775,11 @@ class CodeGen:
                 self.gen_expr(item.value)
                 self.emit(f"    movq %rax, {temp_off + i * 8}(%rbp)")
             self.emit(f"    leaq {temp_off}(%rbp), %rax")
+        elif isinstance(expr, Assignment):
+            # Chained assignment: a = (b = expr)
+            # Execute the inner assignment, then return target's address
+            self.gen_assignment(expr)
+            self.gen_lvalue_addr(expr.target)
         else:
             self.error("expression is not an lvalue", expr.line, expr.col)
 

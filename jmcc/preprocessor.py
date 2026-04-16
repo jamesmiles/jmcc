@@ -215,6 +215,19 @@ int fstat(int fd, struct stat *buf);
 #define SIG_IGN ((void (*)(int))1)
 typedef void (*sighandler_t)(int);
 typedef unsigned long sigset_t;
+typedef int pid_t;
+typedef int uid_t;
+typedef long clock_t;
+typedef unsigned int uint;
+typedef unsigned char uchar;
+typedef unsigned short ushort;
+typedef unsigned long ulong;
+typedef struct {
+    int si_signo;
+    int si_errno;
+    int si_code;
+    int _pad[28];
+} siginfo_t;
 struct sigaction {
     void (*sa_handler)(int);
     sigset_t sa_mask;
