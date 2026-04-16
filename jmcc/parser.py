@@ -315,10 +315,10 @@ class Parser:
             while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                 pass
 
-        # Function pointer type in cast/sizeof: void (*)(void), int (*)(int, int)
+        # Function pointer type in cast/sizeof: void (*)(void), int (*)(int, int), void*(*)(args)
         # Also handles int (__attribute__((x)) *)(void)
         # Only matches abstract fptr types (no name between * and ))
-        if self.at(TokenType.LPAREN) and pointer_depth == 0:
+        if self.at(TokenType.LPAREN):
             saved_fptr = self.pos
             self.advance()  # (
             self.skip_attribute()
@@ -337,7 +337,7 @@ class Parser:
                             else:
                                 arr_sizes.append(None)
                             self.expect(TokenType.RBRACKET, "']'")
-                        pointer_depth = star_count
+                        pointer_depth += star_count
                         return TypeSpec(
                             base=base, pointer_depth=pointer_depth,
                             is_unsigned=is_unsigned, is_const=is_const,
@@ -351,7 +351,7 @@ class Parser:
                             if self.match(TokenType.LPAREN): depth += 1
                             elif self.match(TokenType.RPAREN): depth -= 1
                             else: self.advance()
-                    pointer_depth = star_count  # function pointer
+                    pointer_depth += star_count  # function pointer
                 else:
                     self.pos = saved_fptr  # not a match, restore
             else:
