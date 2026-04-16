@@ -885,6 +885,28 @@ class Parser:
                     self.parse_assignment()  # discard the hint value
                     self.expect(TokenType.RPAREN, "')'")
                     expr = result_expr
+                elif isinstance(expr, Identifier) and expr.name == "__builtin_offsetof":
+                    # __builtin_offsetof(type, member) — compile-time byte offset
+                    target_type = self.parse_type_spec()
+                    self.expect(TokenType.COMMA, "','")
+                    member_path = [self.expect(TokenType.IDENTIFIER, "member name").value]
+                    # Support nested: __builtin_offsetof(T, a.b.c)
+                    while self.match(TokenType.DOT):
+                        member_path.append(self.expect(TokenType.IDENTIFIER, "member name").value)
+                    self.expect(TokenType.RPAREN, "')'")
+                    # Compute offset
+                    sdef = target_type.struct_def
+                    offset = 0
+                    for mn in member_path:
+                        if sdef is None:
+                            self.error(f"__builtin_offsetof: not a struct", expr.line, expr.col)
+                        mo = sdef.member_offset(mn)
+                        if mo is None:
+                            self.error(f"__builtin_offsetof: no member '{mn}'", expr.line, expr.col)
+                        offset += mo
+                        mt = sdef.member_type(mn)
+                        sdef = mt.struct_def if mt else None
+                    expr = IntLiteral(value=offset, line=expr.line, col=expr.col)
                 else:
                     # Function call
                     args = []
