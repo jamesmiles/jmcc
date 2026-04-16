@@ -159,11 +159,61 @@ typedef unsigned int wint_t;
 #define W_OK 2
 #define X_OK 1
 #define F_OK 0
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define _SC_ARG_MAX 0
+#define _SC_CHILD_MAX 1
+#define _SC_CLK_TCK 2
+#define _SC_NGROUPS_MAX 3
+#define _SC_OPEN_MAX 4
+#define _SC_STREAM_MAX 5
+#define _SC_TZNAME_MAX 6
+#define _SC_JOB_CONTROL 7
+#define _SC_SAVED_IDS 8
+#define _SC_VERSION 29
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE 30
+#define _SC_NPROCESSORS_CONF 83
+#define _SC_NPROCESSORS_ONLN 84
+#define _SC_PHYS_PAGES 85
+#define _SC_AVPHYS_PAGES 86
+typedef int ssize_t;
 int access(const char *path, int mode);
 int close(int fd);
-int read(int fd, void *buf, unsigned long count);
-int write(int fd, const void *buf, unsigned long count);
-int lseek(int fd, long offset, int whence);
+long read(int fd, void *buf, unsigned long count);
+long write(int fd, const void *buf, unsigned long count);
+long lseek(int fd, long offset, int whence);
+long sysconf(int name);
+int unlink(const char *path);
+int rmdir(const char *path);
+int chdir(const char *path);
+char *getcwd(char *buf, unsigned long size);
+int dup(int fd);
+int dup2(int oldfd, int newfd);
+int pipe(int pipefd[2]);
+int isatty(int fd);
+unsigned int sleep(unsigned int seconds);
+int usleep(unsigned int usec);
+int fsync(int fd);
+int fdatasync(int fd);
+int ftruncate(int fd, long length);
+int truncate(const char *path, long length);
+int getpid(void);
+int getppid(void);
+int getuid(void);
+int geteuid(void);
+int getgid(void);
+int getegid(void);
+char *getlogin(void);
+int execv(const char *path, char *const argv[]);
+int execvp(const char *file, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+int fork(void);
+int _exit(int status);
 """,
         "fcntl.h": """
 #define O_RDONLY 0
