@@ -2780,6 +2780,36 @@ class CodeGen:
             # Execute the inner assignment, then return target's address
             self.gen_assignment(expr)
             self.gen_lvalue_addr(expr.target)
+        elif isinstance(expr, TernaryOp):
+            # Ternary returning a struct: allocate temp, evaluate selected branch
+            # into temp via memcpy, return temp's address
+            tt = self.get_expr_type(expr)
+            if tt and tt.struct_def and not tt.is_pointer():
+                size = tt.struct_def.size_bytes()
+                alloc = (size + 7) & ~7
+                self.stack_offset -= alloc
+                temp_off = self.stack_offset
+                false_label = self.new_label("tern_lv_f")
+                end_label = self.new_label("tern_lv_e")
+                self.gen_expr(expr.condition)
+                self._emit_cond_test(expr.condition)
+                self.emit(f"    je {false_label}")
+                self.gen_lvalue_addr(expr.true_expr)
+                self.emit("    movq %rax, %rsi")
+                self.emit(f"    leaq {temp_off}(%rbp), %rdi")
+                self.emit(f"    movl ${size}, %ecx")
+                self.emit("    rep movsb")
+                self.emit(f"    jmp {end_label}")
+                self.label(false_label)
+                self.gen_lvalue_addr(expr.false_expr)
+                self.emit("    movq %rax, %rsi")
+                self.emit(f"    leaq {temp_off}(%rbp), %rdi")
+                self.emit(f"    movl ${size}, %ecx")
+                self.emit("    rep movsb")
+                self.label(end_label)
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
+            else:
+                self.error("expression is not an lvalue", expr.line, expr.col)
         else:
             self.error("expression is not an lvalue", expr.line, expr.col)
 
