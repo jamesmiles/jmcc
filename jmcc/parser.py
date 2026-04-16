@@ -241,6 +241,24 @@ class Parser:
                     pointer_depth += 1
                     while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
                         pass
+                # Check for function pointer type after typedef: uid_t(*)(args)
+                if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+                    saved_fptr_td = self.pos
+                    self.advance()  # (
+                    star_count = 0
+                    while self.match(TokenType.STAR):
+                        star_count += 1
+                    if self.at(TokenType.RPAREN):
+                        self.advance()  # )
+                        if self.match(TokenType.LPAREN):  # param list
+                            depth = 1
+                            while depth > 0 and not self.at(TokenType.EOF):
+                                if self.match(TokenType.LPAREN): depth += 1
+                                elif self.match(TokenType.RPAREN): depth -= 1
+                                else: self.advance()
+                        pointer_depth += star_count
+                    else:
+                        self.pos = saved_fptr_td  # not a match, restore
                 return TypeSpec(
                     base=td.base, pointer_depth=pointer_depth,
                     is_unsigned=td.is_unsigned, is_const=is_const,
