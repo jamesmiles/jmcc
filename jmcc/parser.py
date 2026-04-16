@@ -63,6 +63,21 @@ class Parser:
         TokenType.AUTO,
     }
 
+    def _skip_asm_label(self):
+        """Skip __asm__("label") on declarations (linker name aliases)."""
+        while (self.at(TokenType.IDENTIFIER) and
+               self.current().value in ("__asm__", "asm", "__asm")):
+            self.advance()  # __asm__
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN):
+                        depth += 1
+                    elif self.match(TokenType.RPAREN):
+                        depth -= 1
+                    else:
+                        self.advance()
+
     def skip_attribute(self):
         """Skip GCC __attribute__((...)) annotations.
         Returns a set of recognized attribute names (e.g., {'packed'})."""
@@ -1794,6 +1809,8 @@ class Parser:
 
         self.expect(TokenType.RPAREN, "')'")
         self.skip_attribute()  # void foo(void) __attribute__((stdcall));
+        self._skip_asm_label()  # void foo(void) __asm__("name")
+        self.skip_attribute()  # void foo(void) __asm__("name") __attribute__(...)
 
         # Function body or declaration
         if self.at(TokenType.LBRACE):

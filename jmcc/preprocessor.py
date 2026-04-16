@@ -880,6 +880,21 @@ int inet_aton(const char *cp, struct in_addr *inp);
 
         while i < len(line) and depth > 0:
             ch = line[i]
+            # Skip over string and char literals (don't count their parens/commas)
+            if ch == '"' or ch == "'":
+                quote = ch
+                current.append(ch)
+                i += 1
+                while i < len(line) and line[i] != quote:
+                    if line[i] == '\\' and i + 1 < len(line):
+                        current.append(line[i])
+                        i += 1
+                    current.append(line[i])
+                    i += 1
+                if i < len(line):
+                    current.append(line[i])
+                    i += 1
+                continue
             if ch == '(':
                 depth += 1
                 current.append(ch)
