@@ -33,6 +33,20 @@ static void take_ptr(const ubyte *p) {
     (void)p;
 }
 
+/* The same bug extended to function parameters: a typedef'd 2D array
+   passed as a parameter decays to `T(*)[N]`, and indexing it must
+   yield the row pointer, not the first byte. */
+typedef ubyte subkey_t[17][6];
+
+static int check_param(subkey_t ks) {
+    ubyte *row0 = ks[0];
+    ubyte *row1 = ks[1];
+    if (row1 - row0 != 6) return 100;        /* stride must be 6 bytes */
+    if (ks[0][0] != 0xAA) return 101;
+    if (ks[1][0] != 0xBB) return 102;
+    return 0;
+}
+
 int main(void) {
     const key_t keys[] = {
         {0x13, 0x34, 0x57, 0x79, 0x9B, 0xBC, 0xDF, 0xF1},
@@ -59,6 +73,13 @@ int main(void) {
        not the first byte value (0x13 misinterpreted as a pointer crashes) */
     take_ptr(keys[0]);
     take_ptr(keys[1]);
+
+    /* Function parameter form (DES's getSubKeys ks parameter) */
+    subkey_t sk;
+    sk[0][0] = 0xAA;
+    sk[1][0] = 0xBB;
+    int rc = check_param(sk);
+    if (rc) { printf("FAIL check_param rc=%d\n", rc); return rc; }
 
     printf("ok\n");
     return 0;
