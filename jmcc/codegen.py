@@ -4245,6 +4245,17 @@ class CodeGen:
             self.emit("    pushq %rax")
             self.gen_expr(expr.value)
             if is_long or is_ptr:
+                # Sign/zero-extend narrow-int RHS to 64-bit before widening
+                value_type = self.get_expr_type(expr.value)
+                rhs_is_narrow = (value_type is None or
+                                 (value_type.base not in ("long", "long long") and
+                                  not value_type.is_pointer() and
+                                  not value_type.is_array()))
+                if rhs_is_narrow and not is_ptr:
+                    if value_type and value_type.is_unsigned:
+                        self.emit("    movl %eax, %eax")
+                    else:
+                        self.emit("    cltq")
                 self.emit("    movq %rax, %rcx")
             else:
                 self.emit("    movl %eax, %ecx")
