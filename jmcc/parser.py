@@ -1352,13 +1352,16 @@ class Parser:
                     init = self.parse_assignment()
             return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
 
-        # Handle parenthesized name: int (name) = 42; — strip the parens
-        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.RPAREN:
-            self.advance()  # (
-            name = self.expect(TokenType.IDENTIFIER, "variable name").value
-            self.expect(TokenType.RPAREN, "')'")
-        else:
-            name = self.expect(TokenType.IDENTIFIER, "variable name").value
+        # Handle parenthesized declarator: int (name) = 42; — strip outer parens.
+        # Also supports int (name[]) = {...}; and int *(name) = &a;
+        # Note: (*name) is handled above as function pointer
+        parenthesized = False
+        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER:
+            # Peek ahead: if after identifier we see RPAREN or LBRACKET, this is parenthesized
+            if self.peek(2).type == TokenType.RPAREN or self.peek(2).type == TokenType.LBRACKET:
+                self.advance()  # (
+                parenthesized = True
+        name = self.expect(TokenType.IDENTIFIER, "variable name").value
 
         # Local function declaration: int f(char *);
         if self.at(TokenType.LPAREN):
@@ -1400,6 +1403,10 @@ class Parser:
             if ts.pointer_depth > 0:
                 ts.is_ptr_array = True
             ts.array_sizes = array_sizes
+
+        # Close parenthesized declarator: (name) or (name[])
+        if parenthesized:
+            self.expect(TokenType.RPAREN, "')'")
 
         init = None
         if self.match(TokenType.ASSIGN):
