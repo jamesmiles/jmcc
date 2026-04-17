@@ -427,12 +427,19 @@ typedef struct {
 } siginfo_t;
 struct sigaction {
     void (*sa_handler)(int);
+    void (*sa_sigaction)(int, siginfo_t *, void *);
     sigset_t sa_mask;
     int sa_flags;
     void (*sa_restorer)(void);
 };
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 sighandler_t signal(int signum, sighandler_t handler);
+int raise(int sig);
+int kill(int pid, int sig);
+#define SA_NOCLDSTOP 0x00000001
+#define SA_NOCLDWAIT 0x00000002
+#define SA_SIGINFO 0x00000004
+#define SA_ONSTACK 0x08000000
 #define SA_RESTART 0x10000000
 #define SA_NODEFER 0x40000000
 #define SA_RESETHAND 0x80000000
