@@ -359,8 +359,9 @@ class CodeGen:
                         # Handle pointer-sized elements (function pointers) vs scalar arrays
                         is_ptr_array = decl.type_spec.is_pointer() or (decl.type_spec.struct_def and decl.type_spec.size_bytes() == 8)
                         if not is_ptr_array and not decl.type_spec.struct_def:
-                            # Check if element type is a pointer (e.g., void* or function pointer)
-                            if elem_size == 8:
+                            # Check if element type is a pointer (e.g., void* or function pointer).
+                            # Don't treat double/float arrays (8-byte scalar elements) as pointer arrays.
+                            if elem_size == 8 and decl.type_spec.base not in ("double", "float"):
                                 is_ptr_array = True
 
                         if is_ptr_array:
