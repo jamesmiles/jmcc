@@ -3407,12 +3407,39 @@ class CodeGen:
 
     def gen_member_access(self, expr: MemberAccess):
         """Generate code to load a struct member value into %rax/%eax."""
-        self.gen_member_addr(expr)
-
         # Determine member type for load size
         obj_type = self.get_expr_type(expr.obj)
         sdef = obj_type.struct_def if obj_type else None
         mem_type = sdef.member_type(expr.member) if sdef else None
+
+        # Bitfield read: load storage unit, shift, mask
+        if sdef:
+            bf = sdef.bitfield_info(expr.member)
+            if bf:
+                unit_off, unit_size, bit_start, bit_width = bf
+                self.gen_member_addr(expr)  # addr of storage unit
+                if unit_size == 4:
+                    self.emit("    movl (%rax), %eax")
+                elif unit_size == 8:
+                    self.emit("    movq (%rax), %rax")
+                elif unit_size == 2:
+                    self.emit("    movzwl (%rax), %eax")
+                else:
+                    self.emit("    movzbl (%rax), %eax")
+                if bit_start > 0:
+                    if unit_size == 8:
+                        self.emit(f"    shrq ${bit_start}, %rax")
+                    else:
+                        self.emit(f"    shrl ${bit_start}, %eax")
+                mask = (1 << bit_width) - 1
+                if unit_size == 8:
+                    self.emit(f"    movq ${mask}, %rcx")
+                    self.emit(f"    andq %rcx, %rax")
+                else:
+                    self.emit(f"    andl ${mask}, %eax")
+                return
+
+        self.gen_member_addr(expr)
 
         if mem_type and mem_type.is_array():
             # Array member: return address (don't dereference)
@@ -3967,6 +3994,59 @@ class CodeGen:
             self.emit(f"    movl %eax, ({addr_reg})")
 
     def gen_assignment(self, expr: Assignment):
+        # Bitfield write: target is MemberAccess to a bitfield member
+        if expr.op == "=" and isinstance(expr.target, MemberAccess):
+            obj_type = self.get_expr_type(expr.target.obj)
+            sdef = obj_type.struct_def if obj_type else None
+            if sdef:
+                bf = sdef.bitfield_info(expr.target.member)
+                if bf:
+                    unit_off, unit_size, bit_start, bit_width = bf
+                    # Evaluate value into %rax
+                    self.gen_expr(expr.value)
+                    self.emit("    pushq %rax")
+                    # Get storage unit address
+                    self.gen_member_addr(expr.target)
+                    self.emit("    movq %rax, %rcx")  # rcx = addr of storage unit
+                    # Load current storage unit
+                    if unit_size == 4:
+                        self.emit("    movl (%rcx), %edx")
+                    elif unit_size == 8:
+                        self.emit("    movq (%rcx), %rdx")
+                    elif unit_size == 2:
+                        self.emit("    movzwl (%rcx), %edx")
+                    else:
+                        self.emit("    movzbl (%rcx), %edx")
+                    # Clear the bitfield bits
+                    mask = (1 << bit_width) - 1
+                    clear_mask = (~(mask << bit_start)) & ((1 << (unit_size * 8)) - 1)
+                    if unit_size == 8:
+                        self.emit(f"    movabsq ${clear_mask}, %r11")
+                        self.emit(f"    andq %r11, %rdx")
+                    else:
+                        self.emit(f"    andl ${clear_mask}, %edx")
+                    # Pop new value, mask and shift
+                    self.emit("    popq %rax")
+                    if unit_size == 8:
+                        self.emit(f"    movq ${mask}, %r11")
+                        self.emit(f"    andq %r11, %rax")
+                        if bit_start > 0:
+                            self.emit(f"    shlq ${bit_start}, %rax")
+                        self.emit(f"    orq %rdx, %rax")
+                        self.emit(f"    movq %rax, (%rcx)")
+                    else:
+                        self.emit(f"    andl ${mask}, %eax")
+                        if bit_start > 0:
+                            self.emit(f"    shll ${bit_start}, %eax")
+                        self.emit(f"    orl %edx, %eax")
+                        if unit_size == 4:
+                            self.emit(f"    movl %eax, (%rcx)")
+                        elif unit_size == 2:
+                            self.emit(f"    movw %ax, (%rcx)")
+                        else:
+                            self.emit(f"    movb %al, (%rcx)")
+                    return
+
         if expr.op == "=":
             target_type = self.get_expr_type(expr.target)
             value_type = self.get_expr_type(expr.value)

@@ -71,10 +71,14 @@ class StructDef:
         return max_align
 
     def _layout_members(self):
-        """Compute (offset, size) for each member, with bitfield packing.
-        Returns list of (offset, size) tuples, one per member."""
+        """Compute layout for each member, with bitfield packing.
+        Returns list of tuples:
+          (offset, size) for non-bitfields
+          (unit_offset, unit_size, bit_start, bit_width) for bitfields
+        And total struct size."""
         if self.is_union:
-            return [(0, self._member_total_size(m.type_spec)) for m in self.members]
+            return [(0, self._member_total_size(m.type_spec)) for m in self.members], \
+                   max((self._member_total_size(m.type_spec) for m in self.members), default=0)
         result = []
         total = 0
         bf_bits_used = 0  # bits consumed in current bitfield unit
@@ -93,11 +97,13 @@ class StructDef:
                         total = (total + align - 1) & ~(align - 1)
                     bf_unit_start = total
                     bf_unit_size = unit_size
+                    bit_start = 0
                     bf_bits_used = m.bit_width
                 else:
                     # Pack into current unit
+                    bit_start = bf_bits_used
                     bf_bits_used += m.bit_width
-                result.append((bf_unit_start, unit_size))
+                result.append((bf_unit_start, unit_size, bit_start, m.bit_width))
             else:
                 # Non-bitfield: close any pending bitfield unit
                 total += bf_unit_size
@@ -112,6 +118,18 @@ class StructDef:
                 total += actual_size
         total += bf_unit_size  # close final bitfield unit
         return result, total
+
+    def bitfield_info(self, name):
+        """For a bitfield member, return (unit_offset, unit_size, bit_start, bit_width).
+        For a non-bitfield or missing member, returns None."""
+        layout, _ = self._layout_members()
+        for i, m in enumerate(self.members):
+            if m.name == name:
+                entry = layout[i]
+                if len(entry) == 4:
+                    return entry
+                return None
+        return None
 
     def size_bytes(self):
         if self.is_union:
@@ -141,7 +159,8 @@ class StructDef:
             return None
         layout, _ = self._layout_members()
         for i, m in enumerate(self.members):
-            off, _ = layout[i]
+            entry = layout[i]
+            off = entry[0]  # works for both 2-tuple and 4-tuple (bitfield)
             if m.name == name:
                 return off
             # Search anonymous struct/union members
