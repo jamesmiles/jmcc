@@ -4734,9 +4734,18 @@ class CodeGen:
         is_struct = self._is_struct_by_value(target_type)
         slot_size = 8 if (is_struct and size > 16) else aligned_size
 
-        # ap is va_list (array of 1 struct), so ap IS the struct address
-        self.gen_lvalue_addr(expr.ap)
-        self.emit("    movq %rax, %r10")  # r10 = va_list struct address
+        # ap is va_list. For local va_list ap;, ap IS the struct (array decay).
+        # For parameter va_list ap, ap is a pointer to the struct (param array decay).
+        # Determine which by checking if ap is a parameter.
+        is_param_ap = (isinstance(expr.ap, Identifier) and
+                       expr.ap.name in self.params)
+        if is_param_ap:
+            # Load the pointer value from param storage
+            self.gen_expr(expr.ap)
+            self.emit("    movq %rax, %r10")  # r10 = va_list struct address
+        else:
+            self.gen_lvalue_addr(expr.ap)
+            self.emit("    movq %rax, %r10")  # r10 = va_list struct address
 
         use_overflow = self.new_label("va_overflow")
         va_done = self.new_label("va_done")
