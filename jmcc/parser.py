@@ -1648,6 +1648,8 @@ class Parser:
                 return GlobalVarDecl(type_spec=fptr_type, name=name, init=init, line=t.line, col=t.col)
 
         # Parenthesized function name: int (func_name)(params)
+        # Or parenthesized variable declarator: int (var_name) = 42; int (arr[]) = {...};
+        global_parenthesized = False
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.RPAREN:
             self.advance()  # (
             name = self.advance().value  # identifier
@@ -1655,6 +1657,12 @@ class Parser:
             if self.at(TokenType.LPAREN):
                 return self.parse_func_decl(type_spec, name, t)
             # Fallthrough to variable declaration
+        elif self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.LBRACKET:
+            # Parenthesized array declarator: int (arr[]) = {...};
+            self.advance()  # (
+            name = self.advance().value  # identifier
+            global_parenthesized = True
+            # Fall through; array brackets will be consumed below, then RPAREN
         else:
             name = self.expect(TokenType.IDENTIFIER, "identifier").value
 
@@ -1674,6 +1682,10 @@ class Parser:
             if type_spec.pointer_depth > 0:
                 type_spec.is_ptr_array = True
             type_spec.array_sizes = array_sizes
+
+        # Close parenthesized declarator: (name[...])
+        if global_parenthesized:
+            self.expect(TokenType.RPAREN, "')'")
 
         # Global variable (with possible comma-separated additional declarations)
         init = None
