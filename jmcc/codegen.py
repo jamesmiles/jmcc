@@ -1254,12 +1254,22 @@ class CodeGen:
                 self._hidden_ret_ptr_offset = self.stack_offset
                 self.emit(f"    movq %rdi, {self.stack_offset}(%rbp)")
 
-        # For variadic functions, save all 6 GP registers to a known area
+        # For variadic functions, save all 6 GP registers + 8 xmm registers.
+        # Layout: [0..47] GP regs (rdi,rsi,rdx,rcx,r8,r9)
+        #         [48..175] xmm0..xmm7 (16 bytes each)
         if func.is_variadic:
-            self.stack_offset -= 48  # 6 * 8 bytes for register save area
+            self.stack_offset -= 176  # 48 gp + 128 xmm
             self._va_area_offset = self.stack_offset
             for ri, reg in enumerate(self.ARG_REGS_64):
                 self.emit(f"    movq {reg}, {self._va_area_offset + ri * 8}(%rbp)")
+            # Save xmm0..xmm7 (16 bytes each) — only if any were potentially used.
+            # Guard with %al (set by caller to # of xmm args used, typical variadic ABI).
+            va_save_end = self.new_label("va_save_end")
+            self.emit(f"    testb %al, %al")
+            self.emit(f"    je {va_save_end}")
+            for xi in range(8):
+                self.emit(f"    movups %xmm{xi}, {self._va_area_offset + 48 + xi * 16}(%rbp)")
+            self.label(va_save_end)
 
         # Save parameters to stack (float params come in xmm registers)
         int_param_idx = 0
@@ -1354,9 +1364,11 @@ class CodeGen:
         # Zero-initialize declared local variables area (not the full frame
         # padding) to prevent UB from uninitialized locals.
         # Only zero the actual locals region, not alignment padding beyond it.
+        # IMPORTANT: preserve %eax (contains # xmm regs for variadic)
         locals_size = -self.stack_offset - 8  # subtract saved rbx at -8
         if locals_size > 0:
             zero_code = []
+            zero_code.append("    pushq %rax")  # preserve %al for variadic xmm save
             zero_code.append("    pushq %rdi")
             zero_code.append("    pushq %rcx")
             zero_code.append(f"    leaq -{locals_size + 8}(%rbp), %rdi")
@@ -1365,6 +1377,7 @@ class CodeGen:
             zero_code.append("    rep stosb")
             zero_code.append("    popq %rcx")
             zero_code.append("    popq %rdi")
+            zero_code.append("    popq %rax")
             for i, line in enumerate(zero_code):
                 self.output.insert(stack_alloc_idx + 1 + i, line)
 
@@ -4734,15 +4747,19 @@ class CodeGen:
 
         if self.current_func and hasattr(self, '_va_area_offset'):
             named_int_slots = 0
+            named_fp_slots = 0
             for p in self.current_func.params:
                 if self._is_struct_by_value(p.type_spec):
                     sz = p.type_spec.size_bytes()
                     if sz <= 8: named_int_slots += 1
                     elif sz <= 16: named_int_slots += 2
                     else: named_int_slots += 1
-                elif (p.type_spec.base in ("float", "double", "long double")
+                elif (p.type_spec.base in ("float", "double")
                       and not p.type_spec.is_pointer()):
-                    pass
+                    named_fp_slots += 1
+                elif (p.type_spec.base == "long double"
+                      and not p.type_spec.is_pointer()):
+                    pass  # long double is on stack, doesn't affect fp/gp
                 else:
                     named_int_slots += 1
 
@@ -4757,8 +4774,9 @@ class CodeGen:
             self.emit("    pushq %rcx")  # save again
             self.emit(f"    movl ${gp_off}, (%rcx)")          # gp_offset
 
-            # fp_offset = 48 (6 int regs * 8 = 48, no float regs used)
-            self.emit(f"    movl $48, 4(%rcx)")               # fp_offset
+            # fp_offset = 48 + named_fp_slots * 16 (xmm portion starts at 48)
+            fp_off = 48 + min(named_fp_slots, 8) * 16
+            self.emit(f"    movl ${fp_off}, 4(%rcx)")         # fp_offset
 
             # overflow_arg_area = 16(%rbp) (first stack arg)
             self.emit(f"    leaq 16(%rbp), %rax")
@@ -4812,51 +4830,82 @@ class CodeGen:
         size = target_type.size_bytes()
         aligned_size = (size + 7) & ~7
         is_struct = self._is_struct_by_value(target_type)
+        is_fp = (target_type.base in ("float", "double") and
+                 not target_type.is_pointer() and not target_type.is_array())
         slot_size = 8 if (is_struct and size > 16) else aligned_size
 
         # ap is va_list. For local va_list ap;, ap IS the struct (array decay).
         # For parameter va_list ap, ap is a pointer to the struct (param array decay).
-        # Determine which by checking if ap is a parameter.
         is_param_ap = (isinstance(expr.ap, Identifier) and
                        expr.ap.name in self.params)
         if is_param_ap:
-            # Load the pointer value from param storage
             self.gen_expr(expr.ap)
-            self.emit("    movq %rax, %r10")  # r10 = va_list struct address
+            self.emit("    movq %rax, %r10")
         else:
             self.gen_lvalue_addr(expr.ap)
-            self.emit("    movq %rax, %r10")  # r10 = va_list struct address
+            self.emit("    movq %rax, %r10")
 
         use_overflow = self.new_label("va_overflow")
         va_done = self.new_label("va_done")
 
-        # Check gp_offset + slot_size <= 48 (6 regs * 8 bytes)
+        if is_fp:
+            # float/double: use fp_offset (limit 176 = 48 + 8*16)
+            # fp_offset is at offset 4 in va_list struct
+            self.emit(f"    movl 4(%r10), %eax")     # fp_offset
+            self.emit(f"    cmpl $176, %eax")
+            self.emit(f"    jae {use_overflow}")
+
+            # Read from reg_save_area + fp_offset
+            self.emit(f"    movl 4(%r10), %eax")
+            self.emit(f"    movslq %eax, %rax")
+            self.emit(f"    addq 16(%r10), %rax")
+            self.emit(f"    pushq %rax")              # source address
+            # Advance fp_offset by 16 (xmm slots are 16 bytes apart)
+            self.emit(f"    movl 4(%r10), %eax")
+            self.emit(f"    addl $16, %eax")
+            self.emit(f"    movl %eax, 4(%r10)")
+            self.emit(f"    jmp {va_done}")
+
+            # Overflow: doubles on stack take 8 bytes
+            self.label(use_overflow)
+            self.emit(f"    movq 8(%r10), %rax")
+            self.emit(f"    pushq %rax")
+            self.emit(f"    addq $8, %rax")
+            self.emit(f"    movq %rax, 8(%r10)")
+            self.label(va_done)
+            self.emit(f"    popq %r11")
+            # Load double value
+            if target_type.base == "float":
+                self.emit("    movss (%r11), %xmm0")
+                self.emit("    cvtss2sd %xmm0, %xmm0")
+                self.emit("    movq %xmm0, %rax")
+            else:
+                self.emit("    movq (%r11), %rax")
+            return
+
+        # Integer/pointer/struct path
         gp_limit = 48 - slot_size + 8  # overflow when gp_offset >= this
-        self.emit(f"    movl (%r10), %eax")         # gp_offset
+        self.emit(f"    movl (%r10), %eax")
         self.emit(f"    cmpl ${gp_limit}, %eax")
         self.emit(f"    jae {use_overflow}")
 
-        # Read from reg_save_area + gp_offset
-        self.emit(f"    movl (%r10), %eax")         # gp_offset
+        self.emit(f"    movl (%r10), %eax")
         self.emit(f"    movslq %eax, %rax")
-        self.emit(f"    addq 16(%r10), %rax")       # reg_save_area + gp_offset
-        self.emit(f"    pushq %rax")                 # save source address
-        # Advance gp_offset
+        self.emit(f"    addq 16(%r10), %rax")
+        self.emit(f"    pushq %rax")
         self.emit(f"    movl (%r10), %eax")
         self.emit(f"    addl ${slot_size}, %eax")
         self.emit(f"    movl %eax, (%r10)")
         self.emit(f"    jmp {va_done}")
 
-        # Read from overflow_arg_area
         self.label(use_overflow)
-        self.emit(f"    movq 8(%r10), %rax")        # overflow_arg_area
-        self.emit(f"    pushq %rax")                 # save source address
-        # Advance overflow_arg_area
+        self.emit(f"    movq 8(%r10), %rax")
+        self.emit(f"    pushq %rax")
         self.emit(f"    addq ${slot_size}, %rax")
         self.emit(f"    movq %rax, 8(%r10)")
 
         self.label(va_done)
-        self.emit(f"    popq %r11")                  # r11 = source address
+        self.emit(f"    popq %r11")
 
         if is_struct:
             if size > 16:
