@@ -3216,15 +3216,18 @@ class CodeGen:
             if inner and (inner.is_ptr_array or (inner.is_array() and inner.pointer_depth > 0)):
                 # Dereferencing a pointer array: element is the pointer type (keep pd)
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth,
-                                struct_def=inner.struct_def, enum_def=inner.enum_def)
+                                struct_def=inner.struct_def, enum_def=inner.enum_def,
+                                is_unsigned=inner.is_unsigned)
             if inner and inner.is_pointer() and inner.array_sizes:
                 # Pointer-to-array: *p gives the array type
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def,
+                                is_unsigned=inner.is_unsigned,
                                 array_sizes=inner.array_sizes)
             if inner and inner.is_pointer():
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
-                                struct_def=inner.struct_def, enum_def=inner.enum_def)
+                                struct_def=inner.struct_def, enum_def=inner.enum_def,
+                                is_unsigned=inner.is_unsigned)
             if inner and inner.is_array():
                 # Dereferencing array: element type (array decays to pointer, then deref)
                 return TypeSpec(base=inner.base, pointer_depth=0,
@@ -3234,7 +3237,8 @@ class CodeGen:
             inner = self.get_expr_type(expr.operand)
             if inner:
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth + 1,
-                                struct_def=inner.struct_def, enum_def=inner.enum_def)
+                                struct_def=inner.struct_def, enum_def=inner.enum_def,
+                                is_unsigned=inner.is_unsigned)
         if isinstance(expr, MemberAccess):
             obj_type = self.get_expr_type(expr.obj)
             if obj_type and expr.arrow:
