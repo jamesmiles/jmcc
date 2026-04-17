@@ -2014,8 +2014,14 @@ class Parser:
                 self.expect(TokenType.RBRACKET, "']'")
             if inner_dims:
                 type_spec.array_sizes = inner_dims
-        # Typedef'd array type decays to pointer in function parameters
+        # Typedef'd array type decays to pointer in function parameters.
+        # For multi-dim typedef arrays T[N][M], decay the outer dim only:
+        # becomes T (*)[M] — pointer to array of M, keeping inner dim for stride.
         elif type_spec.is_array() and type_spec.array_sizes:
             type_spec.pointer_depth += 1
-            type_spec.array_sizes = None
+            # Keep inner dimensions (for stride); drop only the outer dim
+            if len(type_spec.array_sizes) > 1:
+                type_spec.array_sizes = type_spec.array_sizes[1:]
+            else:
+                type_spec.array_sizes = None
         return Param(type_spec=type_spec, name=name)
