@@ -16,6 +16,7 @@ class CodeGen:
     def __init__(self):
         self.output: List[str] = []
         self.string_literals: List[Tuple[str, str]] = []  # (label, value)
+        self.string_label_cache: Dict[Tuple[str, bool], str] = {}  # (value, wide) -> label
         self.pending_compound_literals = []  # (label, struct_def, init_list) for anonymous compound literals
         self.global_vars: Dict[str, GlobalVarDecl] = {}
         self.known_functions: set = set()  # function names
@@ -2480,8 +2481,12 @@ class CodeGen:
             self.emit(f"    movl ${ord(expr.value)}, %eax")
 
         elif isinstance(expr, StringLiteral):
-            lbl = self.new_label("str")
-            self.string_literals.append((lbl, expr.value, expr.wide))
+            key = (expr.value, expr.wide)
+            lbl = self.string_label_cache.get(key)
+            if lbl is None:
+                lbl = self.new_label("str")
+                self.string_label_cache[key] = lbl
+                self.string_literals.append((lbl, expr.value, expr.wide))
             self.emit(f"    leaq {lbl}(%rip), %rax")
 
         elif isinstance(expr, Identifier):
