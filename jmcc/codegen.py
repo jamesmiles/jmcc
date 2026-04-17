@@ -1570,7 +1570,18 @@ class CodeGen:
                 if cv is not None:
                     first = IntLiteral(value=cv)
                     decl.type_spec.array_sizes[0] = first
-            if isinstance(first, IntLiteral):
+            # Check if any inner dim is a VLA (non-constant). If so, route to
+            # VLA path even if the outer dim is constant.
+            inner_has_vla = False
+            for dim in (decl.type_spec.array_sizes or [])[1:]:
+                if dim is None:
+                    continue
+                if not isinstance(dim, IntLiteral):
+                    if self._try_eval_const(dim) is None:
+                        inner_has_vla = True
+                        break
+
+            if isinstance(first, IntLiteral) and not inner_has_vla:
                 elem_size = size
                 if decl.type_spec.is_struct():
                     elem_size = decl.type_spec.struct_def.size_bytes()

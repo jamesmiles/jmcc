@@ -1401,6 +1401,7 @@ class Parser:
             is_extern=base_type.is_extern,
             struct_def=base_type.struct_def,
             enum_def=base_type.enum_def,
+            array_sizes=base_type.array_sizes,
         )
 
         # Array declaration
@@ -1414,7 +1415,12 @@ class Parser:
         if array_sizes:
             if ts.pointer_depth > 0:
                 ts.is_ptr_array = True
-            ts.array_sizes = array_sizes
+            # If the base type (e.g. typedef) already has array dimensions,
+            # append them after our outer dimensions.
+            if ts.array_sizes:
+                ts.array_sizes = array_sizes + list(ts.array_sizes)
+            else:
+                ts.array_sizes = array_sizes
 
         # Close parenthesized declarator: (name) or (name[])
         if parenthesized:
@@ -1693,7 +1699,12 @@ class Parser:
         if array_sizes:
             if type_spec.pointer_depth > 0:
                 type_spec.is_ptr_array = True
-            type_spec.array_sizes = array_sizes
+            # If the base type (e.g. typedef) already has array dimensions,
+            # append them after our outer dimensions so stride is correct.
+            if type_spec.array_sizes:
+                type_spec.array_sizes = array_sizes + type_spec.array_sizes
+            else:
+                type_spec.array_sizes = array_sizes
 
         # Close parenthesized declarator: (name[...])
         if global_parenthesized:

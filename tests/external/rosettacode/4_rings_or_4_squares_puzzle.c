@@ -6,6 +6,7 @@
 // SOURCE: https://rosettacode.org/wiki/4-rings_or_4-squares_puzzle#C
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
+// STDOUT:
 // STDOUT: 4 7 1 3 2 6 5
 // STDOUT: 6 4 1 5 2 3 7
 // STDOUT: 3 7 2 1 5 4 6
