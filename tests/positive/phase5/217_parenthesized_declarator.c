@@ -19,7 +19,16 @@
 
 #include <stdio.h>
 
+/* File-scope: this is the exact form shell.c uses */
+static const char *(g_arr[]) = { "hello", "world" };
+
+int (g_x) = 42;
+
 int main(void) {
+    if (g_arr[0][0] != 'h') return 100;
+    if (g_arr[1][0] != 'w') return 101;
+    if (g_x != 42) return 102;
+
     /* Parenthesized array declarator with pointer base type */
     static const char *(arr[]) = { "hello", "world" };
     if (arr[0][0] != 'h') return 1;
