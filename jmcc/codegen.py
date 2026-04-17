@@ -415,6 +415,9 @@ class CodeGen:
                                             elems[j] = val.name
                                         elif isinstance(val, Identifier) and val.name in self.global_vars:
                                             elems[j] = val.name
+                                        elif isinstance(val, Identifier) and val.name in self.static_locals:
+                                            # Reference to another static local: use its mangled name
+                                            elems[j] = self.static_locals[val.name]
                                         elif isinstance(val, InitList) and val.items:
                                             # Unwrap {func_ptr}
                                             inner = self._unwrap_compound_literal(val.items[0].value)
