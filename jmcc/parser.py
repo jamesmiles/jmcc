@@ -389,6 +389,13 @@ class Parser:
                     self.struct_defs[name] = sdef
 
             while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
+                # Peek the first token to compute base-type inherent pointer depth
+                # (for typedefs, typedef itself may contribute pointer_depth).
+                # This is the pointer_depth that should be shared among ALL
+                # declarators in a comma list; extra *s belong to individual declarators.
+                base_inherent_pd = 0
+                if self.at(TokenType.IDENTIFIER) and self.current().value in self.typedefs:
+                    base_inherent_pd = self.typedefs[self.current().value].pointer_depth
                 mem_type = self.parse_type_spec()
                 mem_name = ""
 
@@ -488,14 +495,19 @@ class Parser:
                     # member_offset/member_type resolve through it
                     members.append(StructMember(type_spec=mem_type, name=""))
 
-                # Handle comma-separated members: int i, j, k;
+                # Handle comma-separated members: int i, j, k; or int *p, a;
+                # In C, `*` binds to the individual declarator. Subsequent
+                # declarators start from the base pointer_depth (without the
+                # extra *s parse_type_spec consumed for the first declarator).
+                # But preserve typedef's inherent pointer depth.
                 while self.match(TokenType.COMMA):
                     extra_ptrs = 0
                     while self.match(TokenType.STAR):
                         extra_ptrs += 1
                     ename = self.expect(TokenType.IDENTIFIER, "member name").value
-                    ets = TypeSpec(base=mem_type.base, pointer_depth=mem_type.pointer_depth + extra_ptrs,
-                                   is_unsigned=mem_type.is_unsigned, struct_def=mem_type.struct_def)
+                    ets = TypeSpec(base=mem_type.base, pointer_depth=base_inherent_pd + extra_ptrs,
+                                   is_unsigned=mem_type.is_unsigned, struct_def=mem_type.struct_def,
+                                   enum_def=mem_type.enum_def, is_const=mem_type.is_const)
                     # Array
                     if self.match(TokenType.LBRACKET):
                         if self.at(TokenType.RBRACKET):
