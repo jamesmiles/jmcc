@@ -3441,7 +3441,7 @@ class CodeGen:
 
         self.gen_member_addr(expr)
 
-        if mem_type and mem_type.is_array():
+        if mem_type and (mem_type.is_array() or mem_type.is_ptr_array):
             # Array member: return address (don't dereference)
             pass  # address already in %rax from gen_member_addr
         elif mem_type is None:
