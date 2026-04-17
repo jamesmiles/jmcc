@@ -108,6 +108,17 @@ typedef __va_list_tag va_list[1];
 #include <stddef.h>
 typedef void FILE;
 typedef long fpos_t;
+/* BSD-style short unsigned typedefs (historically in sys/types.h, widely expected) */
+#ifndef _JMCC_BSD_TYPES
+#define _JMCC_BSD_TYPES
+typedef unsigned int uint;
+typedef unsigned short ushort;
+typedef unsigned long ulong;
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+typedef unsigned int u_int;
+typedef unsigned long u_long;
+#endif
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
@@ -176,6 +187,16 @@ int pclose(FILE *stream);
 #ifndef _JMCC_STDLIB_H
 #define _JMCC_STDLIB_H
 #include <stddef.h>
+#ifndef _JMCC_BSD_TYPES
+#define _JMCC_BSD_TYPES
+typedef unsigned int uint;
+typedef unsigned short ushort;
+typedef unsigned long ulong;
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+typedef unsigned int u_int;
+typedef unsigned long u_long;
+#endif
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 #define RAND_MAX 2147483647

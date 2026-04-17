@@ -228,7 +228,7 @@ class Parser:
                 self.advance()
                 enum_def = self.parse_enum_spec()
                 break
-            elif t.type == TokenType.IDENTIFIER and t.value in self.typedefs and not base_parts:
+            elif t.type == TokenType.IDENTIFIER and t.value in self.typedefs and not base_parts and not is_unsigned and not is_signed:
                 # Typedef name - resolve to underlying type (only if no base type yet)
                 td = self.typedefs[t.value]
                 self.advance()
