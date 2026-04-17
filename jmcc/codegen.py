@@ -1587,7 +1587,7 @@ class CodeGen:
 
             if isinstance(first, IntLiteral) and not inner_has_vla:
                 elem_size = size
-                if decl.type_spec.is_struct():
+                if decl.type_spec.is_struct() and not decl.type_spec.is_pointer():
                     elem_size = decl.type_spec.struct_def.size_bytes()
                 total = elem_size
                 # Multiply all dimensions for multi-dim arrays
@@ -2199,7 +2199,7 @@ class CodeGen:
         self._emit_zero_fill(base_offset, total_size)
 
         # Handle struct array or plain array
-        if type_spec.struct_def:
+        if type_spec.struct_def and not type_spec.is_pointer():
             # Array of structs
             sdef = type_spec.struct_def
             struct_size = sdef.size_bytes()
