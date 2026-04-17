@@ -107,6 +107,7 @@ typedef __va_list_tag va_list[1];
 #define _JMCC_STDIO_H
 #include <stddef.h>
 typedef void FILE;
+typedef long fpos_t;
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
@@ -122,6 +123,53 @@ extern FILE *stderr;
 #define _IOFBF 0
 #define _IOLBF 1
 #define _IONBF 2
+int printf(const char *fmt, ...);
+int fprintf(FILE *stream, const char *fmt, ...);
+int sprintf(char *str, const char *fmt, ...);
+int snprintf(char *str, unsigned long size, const char *fmt, ...);
+int vprintf(const char *fmt, void *ap);
+int vfprintf(FILE *stream, const char *fmt, void *ap);
+int vsprintf(char *str, const char *fmt, void *ap);
+int vsnprintf(char *str, unsigned long size, const char *fmt, void *ap);
+int scanf(const char *fmt, ...);
+int fscanf(FILE *stream, const char *fmt, ...);
+int sscanf(const char *str, const char *fmt, ...);
+FILE *fopen(const char *path, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
+FILE *fdopen(int fd, const char *mode);
+FILE *tmpfile(void);
+char *tmpnam(char *s);
+int fclose(FILE *stream);
+int fflush(FILE *stream);
+int fgetc(FILE *stream);
+char *fgets(char *s, int size, FILE *stream);
+int fputc(int c, FILE *stream);
+int fputs(const char *s, FILE *stream);
+int getc(FILE *stream);
+int getchar(void);
+char *gets(char *s);
+int putc(int c, FILE *stream);
+int putchar(int c);
+int puts(const char *s);
+int ungetc(int c, FILE *stream);
+unsigned long fread(void *ptr, unsigned long size, unsigned long nmemb, FILE *stream);
+unsigned long fwrite(const void *ptr, unsigned long size, unsigned long nmemb, FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
+void rewind(FILE *stream);
+int fgetpos(FILE *stream, fpos_t *pos);
+int fsetpos(FILE *stream, const fpos_t *pos);
+void clearerr(FILE *stream);
+int feof(FILE *stream);
+int ferror(FILE *stream);
+int fileno(FILE *stream);
+void perror(const char *s);
+int remove(const char *path);
+int rename(const char *old_path, const char *new_path);
+void setbuf(FILE *stream, char *buf);
+int setvbuf(FILE *stream, char *buf, int mode, unsigned long size);
+FILE *popen(const char *command, const char *mode);
+int pclose(FILE *stream);
 #endif
 """,
         "stdlib.h": """
