@@ -4724,7 +4724,9 @@ class CodeGen:
 
             # Int-to-float or float-to-int conversion
             if target_is_float and not value_is_float:
-                self.emit("    cvtsi2sd %eax, %xmm0")
+                _vsrc = "%rax" if (value_type and not value_type.is_pointer() and
+                                   value_type.size_bytes() >= 8) else "%eax"
+                self.emit(f"    cvtsi2sd {_vsrc}, %xmm0")
                 if target_type and target_type.base == "float":
                     self.emit("    cvtsd2ss %xmm0, %xmm0")
                     self.emit("    movd %xmm0, %eax")
