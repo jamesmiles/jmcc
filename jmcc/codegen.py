@@ -2887,8 +2887,15 @@ class CodeGen:
             self.emit(f"    movss {loc}, %xmm0")
             self.emit("    cvtss2sd %xmm0, %xmm0")
             self.emit("    movq %xmm0, %rax")
+        elif ts and ts.base == "long double" and not ts.is_pointer():
+            # Load 80-bit x87 long double, convert to 64-bit double via x87
+            self.stack_offset -= 8
+            temp_off = self.stack_offset
+            self.emit(f"    fldt {loc}")
+            self.emit(f"    fstpl {temp_off}(%rbp)")
+            self.emit(f"    movq {temp_off}(%rbp), %rax")
         elif ts and (ts.is_pointer() or ts.size_bytes() == 8 or
-                     ts.base in ("double", "long double")):
+                     ts.base == "double"):
             self.emit(f"    movq {loc}, %rax")
         elif ts and ts.size_bytes() == 2:
             if ts.is_unsigned:
@@ -3699,17 +3706,12 @@ class CodeGen:
             self.emit("    movsd (%rax), %xmm0")
             self.emit("    movq %xmm0, %rax")
         elif mem_type.base == "long double" and not mem_type.is_pointer():
-            # Long double: 80-bit x87 value stored in 16 bytes
-            # Load the raw 16 bytes into rax (first 8 bytes).
-            # The full 16-byte value is at (%rax) before we load.
-            # For proper long double handling, we copy the full 16 bytes to a temp.
-            self.stack_offset -= 16
+            # Long double: 80-bit x87 stored in 16 bytes.
+            # Use x87 fldt/fstpl to convert to a 64-bit IEEE double in %rax.
+            self.stack_offset -= 8
             temp_off = self.stack_offset
-            self.emit(f"    movq (%rax), %rcx")
-            self.emit(f"    movq %rcx, {temp_off}(%rbp)")
-            self.emit(f"    movq 8(%rax), %rcx")
-            self.emit(f"    movq %rcx, {temp_off + 8}(%rbp)")
-            # Store temp offset for long double push path
+            self.emit(f"    fldt (%rax)")
+            self.emit(f"    fstpl {temp_off}(%rbp)")
             self.emit(f"    movq {temp_off}(%rbp), %rax")
         elif mem_type.is_pointer() or mem_type.size_bytes() == 8:
             self.emit("    movq (%rax), %rax")
@@ -4782,9 +4784,17 @@ class CodeGen:
             if is_float_target and op in ("+", "-", "*", "/"):
                 # Float compound assignment: a += 1.0
                 is_float32 = target_type and target_type.base == "float"
+                is_long_dbl = target_type and target_type.base == "long double"
                 self.gen_lvalue_addr(expr.target)
                 self.emit("    pushq %rax")          # save address
-                if is_float32:
+                if is_long_dbl:
+                    # Load 80-bit x87 long double via x87, convert to double for SSE2 op
+                    self.stack_offset -= 8
+                    temp_off = self.stack_offset
+                    self.emit(f"    fldt (%rax)")
+                    self.emit(f"    fstpl {temp_off}(%rbp)")
+                    self.emit(f"    movsd {temp_off}(%rbp), %xmm0")
+                elif is_float32:
                     self.emit("    movss (%rax), %xmm0")  # load 4-byte float
                     self.emit("    cvtss2sd %xmm0, %xmm0")  # promote to double
                 else:
@@ -4802,7 +4812,14 @@ class CodeGen:
                 sse_ops = {"+": "addsd", "-": "subsd", "*": "mulsd", "/": "divsd"}
                 self.emit(f"    {sse_ops[op]} %xmm1, %xmm0")
                 self.emit("    popq %rcx")            # restore address
-                if is_float32:
+                if is_long_dbl:
+                    # Store double result back as 80-bit x87 long double.
+                    # Zero upper bytes first so padding stays 0 after fstpt writes bytes 0-9.
+                    self.emit(f"    movq $0, 8(%rcx)")
+                    self.emit(f"    movsd %xmm0, {temp_off}(%rbp)")
+                    self.emit(f"    fldl {temp_off}(%rbp)")
+                    self.emit(f"    fstpt (%rcx)")
+                elif is_float32:
                     self.emit("    cvtsd2ss %xmm0, %xmm0")
                     self.emit(f"    movss %xmm0, (%rcx)")
                 else:
