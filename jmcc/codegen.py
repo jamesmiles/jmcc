@@ -412,6 +412,40 @@ class CodeGen:
                                                     if gts.struct_def:
                                                         elem_sz = gts.struct_def.size_bytes()
                                                 elems[j] = f"{arr_name}+{idx_val * elem_sz}"
+                                        elif (isinstance(val, UnaryOp) and val.op == "&" and
+                                              isinstance(val.operand, ArrayAccess) and
+                                              isinstance(val.operand.array, MemberAccess) and
+                                              isinstance(val.operand.array.obj, Identifier)):
+                                            # &global.member[N] — compute base + member_offset + N*elem_size
+                                            obj_name = val.operand.array.obj.name
+                                            mem_name = val.operand.array.member
+                                            idx_val = self._try_eval_const(val.operand.index)
+                                            if obj_name in self.global_vars and idx_val is not None:
+                                                gts = self.global_vars[obj_name].type_spec
+                                                if gts.struct_def:
+                                                    mem_off = gts.struct_def.member_offset(mem_name)
+                                                    mem_ts = gts.struct_def.member_type(mem_name)
+                                                    elem_sz = mem_ts.size_bytes() if mem_ts else 8
+                                                    total_off = (mem_off or 0) + idx_val * elem_sz
+                                                    if total_off == 0:
+                                                        elems[j] = obj_name
+                                                    else:
+                                                        elems[j] = f"{obj_name}+{total_off}"
+                                        elif (isinstance(val, UnaryOp) and val.op == "&" and
+                                              isinstance(val.operand, MemberAccess) and
+                                              isinstance(val.operand.obj, Identifier)):
+                                            # &global.member — compute base + member_offset
+                                            obj_name = val.operand.obj.name
+                                            mem_name = val.operand.member
+                                            if obj_name in self.global_vars:
+                                                gts = self.global_vars[obj_name].type_spec
+                                                if gts.struct_def:
+                                                    mem_off = gts.struct_def.member_offset(mem_name)
+                                                    total_off = mem_off or 0
+                                                    if total_off == 0:
+                                                        elems[j] = obj_name
+                                                    else:
+                                                        elems[j] = f"{obj_name}+{total_off}"
                                         elif isinstance(val, Identifier) and val.name in self.known_functions:
                                             elems[j] = val.name
                                         elif isinstance(val, Identifier) and val.name in self.global_vars:

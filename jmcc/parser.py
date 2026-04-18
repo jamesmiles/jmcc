@@ -354,6 +354,39 @@ class Parser:
                             elif self.match(TokenType.RPAREN): depth -= 1
                             else: self.advance()
                     pointer_depth += star_count  # function pointer
+                elif self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+                    # Potentially (*(*)(inner_params))(outer_params) — abstract nested fptr.
+                    # Only match if there's no identifier inside (named declarators go to
+                    # _parse_single_declarator instead).
+                    scan = self.pos
+                    depth = 0
+                    has_ident = False
+                    while scan < len(self.tokens):
+                        tt = self.tokens[scan].type
+                        if tt == TokenType.LPAREN: depth += 1
+                        elif tt == TokenType.RPAREN:
+                            depth -= 1
+                            if depth < 0: break
+                        elif tt == TokenType.IDENTIFIER and depth > 0:
+                            has_ident = True
+                            break
+                        scan += 1
+                    if has_ident:
+                        self.pos = saved_fptr  # named declarator — leave for _parse_single_declarator
+                    else:
+                        # Abstract nested fptr: skip the whole inner group then outer params
+                        depth = 1
+                        while depth > 0 and not self.at(TokenType.EOF):
+                            if self.match(TokenType.LPAREN): depth += 1
+                            elif self.match(TokenType.RPAREN): depth -= 1
+                            else: self.advance()
+                        if self.match(TokenType.LPAREN):
+                            depth = 1
+                            while depth > 0 and not self.at(TokenType.EOF):
+                                if self.match(TokenType.LPAREN): depth += 1
+                                elif self.match(TokenType.RPAREN): depth -= 1
+                                else: self.advance()
+                        pointer_depth += star_count
                 else:
                     self.pos = saved_fptr  # not a match, restore
             else:
@@ -1283,10 +1316,13 @@ class Parser:
             # Nested complex declarator: (* (*p)(params))(ret_params)
             if self.at(TokenType.LPAREN):
                 # Scan forward to find the identifier name inside nested parens
-                # then skip everything, treat as void*
+                # then skip everything.  Also count how many times depth returns to
+                # zero inside the outer group (each such event is a closed subgroup
+                # like `(*name)` or `(params)` at the top level of the outer group).
                 saved = self.pos
                 depth = 0
                 name = ""
+                inner_subgroups = 0  # counts closings at depth→0 inside outer group
                 while self.pos < len(self.tokens) - 1:
                     tok = self.current()
                     if tok.type == TokenType.LPAREN:
@@ -1297,6 +1333,8 @@ class Parser:
                             break
                         depth -= 1
                         self.advance()
+                        if depth == 0:
+                            inner_subgroups += 1
                     elif tok.type == TokenType.IDENTIFIER and not name:
                         name = tok.value
                         self.advance()
@@ -1310,8 +1348,14 @@ class Parser:
                         if self.match(TokenType.LPAREN): d += 1
                         elif self.match(TokenType.RPAREN): d -= 1
                         else: self.advance()
-                ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars,
-                              struct_def=base_type.struct_def)
+                # If the inner scan had ≥2 subgroups, the declarator contained an
+                # inner pointer group AND a param list, meaning the function returns
+                # a function pointer — add one extra pointer level.
+                extra_ret_ptr = 1 if inner_subgroups >= 2 else 0
+                ts = TypeSpec(base=base_type.base,
+                              pointer_depth=base_type.pointer_depth + extra_stars + extra_ret_ptr,
+                              struct_def=base_type.struct_def,
+                              is_func_ptr=(extra_ret_ptr == 1))
                 init = None
                 if self.match(TokenType.ASSIGN):
                     init = self.parse_assignment()
