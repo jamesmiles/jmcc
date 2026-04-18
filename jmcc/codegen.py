@@ -1597,6 +1597,17 @@ class CodeGen:
 
         size = decl.type_spec.size_bytes()
 
+        # extern decl inside function body: no stack slot; if not already known as a
+        # global, register a stub so get_var_location can resolve it via the symbol name
+        if decl.type_spec.is_extern and self.current_func:
+            if decl.name not in self.global_vars:
+                ts = TypeSpec(base=decl.type_spec.base,
+                              pointer_depth=decl.type_spec.pointer_depth,
+                              is_unsigned=decl.type_spec.is_unsigned,
+                              is_extern=True)
+                self.global_vars[decl.name] = GlobalVarDecl(type_spec=ts, name=decl.name, init=None)
+            return
+
         # Static local variable: store as a global with mangled name
         if decl.type_spec.is_static and self.current_func:
             mangled = f"__static_{self.current_func.name}_{decl.name}"
