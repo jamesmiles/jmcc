@@ -336,6 +336,9 @@ long pread(int fd, void *buf, unsigned long count, long offset);
 long pwrite(int fd, const void *buf, unsigned long count, long offset);
 long pread64(int fd, void *buf, unsigned long count, long offset);
 long pwrite64(int fd, const void *buf, unsigned long count, long offset);
+int getpagesize(void);
+long readlink(const char *path, char *buf, unsigned long bufsiz);
+int fchown(int fd, unsigned int owner, unsigned int group);
 """,
         "fcntl.h": """
 #define O_RDONLY 0
