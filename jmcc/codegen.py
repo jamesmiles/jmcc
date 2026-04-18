@@ -34,6 +34,11 @@ class CodeGen:
         self.stack_offset = 0
         self.current_func: Optional[FuncDecl] = None
 
+        # Long double helper state
+        self._need_two64_const = False  # emit .Ljmcc_two64 (2^64 as double) in rodata
+        self._need_two63_const = False  # emit .Ljmcc_two63 (2^63 as double) in rodata
+        self._ld_return_temp: Optional[int] = None  # stack offset of saved 80-bit ld return value
+
     def error(self, msg, line=0, col=0):
         raise CodeGenError(msg, line=line, col=col)
 
@@ -74,6 +79,49 @@ class CodeGen:
             self.emit("    cvtsi2sdq %rax, %xmm0")
         else:
             self.emit("    cvtsi2sd %eax, %xmm0")
+
+    def _emit_int_to_x87(self, src_type, mem_off):
+        """Integer in %rax → x87 st(0) via fildll.  mem_off is a (%rbp-relative) 8-byte slot.
+        Handles unsigned 64-bit: fildll treats the bit pattern as signed, so values >= 2^63
+        need 2^64 added (2^64 is exactly representable as double, so faddl is exact)."""
+        is_64 = src_type and not src_type.is_pointer() and src_type.size_bytes() >= 8
+        is_uns64 = is_64 and src_type.is_unsigned
+        if is_64:
+            self.emit(f"    movq %rax, {mem_off}(%rbp)")
+            self.emit(f"    fildll {mem_off}(%rbp)")
+            if is_uns64:
+                lbl = self.new_label("u2x")
+                self._need_two64_const = True
+                self.emit(f"    testq %rax, %rax")
+                self.emit(f"    jns {lbl}_done")
+                self.emit(f"    faddl .Ljmcc_two64(%rip)")
+                self.emit(f"{lbl}_done:")
+        else:
+            self.emit(f"    movl %eax, {mem_off}(%rbp)")
+            self.emit(f"    fildl {mem_off}(%rbp)")
+
+    def _emit_x87_to_uint64(self, mem_off):
+        """x87 st(0) → u64 in %rax.  mem_off is a (%rbp-relative) 8-byte slot.
+        For values >= 2^63: subtract 2^63, fistpll, then add 2^63 back as a bit pattern."""
+        lbl = self.new_label("ld2u")
+        self._need_two63_const = True
+        # Load 2^63 constant; fucomip compares st(0)=2^63 with st(1)=val then pops st(0)
+        self.emit(f"    fldl .Ljmcc_two63(%rip)")    # st(0)=2^63, st(1)=val
+        self.emit(f"    fucomip %st(1), %st")         # cmp 2^63 vs val; pop 2^63; st(0)=val
+        # CF=1 if 2^63 < val; ZF=1 if equal.  jbe → val >= 2^63 → large branch
+        self.emit(f"    jbe {lbl}_large")
+        # Small: val < 2^63, fits in signed int64
+        self.emit(f"    fistpll {mem_off}(%rbp)")
+        self.emit(f"    movq {mem_off}(%rbp), %rax")
+        self.emit(f"    jmp {lbl}_done")
+        self.emit(f"{lbl}_large:")
+        # val >= 2^63: subtract 2^63, convert signed, add 2^63 back as bit pattern
+        self.emit(f"    fsubl .Ljmcc_two63(%rip)")
+        self.emit(f"    fistpll {mem_off}(%rbp)")
+        self.emit(f"    movq {mem_off}(%rbp), %rax")
+        self.emit(f"    movabsq $-9223372036854775808, %rcx")  # 0x8000000000000000 = 2^63
+        self.emit(f"    addq %rcx, %rax")
+        self.emit(f"{lbl}_done:")
 
     def _is_struct_by_value(self, ts):
         """Check if a type is a struct passed/returned by value (not pointer, not array)."""
@@ -618,6 +666,18 @@ class CodeGen:
                 self.emit(f"    .align 8")
                 self.label(anon)
                 self._emit_struct_init_data(sdef, init_list)
+
+        # Emit long double helper constants if needed
+        if self._need_two63_const or self._need_two64_const:
+            self.emit("")
+            self.emit("    .section .rodata")
+            self.emit("    .align 8")
+            if self._need_two63_const:
+                self.emit(".Ljmcc_two63:")
+                self.emit("    .quad 0x43E0000000000000")  # 2^63 as double
+            if self._need_two64_const:
+                self.emit(".Ljmcc_two64:")
+                self.emit("    .quad 0x43F0000000000000")  # 2^64 as double
 
         # Generate string literals (at the end, after globals which may add more)
         if self.string_literals:
@@ -1591,27 +1651,62 @@ class CodeGen:
                                 self.emit(f"    movb %r11b, {b}(%rdi)")
                     self.emit("    movq %rdi, %rax")
             else:
-                self.gen_expr(stmt.value)
-                # Result is in %rax/%eax — convert/move to xmm0 if returning float/double
-                if ret_type and ret_type.base in ("float", "double") and not ret_type.is_pointer():
-                    if not (ret_type.struct_def and ret_type.pointer_depth == 0):
-                        # If the returned expression is an integer type, convert to float
-                        val_is_float = self._is_float_type(stmt.value)
-                        if not val_is_float:
-                            # Integer value in %eax/%rax — convert to double
-                            val_type = self.get_expr_type(stmt.value)
-                            if val_type and (val_type.base in ("long", "long long") or val_type.is_pointer()):
-                                if val_type.is_unsigned:
-                                    # Unsigned 64-bit -> double (cvtsi2sd treats as signed)
-                                    self.emit("    cvtsi2sdq %rax, %xmm0")
-                                else:
-                                    self.emit("    cvtsi2sdq %rax, %xmm0")
-                            else:
-                                self.emit("    cvtsi2sd %eax, %xmm0")
-                            if ret_type.base == "float":
-                                self.emit("    cvtsd2ss %xmm0, %xmm0")
+                # Long double return: place value in x87 st(0) (System V AMD64 ABI)
+                if ret_type and ret_type.base == "long double" and not ret_type.is_pointer():
+                    self.stack_offset -= 16
+                    tmp = self.stack_offset
+                    # Peel off (long double) casts to find the actual source type
+                    inner_val = stmt.value
+                    inner_type = self.get_expr_type(stmt.value)
+                    while isinstance(inner_val, CastExpr):
+                        t = inner_val.target_type
+                        if t and t.base == "long double" and not t.is_pointer():
+                            inner_type = self.get_expr_type(inner_val.operand)
+                            inner_val = inner_val.operand
                         else:
-                            self.emit("    movq %rax, %xmm0")
+                            break
+                    inner_is_int = (inner_type and not inner_type.is_pointer() and
+                                    inner_type.base not in ("float", "double", "long double"))
+                    if inner_is_int:
+                        # Integer source: use fildll for full 80-bit precision
+                        self.gen_expr(inner_val)
+                        self._emit_int_to_x87(inner_type, tmp)
+                    elif isinstance(stmt.value, Identifier):
+                        # Long double variable: load directly with fldt
+                        loc, vts = self.get_var_location(stmt.value.name)
+                        if loc and vts and vts.base == "long double" and not vts.is_pointer():
+                            self.emit(f"    fldt {loc}")
+                        else:
+                            self.gen_expr(stmt.value)
+                            self.emit(f"    movq %rax, {tmp}(%rbp)")
+                            self.emit(f"    fldl {tmp}(%rbp)")
+                    else:
+                        self.gen_expr(stmt.value)
+                        self.emit(f"    movq %rax, {tmp}(%rbp)")
+                        self.emit(f"    fldl {tmp}(%rbp)")
+                    # Value is in x87 st(0); fall through to leave/ret
+                else:
+                    self.gen_expr(stmt.value)
+                    # Result is in %rax/%eax — convert/move to xmm0 if returning float/double
+                    if ret_type and ret_type.base in ("float", "double") and not ret_type.is_pointer():
+                        if not (ret_type.struct_def and ret_type.pointer_depth == 0):
+                            # If the returned expression is an integer type, convert to float
+                            val_is_float = self._is_float_type(stmt.value)
+                            if not val_is_float:
+                                # Integer value in %eax/%rax — convert to double
+                                val_type = self.get_expr_type(stmt.value)
+                                if val_type and (val_type.base in ("long", "long long") or val_type.is_pointer()):
+                                    if val_type.is_unsigned:
+                                        # Unsigned 64-bit -> double (cvtsi2sd treats as signed)
+                                        self.emit("    cvtsi2sdq %rax, %xmm0")
+                                    else:
+                                        self.emit("    cvtsi2sdq %rax, %xmm0")
+                                else:
+                                    self.emit("    cvtsi2sd %eax, %xmm0")
+                                if ret_type.base == "float":
+                                    self.emit("    cvtsd2ss %xmm0, %xmm0")
+                            else:
+                                self.emit("    movq %rax, %xmm0")
         self.emit("    movq -8(%rbp), %rbx")  # restore callee-saved %rbx
         self.emit("    leave")
         self.emit("    ret")
@@ -1844,7 +1939,10 @@ class CodeGen:
                 _init_is_64 = _init_type and not _init_type.is_pointer() and \
                               _init_type.size_bytes() >= 8 and \
                               _init_type.base not in ("float", "double", "long double")
+                self._ld_return_temp = None  # reset before gen_expr so we only capture fresh call
                 self.gen_expr(decl.init)
+                ld_rtemp = self._ld_return_temp  # may be set by gen_func_call for ld-returning func
+                self._ld_return_temp = None
                 offset = self.locals[decl.name][0]
 
                 if is_i128_var:
@@ -1859,18 +1957,20 @@ class CodeGen:
                     self.emit(f"    movq %rdx, {offset + 8}(%rbp)")
                 elif is_long_dbl_var:
                     # Store as 80-bit x87 extended precision (10 bytes + 6 zero padding).
-                    # Use the destination slot itself as temp: store double there, fldl it,
-                    # then fstpt overwrites bytes 0-9 with 80-bit; bytes 10-15 stay zero.
                     self.emit(f"    movq $0, {offset + 8}(%rbp)")
-                    if is_float_init:
+                    if ld_rtemp is not None and isinstance(decl.init, FuncCall):
+                        # Direct 80-bit copy from saved long-double function return temp
+                        self.emit(f"    fldt {ld_rtemp}(%rbp)")
+                        self.emit(f"    fstpt {offset}(%rbp)")
+                    elif is_float_init:
+                        # Double bits in %rax: load via x87 (53-bit precision path)
                         self.emit(f"    movq %rax, {offset}(%rbp)")
                         self.emit(f"    fldl {offset}(%rbp)")
+                        self.emit(f"    fstpt {offset}(%rbp)")
                     else:
-                        # Integer source: convert to double first
-                        self._emit_int_to_double(_init_type)
-                        self.emit(f"    movq %xmm0, {offset}(%rbp)")
-                        self.emit(f"    fldl {offset}(%rbp)")
-                    self.emit(f"    fstpt {offset}(%rbp)")
+                        # Integer source: use fildll for full 64-bit precision
+                        self._emit_int_to_x87(_init_type, offset)
+                        self.emit(f"    fstpt {offset}(%rbp)")
                 elif is_float_var and not is_float_init:
                     # int -> float: convert and store
                     self._emit_int_to_double(_init_type)
@@ -2659,6 +2759,34 @@ class CodeGen:
             self.gen_lvalue_addr(expr)
 
         elif isinstance(expr, CastExpr):
+            # Special case: (integer_type)(long_double_identifier) — use x87 fistpll for precision
+            # Must intercept before gen_expr which would truncate 80-bit → 53-bit double
+            _cast_src = self.get_expr_type(expr.operand)
+            _cast_dst = expr.target_type
+            if (_cast_src and _cast_src.base == "long double" and not _cast_src.is_pointer() and
+                    _cast_dst and _cast_dst.base not in ("float", "double", "long double") and
+                    not _cast_dst.is_pointer() and
+                    isinstance(expr.operand, Identifier)):
+                _ld_name = expr.operand.name
+                _ld_loc, _ld_vts = self.get_var_location(_ld_name)
+                if _ld_loc and _ld_vts and _ld_vts.base == "long double" and not _ld_vts.is_pointer():
+                    self.emit(f"    fldt {_ld_loc}")  # load 80-bit into x87 st(0)
+                    self.stack_offset -= 8
+                    _ld_tmp = self.stack_offset
+                    _cd_sz = _cast_dst.size_bytes()
+                    if _cast_dst.is_unsigned and _cd_sz == 8:
+                        self._emit_x87_to_uint64(_ld_tmp)
+                    elif _cd_sz == 8:
+                        self.emit(f"    fistpll {_ld_tmp}(%rbp)")
+                        self.emit(f"    movq {_ld_tmp}(%rbp), %rax")
+                    else:
+                        self.emit(f"    fistpll {_ld_tmp}(%rbp)")
+                        self.emit(f"    movl {_ld_tmp}(%rbp), %eax")
+                        if _cd_sz == 2:
+                            self.emit("    movzwl %ax, %eax" if _cast_dst.is_unsigned else "    movswl %ax, %eax")
+                        elif _cd_sz == 1:
+                            self.emit("    movzbl %al, %eax" if _cast_dst.is_unsigned else "    movsbl %al, %eax")
+                    return  # skip normal gen_expr + cast path
             self.gen_expr(expr.operand)
             src_type = self.get_expr_type(expr.operand)
             dst_type = expr.target_type
@@ -5398,10 +5526,23 @@ class CodeGen:
         if use_dynamic_align:
             self.emit("    movq %rbx, %rsp")
 
-        # If function returns float/double, move xmm0 to rax
+        # If function returns float/double/long double, move result to rax
         if ret_type and ret_type.base in ("float", "double", "long double") and not ret_type.is_pointer():
             if not (ret_type.struct_def and ret_type.pointer_depth == 0):
-                self.emit("    movq %xmm0, %rax")
+                if ret_type.base == "long double":
+                    # Long double returns via x87 st(0).
+                    # Save 80-bit to one slot (preserved for gen_var_decl) and double to another.
+                    self.stack_offset -= 16
+                    ld_tmp = self.stack_offset   # 80-bit preserved slot
+                    self.stack_offset -= 8
+                    dbl_tmp = self.stack_offset  # double conversion slot
+                    self.emit(f"    fstpt {ld_tmp}(%rbp)")           # save 80-bit, pop st(0)
+                    self._ld_return_temp = ld_tmp                    # record for gen_var_decl
+                    self.emit(f"    fldt {ld_tmp}(%rbp)")            # reload into st(0)
+                    self.emit(f"    fstpl {dbl_tmp}(%rbp)")          # convert to double (separate slot)
+                    self.emit(f"    movq {dbl_tmp}(%rbp), %rax")    # double in %rax
+                else:
+                    self.emit("    movq %xmm0, %rax")
 
         # Clean up stack args and alignment padding
         if remaining_on_stack > 0:
