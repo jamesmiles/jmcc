@@ -4771,6 +4771,12 @@ class CodeGen:
             elif store_size == 2:
                 self.emit("    movw %ax, (%rcx)")
             elif store_size == 8:
+                # Sign-extend 32-bit signed int to 64-bit before storing to i64 target
+                if not target_is_float and value_type and not value_type.is_pointer() and \
+                   not value_type.is_array() and value_type.size_bytes() <= 4 and \
+                   value_type.base not in ("long", "long long") and \
+                   not value_type.is_unsigned:
+                    self.emit("    movslq %eax, %rax")
                 self.emit("    movq %rax, (%rcx)")
             else:
                 self.emit("    movl %eax, (%rcx)")
