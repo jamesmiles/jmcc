@@ -3554,6 +3554,10 @@ class CodeGen:
             f_is_float = ft and ft.base in ("float", "double", "long double") and not ft.is_pointer()
             if f_is_float and not t_is_float:
                 return ft
+            # If one branch is a pointer and the other is a non-pointer integer (null
+            # pointer constant), the result type is the pointer type.
+            if ft and ft.is_pointer() and tt and not tt.is_pointer():
+                return ft
             return tt
         if isinstance(expr, BuiltinVaArg):
             return expr.target_type
