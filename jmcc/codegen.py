@@ -3526,11 +3526,15 @@ class CodeGen:
                 is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
                 return TypeSpec(base="__int128", is_unsigned=is_uns)
             # Usual arithmetic conversions: long long > long > int
+            # Result is unsigned only if the unsigned operand has rank >= the signed
+            # operand — unsigned int (4 bytes) + signed long long → signed long long.
             if (lt and lt.base == "long long") or (rt and rt.base == "long long"):
-                is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
+                is_uns = (lt and lt.is_unsigned and lt.size_bytes() >= 8) or \
+                         (rt and rt.is_unsigned and rt.size_bytes() >= 8)
                 return TypeSpec(base="long long", is_unsigned=is_uns)
             if (lt and lt.base == "long") or (rt and rt.base == "long"):
-                is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
+                is_uns = (lt and lt.is_unsigned and lt.size_bytes() >= 8) or \
+                         (rt and rt.is_unsigned and rt.size_bytes() >= 8)
                 return TypeSpec(base="long", is_unsigned=is_uns)
             # Both int: propagate unsigned only when either is unsigned int
             if lt and rt and not lt.is_pointer() and not rt.is_pointer():
