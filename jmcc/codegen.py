@@ -1702,6 +1702,10 @@ class CodeGen:
             total = (total + 7) & ~7
             self.stack_offset -= total
             self.locals[decl.name] = (self.stack_offset, decl.type_spec)
+        elif decl.type_spec.base == "long double" and not decl.type_spec.is_pointer():
+            # long double: 80-bit x87 stored in 16 bytes (10 bytes + 6 bytes padding)
+            self.stack_offset -= 16
+            self.locals[decl.name] = (self.stack_offset, decl.type_spec)
         elif decl.type_spec.is_struct() and not decl.type_spec.is_pointer():
             # Struct: allocate full struct size on stack
             alloc = (size + 7) & ~7
@@ -1771,12 +1775,27 @@ class CodeGen:
                     self.gen_lvalue_addr(decl.init)
                     self._emit_memcpy_from_rax(offset, struct_size)
             else:
+                is_long_dbl_var = decl.type_spec.base == "long double" and not decl.type_spec.is_pointer()
                 is_float_var = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
                 is_float_init = isinstance(decl.init, FloatLiteral) or self._is_float_type(decl.init)
                 self.gen_expr(decl.init)
                 offset = self.locals[decl.name][0]
 
-                if is_float_var and not is_float_init:
+                if is_long_dbl_var:
+                    # Store as 80-bit x87 extended precision (10 bytes + 6 zero padding).
+                    # Use the destination slot itself as temp: store double there, fldl it,
+                    # then fstpt overwrites bytes 0-9 with 80-bit; bytes 10-15 stay zero.
+                    self.emit(f"    movq $0, {offset + 8}(%rbp)")
+                    if is_float_init:
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
+                        self.emit(f"    fldl {offset}(%rbp)")
+                    else:
+                        # Integer source: convert to double first
+                        self.emit(f"    cvtsi2sd %eax, %xmm0")
+                        self.emit(f"    movq %xmm0, {offset}(%rbp)")
+                        self.emit(f"    fldl {offset}(%rbp)")
+                    self.emit(f"    fstpt {offset}(%rbp)")
+                elif is_float_var and not is_float_init:
                     # int -> float: convert and store
                     self.emit(f"    cvtsi2sd %eax, %xmm0")
                     if decl.type_spec.base == "float":
@@ -2882,11 +2901,38 @@ class CodeGen:
                 self.gen_expr(item.value)
                 self.emit(f"    movq %rax, {temp_off + i * 8}(%rbp)")
             self.emit(f"    leaq {temp_off}(%rbp), %rax")
+        elif isinstance(expr, FloatLiteral) and expr.is_long_double:
+            # Long double literal: allocate 16-byte temp, store as 80-bit x87
+            self.stack_offset -= 16
+            temp_off = self.stack_offset
+            self.emit(f"    movq $0, {temp_off + 8}(%rbp)")
+            self.gen_expr(expr)  # double bits in %rax
+            self.emit(f"    movq %rax, {temp_off}(%rbp)")
+            self.emit(f"    fldl {temp_off}(%rbp)")
+            self.emit(f"    fstpt {temp_off}(%rbp)")
+            self.emit(f"    leaq {temp_off}(%rbp), %rax")
         elif isinstance(expr, Assignment):
             # Chained assignment: a = (b = expr)
             # Execute the inner assignment, then return target's address
             self.gen_assignment(expr)
             self.gen_lvalue_addr(expr.target)
+        elif isinstance(expr, GenericSelection):
+            # _Generic result preserves lvalue-ness of the selected branch
+            ct = self.get_expr_type(expr.controlling)
+            selected = None
+            default_expr = None
+            for assoc in expr.associations:
+                if assoc.type_spec is None:
+                    default_expr = assoc.expr
+                elif ct and self._generic_types_match(ct, assoc.type_spec):
+                    selected = assoc.expr
+                    break
+            if selected is None:
+                selected = default_expr
+            if selected is not None:
+                self.gen_lvalue_addr(selected)
+            else:
+                self.error("expression is not an lvalue", expr.line, expr.col)
         elif isinstance(expr, TernaryOp):
             # Ternary returning a struct: allocate temp, evaluate selected branch
             # into temp via memcpy, return temp's address
@@ -3268,6 +3314,8 @@ class CodeGen:
         if isinstance(expr, StringLiteral):
             return TypeSpec(base="char", pointer_depth=1)
         if isinstance(expr, FloatLiteral):
+            if expr.is_long_double:
+                return TypeSpec(base="long double")
             return TypeSpec(base="float" if expr.is_single else "double")
         if isinstance(expr, UnaryOp) and expr.op in ("-", "+", "~"):
             return self.get_expr_type(expr.operand)
@@ -3411,6 +3459,20 @@ class CodeGen:
             return tt
         if isinstance(expr, BuiltinVaArg):
             return expr.target_type
+        if isinstance(expr, GenericSelection):
+            ct = self.get_expr_type(expr.controlling)
+            selected = None
+            default_expr = None
+            for assoc in expr.associations:
+                if assoc.type_spec is None:
+                    default_expr = assoc.expr
+                elif ct and self._generic_types_match(ct, assoc.type_spec):
+                    selected = assoc.expr
+                    break
+            if selected is None:
+                selected = default_expr
+            if selected is not None:
+                return self.get_expr_type(selected)
         return None
 
     def _generic_types_match(self, controlling: TypeSpec, assoc: TypeSpec) -> bool:
@@ -4013,9 +4075,10 @@ class CodeGen:
             self.error(f"unhandled unary operator '{expr.op}'", expr.line, expr.col)
 
     def _emit_cond_test(self, expr):
-        """Emit a condition test — uses testq for pointers, cmpl for ints."""
+        """Emit a condition test — uses testq for pointers/floats/64-bit, cmpl for narrow ints."""
         et = self.get_expr_type(expr) if expr else None
-        if et and (et.is_pointer() or et.size_bytes() == 8):
+        is_float = et and et.base in ("float", "double", "long double") and not et.is_pointer()
+        if et and (et.is_pointer() or et.size_bytes() == 8 or is_float):
             self.emit("    testq %rax, %rax")
         else:
             self.emit("    cmpl $0, %eax")
@@ -4171,6 +4234,28 @@ class CodeGen:
                 self.emit("    testl %eax, %eax")
                 self.emit("    setne %al")
                 self.emit("    movzbl %al, %eax")
+
+            # Long double target: store as 80-bit x87 extended precision
+            if target_type and target_type.base == "long double" and not target_type.is_pointer():
+                self.emit("    pushq %rax")
+                self.gen_lvalue_addr(expr.target)
+                self.emit("    movq %rax, %rcx")
+                self.emit("    popq %rax")
+                if value_is_float:
+                    # Double bits in %rax → x87 load as double → store as 80-bit
+                    self.emit("    movq %rax, (%rcx)")
+                    self.emit("    movq $0, 8(%rcx)")
+                    self.emit("    fldl (%rcx)")
+                    self.emit("    fstpt (%rcx)")
+                else:
+                    # Integer in %rax → convert to double → store as 80-bit
+                    self.emit("    cvtsi2sd %rax, %xmm0")
+                    self.emit("    movq %xmm0, (%rcx)")
+                    self.emit("    movq $0, 8(%rcx)")
+                    self.emit("    fldl (%rcx)")
+                    self.emit("    fstpt (%rcx)")
+                # Return value: leave %rax as double bits (for any chained use)
+                return
 
             # Int-to-float or float-to-int conversion
             if target_is_float and not value_is_float:
@@ -4535,10 +4620,11 @@ class CodeGen:
             arg_is_long_double.append(False)
 
         # Count actual pushes and how many will be popped to registers.
-        # This determines how many 8-byte words remain on the stack for the call.
+        # Also compute per-arg whether it goes to a register (for push ordering).
         total_pushes = 0  # non-long-double pushes
         ld_pushes = 0  # long double pushes (always stay on stack)
         pop_count = 0  # how many words will be popped to registers
+        arg_goes_to_reg = [False] * num_args  # True if arg will be popped to a register
         int_idx_sim = 0  # simulate int register assignment
         xmm_idx_sim = 0
         for i in range(num_args):
@@ -4548,48 +4634,24 @@ class CodeGen:
                 sz = arg_struct_size[i]
                 if sz <= 8:
                     total_pushes += 1
+                    if int_idx_sim < 6:
+                        arg_goes_to_reg[i] = True; pop_count += 1; int_idx_sim += 1
                 elif sz <= 16:
                     total_pushes += 2
+                    if int_idx_sim + 1 < 6:
+                        arg_goes_to_reg[i] = True; pop_count += 2; int_idx_sim += 2
                 else:
                     total_pushes += 1  # pointer
+                    if int_idx_sim < 6:
+                        arg_goes_to_reg[i] = True; pop_count += 1; int_idx_sim += 1
             elif arg_is_float[i]:
                 total_pushes += 1
-            else:
-                total_pushes += 1
-
-        # Simulate pop to count how many words get popped
-        int_idx_sim = 0
-        xmm_idx_sim = 0
-        for i in range(num_args):
-            if arg_is_long_double[i]:
-                continue
-            elif arg_is_struct[i]:
-                sz = arg_struct_size[i]
-                if sz <= 8:
-                    if int_idx_sim < 6:
-                        pop_count += 1; int_idx_sim += 1
-                    else:
-                        break
-                elif sz <= 16:
-                    if int_idx_sim + 1 < 6:
-                        pop_count += 2; int_idx_sim += 2
-                    else:
-                        break
-                else:
-                    if int_idx_sim < 6:
-                        pop_count += 1; int_idx_sim += 1
-                    else:
-                        break
-            elif arg_is_float[i]:
                 if xmm_idx_sim < 8:
-                    pop_count += 1; xmm_idx_sim += 1
-                else:
-                    break
+                    arg_goes_to_reg[i] = True; pop_count += 1; xmm_idx_sim += 1
             else:
+                total_pushes += 1
                 if int_idx_sim < 6:
-                    pop_count += 1; int_idx_sim += 1
-                else:
-                    break
+                    arg_goes_to_reg[i] = True; pop_count += 1; int_idx_sim += 1
 
         remaining_on_stack = total_pushes - pop_count + ld_pushes
         if remaining_on_stack > 0 and remaining_on_stack % 2 != 0:
@@ -4616,57 +4678,71 @@ class CodeGen:
                 self.gen_load_var(func_name, expr.line, expr.col)
             self.emit("    pushq %rax")
 
-        # Phase 1: Push long double args (they stay on the stack, last-to-first order)
-        for idx in range(num_args - 1, -1, -1):
-            if not arg_is_long_double[idx]:
-                continue
-            arg = expr.args[idx]
-            self._push_struct_arg(arg, 16)
-
-        # Phase 2: Push non-long-double args (will be popped to registers or stay as stack args)
-        for idx in range(num_args - 1, -1, -1):
-            if arg_is_long_double[idx]:
-                continue  # already pushed
+        def _push_non_ld_arg(idx):
+            """Push one non-long-double arg at position idx."""
             arg = expr.args[idx]
             if arg_is_struct[idx]:
                 self._push_struct_arg(arg, arg_struct_size[idx])
+                return
+            self.gen_expr(arg)
+            arg_type = self.get_expr_type(arg)
+            pt = param_types[idx] if idx < len(param_types) else None
+            if arg_needs_convert[idx]:
+                arg_actually_float = (arg_type and arg_type.base in ("float", "double", "long double")) or isinstance(arg, FloatLiteral)
+                if arg_actually_float and not arg_is_float[idx]:
+                    self.emit("    movq %rax, %xmm0")
+                    param_is_wide = (pt and (pt.base in ("long", "long long") or pt.is_pointer()))
+                    if param_is_wide:
+                        self.emit("    cvttsd2siq %xmm0, %rax")
+                    else:
+                        self.emit("    cvttsd2si %xmm0, %eax")
+                        self.emit("    cltq")
+                elif not arg_actually_float and arg_is_float[idx]:
+                    arg_is_wide = (arg_type and (arg_type.base in ("long", "long long") or arg_type.is_pointer()))
+                    if arg_is_wide:
+                        self.emit("    cvtsi2sdq %rax, %xmm0")
+                    else:
+                        self.emit("    cvtsi2sd %eax, %xmm0")
+                    self.emit("    movq %xmm0, %rax")
             else:
-                self.gen_expr(arg)
-                arg_type = self.get_expr_type(arg)
-                pt = param_types[idx] if idx < len(param_types) else None
-                if arg_needs_convert[idx]:
-                    arg_actually_float = (arg_type and arg_type.base in ("float", "double", "long double")) or isinstance(arg, FloatLiteral)
-                    if arg_actually_float and not arg_is_float[idx]:
-                        # Float -> int: convert. Use 64-bit destination if param is wide.
-                        self.emit("    movq %rax, %xmm0")
-                        param_is_wide = (pt and (pt.base in ("long", "long long") or pt.is_pointer()))
-                        if param_is_wide:
-                            self.emit("    cvttsd2siq %xmm0, %rax")
-                        else:
-                            self.emit("    cvttsd2si %xmm0, %eax")
-                            self.emit("    cltq")
-                    elif not arg_actually_float and arg_is_float[idx]:
-                        # Int -> float: convert. Use 64-bit source if arg is wide.
-                        arg_is_wide = (arg_type and (arg_type.base in ("long", "long long") or arg_type.is_pointer()))
-                        if arg_is_wide:
-                            self.emit("    cvtsi2sdq %rax, %xmm0")
-                        else:
-                            self.emit("    cvtsi2sd %eax, %xmm0")
-                        self.emit("    movq %xmm0, %rax")
-                else:
-                    # No float<->int convert needed, but may still need int width extension.
-                    arg_is_narrow_int = (arg_type and not arg_is_float[idx] and not arg_is_struct[idx] and
-                                         arg_type.base not in ("long", "long long") and
-                                         not arg_type.is_pointer() and
-                                         not arg_type.is_array())
-                    param_is_wide_int = (pt and (pt.base in ("long", "long long") or pt.is_pointer()) and
-                                         not (pt.base in ("float", "double", "long double") and not pt.is_pointer()))
-                    if arg_is_narrow_int and param_is_wide_int:
-                        if arg_type.is_unsigned:
-                            self.emit("    movl %eax, %eax")  # zero-extend
-                        else:
-                            self.emit("    cltq")  # sign-extend
-                self.emit("    pushq %rax")
+                arg_is_narrow_int = (arg_type and not arg_is_float[idx] and not arg_is_struct[idx] and
+                                     arg_type.base not in ("long", "long long") and
+                                     not arg_type.is_pointer() and
+                                     not arg_type.is_array())
+                param_is_wide_int = (pt and (pt.base in ("long", "long long") or pt.is_pointer()) and
+                                     not (pt.base in ("float", "double", "long double") and not pt.is_pointer()))
+                if arg_is_narrow_int and param_is_wide_int:
+                    if arg_type.is_unsigned:
+                        self.emit("    movl %eax, %eax")
+                    else:
+                        self.emit("    cltq")
+            self.emit("    pushq %rax")
+
+        # Three-phase push to ensure correct ABI stack order:
+        #   Phase A: overflow non-LD args (pushed first → highest addresses, read last by va_arg)
+        #   Phase B: long double args (X87 class, pushed second → middle addresses)
+        #   Phase C: register-bound non-LD args (pushed last → lowest addresses, popped to regs)
+        #
+        # After pops, remaining stack is [LD args][overflow non-LD], which is the correct
+        # va_arg reading order: LD before overflow ints/chars.
+
+        # Phase A: overflow non-LD (reverse order)
+        for idx in range(num_args - 1, -1, -1):
+            if arg_is_long_double[idx] or arg_goes_to_reg[idx]:
+                continue
+            _push_non_ld_arg(idx)
+
+        # Phase B: long doubles (reverse order, X87 class, always stay on stack)
+        for idx in range(num_args - 1, -1, -1):
+            if not arg_is_long_double[idx]:
+                continue
+            self._push_struct_arg(expr.args[idx], 16)
+
+        # Phase C: register-bound non-LD (reverse order, will be popped to regs/xmms)
+        for idx in range(num_args - 1, -1, -1):
+            if arg_is_long_double[idx] or not arg_goes_to_reg[idx]:
+                continue
+            _push_non_ld_arg(idx)
 
         # Pop into registers (long doubles stay on stack)
         int_idx = 0

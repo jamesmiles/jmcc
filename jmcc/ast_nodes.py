@@ -306,6 +306,7 @@ class StringLiteral(Expr):
 class FloatLiteral(Expr):
     value: float = 0.0
     is_single: bool = False  # True for float (f suffix), False for double
+    is_long_double: bool = False  # True for long double (L suffix)
 
 
 @dataclass
