@@ -50,6 +50,31 @@ class CodeGen:
         self.label_count += 1
         return f".{prefix}{self.label_count}"
 
+    def _emit_int_to_double(self, src_type):
+        """Emit integer-in-%rax/%eax to double-in-%xmm0 conversion.
+        Handles unsigned 64-bit: cvtsi2sdq treats the bit pattern as signed,
+        so values >= 2^63 need the shift-right-then-double workaround."""
+        is_64 = src_type and not src_type.is_pointer() and src_type.size_bytes() >= 8
+        is_uns64 = is_64 and src_type.is_unsigned
+        if is_uns64:
+            lbl = self.new_label("u2d")
+            self.emit(f"    testq %rax, %rax")
+            self.emit(f"    js {lbl}_hi")
+            self.emit(f"    cvtsi2sdq %rax, %xmm0")
+            self.emit(f"    jmp {lbl}_done")
+            self.emit(f"{lbl}_hi:")
+            self.emit(f"    movq %rax, %rcx")
+            self.emit(f"    shrq $1, %rcx")
+            self.emit(f"    andl $1, %eax")
+            self.emit(f"    orq %rcx, %rax")
+            self.emit(f"    cvtsi2sdq %rax, %xmm0")
+            self.emit(f"    addsd %xmm0, %xmm0")
+            self.emit(f"{lbl}_done:")
+        elif is_64:
+            self.emit("    cvtsi2sdq %rax, %xmm0")
+        else:
+            self.emit("    cvtsi2sd %eax, %xmm0")
+
     def _is_struct_by_value(self, ts):
         """Check if a type is a struct passed/returned by value (not pointer, not array)."""
         return (ts and ts.struct_def is not None and ts.pointer_depth == 0
@@ -1842,15 +1867,13 @@ class CodeGen:
                         self.emit(f"    fldl {offset}(%rbp)")
                     else:
                         # Integer source: convert to double first
-                        _src = "%rax" if _init_is_64 else "%eax"
-                        self.emit(f"    cvtsi2sd {_src}, %xmm0")
+                        self._emit_int_to_double(_init_type)
                         self.emit(f"    movq %xmm0, {offset}(%rbp)")
                         self.emit(f"    fldl {offset}(%rbp)")
                     self.emit(f"    fstpt {offset}(%rbp)")
                 elif is_float_var and not is_float_init:
                     # int -> float: convert and store
-                    _src = "%rax" if _init_is_64 else "%eax"
-                    self.emit(f"    cvtsi2sd {_src}, %xmm0")
+                    self._emit_int_to_double(_init_type)
                     if decl.type_spec.base == "float":
                         self.emit(f"    cvtsd2ss %xmm0, %xmm0")
                         self.emit(f"    movss %xmm0, {offset}(%rbp)")
@@ -2698,10 +2721,7 @@ class CodeGen:
                         self.emit("    cvttsd2si %xmm0, %rax")
                     elif not src_is_float and dst_is_float:
                         # int -> float/double
-                        if src_size <= 4:
-                            self.emit("    cvtsi2sd %eax, %xmm0")  # 32-bit signed int
-                        else:
-                            self.emit("    cvtsi2sd %rax, %xmm0")  # 64-bit long
+                        self._emit_int_to_double(src_type)
                         self.emit("    movq %xmm0, %rax")
                     elif not src_is_float and not dst_is_float:
                         # int -> int: handle widening/narrowing
@@ -4724,9 +4744,7 @@ class CodeGen:
 
             # Int-to-float or float-to-int conversion
             if target_is_float and not value_is_float:
-                _vsrc = "%rax" if (value_type and not value_type.is_pointer() and
-                                   value_type.size_bytes() >= 8) else "%eax"
-                self.emit(f"    cvtsi2sd {_vsrc}, %xmm0")
+                self._emit_int_to_double(value_type)
                 if target_type and target_type.base == "float":
                     self.emit("    cvtsd2ss %xmm0, %xmm0")
                     self.emit("    movd %xmm0, %eax")
