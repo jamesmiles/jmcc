@@ -2734,25 +2734,25 @@ class CodeGen:
                                 if dst_type.is_unsigned:
                                     self.emit("    movzbl %al, %eax")
                                 else:
-                                    self.emit("    movsbl %al, %eax")
+                                    self.emit("    movsbq %al, %rax")  # sign-extend 8->64
                             elif dst_size == 2:
                                 if dst_type.is_unsigned:
                                     self.emit("    movzwl %ax, %eax")
                                 else:
-                                    self.emit("    movswl %ax, %eax")
+                                    self.emit("    movswq %ax, %rax")  # sign-extend 16->64
                         elif dst_size < src_size:
-                            # Narrowing cast — must sign/zero-extend the truncated value
+                            # Narrowing cast — sign/zero-extend the truncated value
                             # so it matches what a load of that size would produce
                             if dst_size == 1:
                                 if dst_type.is_unsigned:
                                     self.emit("    movzbl %al, %eax")
                                 else:
-                                    self.emit("    movsbl %al, %eax")
+                                    self.emit("    movsbq %al, %rax")  # sign-extend 8->64
                             elif dst_size == 2:
                                 if dst_type.is_unsigned:
                                     self.emit("    movzwl %ax, %eax")
                                 else:
-                                    self.emit("    movswl %ax, %eax")
+                                    self.emit("    movswq %ax, %rax")  # sign-extend 16->64
 
         elif isinstance(expr, SizeofExpr):
             if expr.is_type:
