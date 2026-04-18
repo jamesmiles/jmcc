@@ -1815,6 +1815,10 @@ class CodeGen:
                 is_long_dbl_var = decl.type_spec.base == "long double" and not decl.type_spec.is_pointer()
                 is_float_var = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
                 is_float_init = isinstance(decl.init, FloatLiteral) or self._is_float_type(decl.init)
+                _init_type = self.get_expr_type(decl.init)
+                _init_is_64 = _init_type and not _init_type.is_pointer() and \
+                              _init_type.size_bytes() >= 8 and \
+                              _init_type.base not in ("float", "double", "long double")
                 self.gen_expr(decl.init)
                 offset = self.locals[decl.name][0]
 
@@ -1838,13 +1842,15 @@ class CodeGen:
                         self.emit(f"    fldl {offset}(%rbp)")
                     else:
                         # Integer source: convert to double first
-                        self.emit(f"    cvtsi2sd %eax, %xmm0")
+                        _src = "%rax" if _init_is_64 else "%eax"
+                        self.emit(f"    cvtsi2sd {_src}, %xmm0")
                         self.emit(f"    movq %xmm0, {offset}(%rbp)")
                         self.emit(f"    fldl {offset}(%rbp)")
                     self.emit(f"    fstpt {offset}(%rbp)")
                 elif is_float_var and not is_float_init:
                     # int -> float: convert and store
-                    self.emit(f"    cvtsi2sd %eax, %xmm0")
+                    _src = "%rax" if _init_is_64 else "%eax"
+                    self.emit(f"    cvtsi2sd {_src}, %xmm0")
                     if decl.type_spec.base == "float":
                         self.emit(f"    cvtsd2ss %xmm0, %xmm0")
                         self.emit(f"    movss %xmm0, {offset}(%rbp)")
