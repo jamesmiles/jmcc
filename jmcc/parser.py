@@ -111,6 +111,9 @@ class Parser:
         # __typeof__ / typeof are type specifiers
         if self.current().type == TokenType.IDENTIFIER and self.current().value in ("__typeof__", "__typeof", "typeof"):
             return True
+        # __int128 is a type specifier
+        if self.current().type == TokenType.IDENTIFIER and self.current().value == "__int128":
+            return True
         return False
 
     def parse_type_spec(self) -> TypeSpec:
@@ -270,6 +273,9 @@ class Parser:
                     is_func_ptr=td.is_func_ptr if pointer_depth == td.pointer_depth else False,
                     array_sizes=td.array_sizes,
                 )
+            elif t.type == TokenType.IDENTIFIER and t.value == "__int128":
+                base_parts.append("__int128")
+                self.advance()
             elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
                             TokenType.INT, TokenType.LONG, TokenType.FLOAT,
                             TokenType.DOUBLE, TokenType.BOOL):
@@ -287,6 +293,8 @@ class Parser:
                 base = "int"  # implicit int (C89 K&R style)
             else:
                 self.error("expected type specifier")
+        elif "__int128" in base_parts:
+            base = "__int128"
         elif base_parts == ["long", "long"]:
             base = "long long"
         elif "long" in base_parts and "double" in base_parts:
@@ -1293,8 +1301,15 @@ class Parser:
 
     def parse_var_decl(self) -> Stmt:
         t = self.current()
+        # Track inherent pointer depth from typedef BEFORE parse_type_spec consumes tokens.
+        # For `typedef T *alias; alias x, y;`, both x and y should be T* (pd=1 inherent).
+        # For `int *x, y;`, only x is T* — the `*` is a declarator star, not inherent.
+        cur = self.current()
+        inherent_pd = (self.typedefs[cur.value].pointer_depth
+                       if cur.type == TokenType.IDENTIFIER and cur.value in self.typedefs
+                       else 0)
         type_spec = self.parse_type_spec()
-        return self.parse_var_decl_with_type(type_spec)
+        return self.parse_var_decl_with_type(type_spec, inherent_pd=inherent_pd)
 
     def _parse_single_declarator(self, base_type) -> VarDecl:
         """Parse a single declarator (possibly with extra pointer levels)."""
@@ -1501,15 +1516,17 @@ class Parser:
             self.declared_vars.add(name)
         return VarDecl(type_spec=ts, name=name, init=init, line=t.line, col=t.col)
 
-    def parse_var_decl_with_type(self, type_spec) -> Stmt:
+    def parse_var_decl_with_type(self, type_spec, inherent_pd=0) -> Stmt:
         first = self._parse_single_declarator(type_spec)
 
         # Check for multiple declarators: int x, *p, **pp;
-        # For subsequent declarators, use base type without pointer depth
-        # (the * was consumed by parse_type_spec but belongs to first declarator)
+        # For subsequent declarators, use the base type but reset pointer depth
+        # to only the INHERENT part (from typedef), stripping declarator-level stars.
+        # e.g. `int *x, y;` → y is int (inherent_pd=0, strip the declarator `*`)
+        #      `typedef T *alias; alias x, y;` → y is T* (inherent_pd=1, preserve)
         if self.match(TokenType.COMMA):
             base_for_comma = TypeSpec(
-                base=type_spec.base, pointer_depth=0,
+                base=type_spec.base, pointer_depth=inherent_pd,
                 is_unsigned=type_spec.is_unsigned, is_const=type_spec.is_const,
                 is_volatile=type_spec.is_volatile, is_static=type_spec.is_static,
                 is_extern=type_spec.is_extern, struct_def=type_spec.struct_def,
@@ -1625,9 +1642,11 @@ class Parser:
             return GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
         if not self.is_type_start():
-            # K&R-style implicit int: identifier '(' is a function definition with implicit int return type
+            # K&R-style implicit int: only allow for empty param list `identifier() { }`
+            # Typed param lists without a return type (e.g. `main(void)`) are a C99 error.
             if (t.type == TokenType.IDENTIFIER
-                    and self.peek(1).type == TokenType.LPAREN):
+                    and self.peek(1).type == TokenType.LPAREN
+                    and self.peek(2).type == TokenType.RPAREN):
                 type_spec = TypeSpec(base="int")
                 name = self.advance().value
                 return self.parse_func_decl(type_spec, name, t)

@@ -56,6 +56,10 @@ class CodeGen:
                 and not ts.is_array() and not ts.is_ptr_array
                 and not (ts.array_sizes and any(d is not None for d in ts.array_sizes)))
 
+    def _is_i128(self, ts):
+        """Return True if ts is a non-pointer __int128 type."""
+        return ts is not None and ts.base == "__int128" and not ts.is_pointer()
+
     def _struct_arg_regs(self, size):
         """Return number of integer registers needed for a struct arg (System V ABI).
         Structs <= 8 bytes: 1 reg, 9-16 bytes: 2 regs, >16 bytes: passed by pointer (1 reg)."""
@@ -120,7 +124,10 @@ class CodeGen:
                         ts.array_sizes[0] = IntLiteral(value=max_idx)
                     elif isinstance(decl.init, StringLiteral):
                         ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
-                self.global_vars[decl.name] = decl
+                # Don't let an extern re-declaration overwrite an existing definition
+                _existing = self.global_vars.get(decl.name)
+                if not (_existing and decl.type_spec.is_extern and not _existing.type_spec.is_extern):
+                    self.global_vars[decl.name] = decl
             elif isinstance(decl, FuncDecl):
                 self.known_functions.add(decl.name)
                 if decl.return_type:
@@ -1322,9 +1329,23 @@ class CodeGen:
             is_float_param = (param.type_spec.base in ("float", "double", "long double")
                               and not param.type_spec.is_pointer()
                               and not param.type_spec.struct_def)
+            is_i128_param = self._is_i128(param.type_spec)
             is_struct = self._is_struct_by_value(param.type_spec)
 
-            if is_struct:
+            if is_i128_param:
+                # __int128: 16 bytes in two consecutive int registers
+                self.stack_offset -= 16
+                self.params[param.name] = (self.stack_offset, param.type_spec)
+                if int_param_idx + 1 < 6:
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx]}, {self.stack_offset}(%rbp)")
+                    self.emit(f"    movq {self.ARG_REGS_64[int_param_idx + 1]}, {self.stack_offset + 8}(%rbp)")
+                    int_param_idx += 2
+                else:
+                    for off in (0, 8):
+                        self.emit(f"    movq {stack_param_offset + off}(%rbp), %rax")
+                        self.emit(f"    movq %rax, {self.stack_offset + off}(%rbp)")
+                    stack_param_offset += 16
+            elif is_struct:
                 # Struct parameter: allocate full size on stack
                 alloc = (size + 7) & ~7
                 self.stack_offset -= alloc
@@ -1702,6 +1723,10 @@ class CodeGen:
             total = (total + 7) & ~7
             self.stack_offset -= total
             self.locals[decl.name] = (self.stack_offset, decl.type_spec)
+        elif decl.type_spec.base == "__int128" and not decl.type_spec.is_pointer():
+            # __int128: 16 bytes (lo at offset, hi at offset+8)
+            self.stack_offset -= 16
+            self.locals[decl.name] = (self.stack_offset, decl.type_spec)
         elif decl.type_spec.base == "long double" and not decl.type_spec.is_pointer():
             # long double: 80-bit x87 stored in 16 bytes (10 bytes + 6 bytes padding)
             self.stack_offset -= 16
@@ -1775,13 +1800,24 @@ class CodeGen:
                     self.gen_lvalue_addr(decl.init)
                     self._emit_memcpy_from_rax(offset, struct_size)
             else:
+                is_i128_var = decl.type_spec.base == "__int128" and not decl.type_spec.is_pointer()
                 is_long_dbl_var = decl.type_spec.base == "long double" and not decl.type_spec.is_pointer()
                 is_float_var = decl.type_spec.base in ("float", "double") and not decl.type_spec.is_pointer()
                 is_float_init = isinstance(decl.init, FloatLiteral) or self._is_float_type(decl.init)
                 self.gen_expr(decl.init)
                 offset = self.locals[decl.name][0]
 
-                if is_long_dbl_var:
+                if is_i128_var:
+                    # Extend init value to 128 bits if needed, then store lo/hi
+                    init_type = self.get_expr_type(decl.init)
+                    if not self._is_i128(init_type):
+                        if init_type and init_type.is_unsigned:
+                            self.emit("    xorq %rdx, %rdx")
+                        else:
+                            self.emit("    cqo")
+                    self.emit(f"    movq %rax, {offset}(%rbp)")
+                    self.emit(f"    movq %rdx, {offset + 8}(%rbp)")
+                elif is_long_dbl_var:
                     # Store as 80-bit x87 extended precision (10 bytes + 6 zero padding).
                     # Use the destination slot itself as temp: store double there, fldl it,
                     # then fstpt overwrites bytes 0-9 with 80-bit; bytes 10-15 stay zero.
@@ -2597,7 +2633,49 @@ class CodeGen:
                     dst_size = 8 if dst_is_ptr else dst_type.size_bytes()
                     src_is_float = src_type.base in ("float", "double", "long double") and not src_type.is_pointer()
                     dst_is_float = dst_type.base in ("float", "double", "long double") and not dst_type.is_pointer()
-                    if src_is_float and not dst_is_float:
+                    src_is_i128 = src_type.base == "__int128" and not src_is_ptr
+                    dst_is_i128 = dst_type.base == "__int128" and not dst_is_ptr
+                    if dst_is_i128 and not src_is_i128:
+                        # Widen to __int128
+                        if src_is_float:
+                            self.emit("    movq %rax, %xmm0")
+                            self.emit("    cvttsd2si %xmm0, %rax")
+                            self.emit("    xorq %rdx, %rdx" if src_type.is_unsigned else "    cqo")
+                        elif src_type.is_unsigned:
+                            if src_size <= 4:
+                                self.emit("    movl %eax, %eax")
+                            self.emit("    xorq %rdx, %rdx")
+                        else:
+                            if src_size == 1:
+                                self.emit("    movsbl %al, %eax")
+                                self.emit("    movslq %eax, %rax")
+                            elif src_size == 2:
+                                self.emit("    movswl %ax, %eax")
+                                self.emit("    movslq %eax, %rax")
+                            elif src_size <= 4:
+                                self.emit("    movslq %eax, %rax")
+                            self.emit("    cqo")
+                    elif src_is_i128 and not dst_is_i128:
+                        # Narrow from __int128: lo word in %rax
+                        if dst_is_float:
+                            self.emit("    cvtsi2sd %rax, %xmm0")
+                            self.emit("    movq %xmm0, %rax")
+                        elif dst_size == 1:
+                            if dst_type.is_unsigned:
+                                self.emit("    movzbl %al, %eax")
+                            else:
+                                self.emit("    movsbl %al, %eax")
+                        elif dst_size == 2:
+                            if dst_type.is_unsigned:
+                                self.emit("    movzwl %ax, %eax")
+                            else:
+                                self.emit("    movswl %ax, %eax")
+                        elif dst_size <= 4:
+                            self.emit("    movl %eax, %eax")
+                        # dst_size == 8: low 64 bits already in %rax
+                    elif src_is_i128 and dst_is_i128:
+                        pass  # signed/unsigned reinterpret — no-op
+                    elif src_is_float and not dst_is_float:
                         # float/double -> int
                         self.emit("    movq %rax, %xmm0")
                         self.emit("    cvttsd2si %xmm0, %rax")
@@ -2790,6 +2868,20 @@ class CodeGen:
                 self.emit(f"    leaq {mangled}(%rip), %rax")
             else:
                 self.emit(f"    leaq {name}(%rip), %rax")
+        elif ts and ts.base == "__int128" and not ts.is_pointer():
+            # Load 128-bit value: lo in %rax, hi in %rdx
+            self.emit(f"    movq {loc}, %rax")
+            if name in self.locals:
+                hi_offset = self.locals[name][0] + 8
+                self.emit(f"    movq {hi_offset}(%rbp), %rdx")
+            elif name in self.params:
+                hi_offset = self.params[name][0] + 8
+                self.emit(f"    movq {hi_offset}(%rbp), %rdx")
+            elif name in self.static_locals:
+                mangled = self.static_locals[name]
+                self.emit(f"    movq {mangled}+8(%rip), %rdx")
+            else:
+                self.emit(f"    movq {name}+8(%rip), %rdx")
         elif ts and ts.base == "float" and not ts.is_pointer() and ts.pointer_depth == 0:
             # Load 4-byte float, convert to double, store in %rax
             self.emit(f"    movss {loc}, %xmm0")
@@ -3415,11 +3507,16 @@ class CodeGen:
             # Shifts: result type is promoted type of LEFT operand only
             if expr.op in ("<<", ">>"):
                 if lt:
-                    # Integer promotions: unsigned short/char promote to signed int
-                    # Only unsigned int/long/long long stay unsigned
                     promoted_unsigned = lt.is_unsigned and lt.size_bytes() >= 4
+                    if lt.base == "__int128":
+                        return TypeSpec(base="__int128", is_unsigned=lt.is_unsigned)
                     return TypeSpec(base=lt.base if lt.base in ("long", "long long") else "int",
                                    is_unsigned=promoted_unsigned)
+            # __int128 wins over all (usual arithmetic conversions)
+            if (lt and lt.base == "__int128" and not lt.is_pointer()) or \
+               (rt and rt.base == "__int128" and not rt.is_pointer()):
+                is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
+                return TypeSpec(base="__int128", is_unsigned=is_uns)
             # Usual arithmetic conversions: long long > long > int
             if (lt and lt.base == "long long") or (rt and rt.base == "long long"):
                 is_uns = (lt and lt.is_unsigned) or (rt and rt.is_unsigned)
@@ -3689,7 +3786,295 @@ class CodeGen:
             self.emit("    movsd (%rsp), %xmm0")  # restore left
         self.emit("    addq $8, %rsp")
 
+    def _gen_i128_extend(self, ts):
+        """After gen_expr put a non-__int128 value in %rax, extend to %rdx:%rax (128-bit)."""
+        if ts and ts.is_unsigned:
+            self.emit("    xorq %rdx, %rdx")
+        else:
+            self.emit("    cqo")
+
+    def _gen_i128_compound_assign(self, expr, op, target_type):
+        """Generate compound assignment (op=) where target is __int128."""
+        is_unsigned = target_type and target_type.is_unsigned
+        # Get address of target; load lo/hi before clobbering rax
+        self.gen_lvalue_addr(expr.target)
+        self.emit("    movq 8(%rax), %rdx")   # hi of current value
+        self.emit("    movq (%rax), %rcx")    # lo into rcx temporarily
+        self.emit("    pushq %rax")           # save address
+        self.emit("    movq %rcx, %rax")      # lo into rax
+        # rax=lo, rdx=hi, addr on stack
+        if op in ("<<", ">>"):
+            self.emit("    pushq %rdx")
+            self.emit("    pushq %rax")
+            self.gen_expr(expr.value)
+            self.emit("    movl %eax, %ecx")
+            self.emit("    andl $127, %ecx")
+            self.emit("    popq %rax")
+            self.emit("    popq %rdx")
+            if op == "<<":
+                ge64 = self.new_label("shl128_ge64")
+                done = self.new_label("shl128_done")
+                self.emit("    cmpl $64, %ecx")
+                self.emit(f"    jae {ge64}")
+                self.emit("    shld %cl, %rax, %rdx")
+                self.emit("    shlq %cl, %rax")
+                self.emit(f"    jmp {done}")
+                self.label(ge64)
+                self.emit("    subl $64, %ecx")
+                self.emit("    movq %rax, %rdx")
+                self.emit("    shlq %cl, %rdx")
+                self.emit("    xorq %rax, %rax")
+                self.label(done)
+            else:
+                ge64 = self.new_label("shr128_ge64")
+                done = self.new_label("shr128_done")
+                self.emit("    cmpl $64, %ecx")
+                self.emit(f"    jae {ge64}")
+                self.emit("    shrd %cl, %rdx, %rax")
+                self.emit("    sarq %cl, %rdx" if not is_unsigned else "    shrq %cl, %rdx")
+                self.emit(f"    jmp {done}")
+                self.label(ge64)
+                self.emit("    subl $64, %ecx")
+                self.emit("    movq %rdx, %rax")
+                if not is_unsigned:
+                    self.emit("    sarq %cl, %rax")
+                    self.emit("    sarq $63, %rdx")
+                else:
+                    self.emit("    shrq %cl, %rax")
+                    self.emit("    xorq %rdx, %rdx")
+                self.label(done)
+        else:
+            self.emit("    pushq %rdx")
+            self.emit("    pushq %rax")
+            value_type = self.get_expr_type(expr.value)
+            self.gen_expr(expr.value)
+            if not self._is_i128(value_type):
+                self._gen_i128_extend(value_type)
+            self.emit("    movq %rax, %r10")
+            self.emit("    movq %rdx, %r11")
+            self.emit("    popq %rax")
+            self.emit("    popq %rdx")
+            if op == "+":
+                self.emit("    addq %r10, %rax")
+                self.emit("    adcq %r11, %rdx")
+            elif op == "-":
+                self.emit("    subq %r10, %rax")
+                self.emit("    sbbq %r11, %rdx")
+            elif op == "*":
+                self.emit("    movq %rax, %rcx")
+                self.emit("    movq %rdx, %r8")
+                self.emit("    mulq %r10")
+                self.emit("    movq %rdx, %r9")
+                self.emit("    imulq %r10, %r8")
+                self.emit("    addq %r8, %r9")
+                self.emit("    imulq %r11, %rcx")
+                self.emit("    addq %rcx, %r9")
+                self.emit("    movq %r9, %rdx")
+            elif op in ("/", "%"):
+                func = ("__udivti3" if op == "/" else "__umodti3") if is_unsigned else \
+                       ("__divti3" if op == "/" else "__modti3")
+                self.emit("    movq %r11, %rcx")
+                self.emit("    movq %rax, %rdi")
+                self.emit("    movq %rdx, %rsi")
+                self.emit("    movq %r10, %rdx")
+                self.emit("    movq %rsp, %rbx")
+                self.emit("    andq $-16, %rsp")
+                self.emit(f"    call {func}")
+                self.emit("    movq %rbx, %rsp")
+            elif op == "&":
+                self.emit("    andq %r10, %rax")
+                self.emit("    andq %r11, %rdx")
+            elif op == "|":
+                self.emit("    orq %r10, %rax")
+                self.emit("    orq %r11, %rdx")
+            elif op == "^":
+                self.emit("    xorq %r10, %rax")
+                self.emit("    xorq %r11, %rdx")
+        # Store result rax:rdx back; address still on stack
+        self.emit("    popq %rcx")
+        self.emit("    movq %rax, (%rcx)")
+        self.emit("    movq %rdx, 8(%rcx)")
+
+    def _gen_i128_shift(self, expr, left_type, right_type):
+        """Generate __int128 left or right shift. Right operand is int shift amount."""
+        op = expr.op
+        is_signed = not (left_type and left_type.is_unsigned)
+        # Evaluate shift amount (right operand) → %ecx
+        self.gen_expr(expr.right)
+        self.emit("    movl %eax, %ecx")
+        self.emit("    pushq %rcx")
+        # Evaluate left operand → rax=lo, rdx=hi
+        self.gen_expr(expr.left)
+        if not self._is_i128(left_type):
+            self._gen_i128_extend(left_type)
+        self.emit("    popq %rcx")
+        # lo=rax, hi=rdx, shift_amount=ecx (in cl)
+        self.emit("    andl $127, %ecx")
+        if op == "<<":
+            ge64 = self.new_label("shl128_ge64")
+            done = self.new_label("shl128_done")
+            self.emit("    cmpl $64, %ecx")
+            self.emit(f"    jae {ge64}")
+            self.emit("    shld %cl, %rax, %rdx")
+            self.emit("    shlq %cl, %rax")
+            self.emit(f"    jmp {done}")
+            self.label(ge64)
+            self.emit("    subl $64, %ecx")
+            self.emit("    movq %rax, %rdx")
+            self.emit("    shlq %cl, %rdx")
+            self.emit("    xorq %rax, %rax")
+            self.label(done)
+        else:
+            ge64 = self.new_label("shr128_ge64")
+            done = self.new_label("shr128_done")
+            self.emit("    cmpl $64, %ecx")
+            self.emit(f"    jae {ge64}")
+            self.emit("    shrd %cl, %rdx, %rax")
+            if is_signed:
+                self.emit("    sarq %cl, %rdx")
+            else:
+                self.emit("    shrq %cl, %rdx")
+            self.emit(f"    jmp {done}")
+            self.label(ge64)
+            self.emit("    subl $64, %ecx")
+            self.emit("    movq %rdx, %rax")
+            if is_signed:
+                self.emit("    sarq %cl, %rax")
+                self.emit("    sarq $63, %rdx")
+            else:
+                self.emit("    shrq %cl, %rax")
+                self.emit("    xorq %rdx, %rdx")
+            self.label(done)
+
+    def _gen_i128_binary_op(self, expr, left_type, right_type):
+        """Generate code for a binary op where at least one operand is __int128."""
+        op = expr.op
+        # Shifts: special handling (right is int count, not __int128)
+        if op in ("<<", ">>"):
+            self._gen_i128_shift(expr, left_type, right_type)
+            return
+        # Evaluate left → rax=lo, rdx=hi; extend if not __int128
+        self.gen_expr(expr.left)
+        if not self._is_i128(left_type):
+            self._gen_i128_extend(left_type)
+        self.emit("    pushq %rdx")
+        self.emit("    pushq %rax")
+        # Evaluate right → rax=lo, rdx=hi; extend if not __int128
+        self.gen_expr(expr.right)
+        if not self._is_i128(right_type):
+            self._gen_i128_extend(right_type)
+        # right in rax:rdx → save to r10:r11
+        self.emit("    movq %rax, %r10")
+        self.emit("    movq %rdx, %r11")
+        # Restore left
+        self.emit("    popq %rax")
+        self.emit("    popq %rdx")
+        # a=rdx:rax (hi:lo), b=r11:r10 (hi:lo)
+        is_unsigned_op = ((left_type and left_type.is_unsigned) or
+                          (right_type and right_type.is_unsigned))
+        if op == "+":
+            self.emit("    addq %r10, %rax")
+            self.emit("    adcq %r11, %rdx")
+        elif op == "-":
+            self.emit("    subq %r10, %rax")
+            self.emit("    sbbq %r11, %rdx")
+        elif op == "*":
+            # (hi_a*lo_b + lo_a*hi_b)*2^64 + lo_a*lo_b (truncated to 128 bits)
+            self.emit("    movq %rax, %rcx")   # rcx = lo_a
+            self.emit("    movq %rdx, %r8")    # r8  = hi_a
+            self.emit("    mulq %r10")          # rdx:rax = lo_a * lo_b
+            self.emit("    movq %rdx, %r9")    # r9 = hi(lo_a*lo_b)
+            self.emit("    imulq %r10, %r8")   # r8 = hi_a * lo_b (lo 64 bits)
+            self.emit("    addq %r8, %r9")
+            self.emit("    imulq %r11, %rcx")  # rcx = lo_a * hi_b (lo 64 bits)
+            self.emit("    addq %rcx, %r9")
+            self.emit("    movq %r9, %rdx")
+        elif op in ("/", "%"):
+            # Call libgcc __divti3 / __modti3 / __udivti3 / __umodti3
+            # ABI: a=(rdi=lo, rsi=hi), b=(rdx=lo, rcx=hi); return rax:rdx
+            self.emit("    movq %r11, %rcx")   # rcx = hi_b
+            self.emit("    movq %rax, %rdi")   # rdi = lo_a
+            self.emit("    movq %rdx, %rsi")   # rsi = hi_a
+            self.emit("    movq %r10, %rdx")   # rdx = lo_b
+            if is_unsigned_op:
+                func = "__udivti3" if op == "/" else "__umodti3"
+            else:
+                func = "__divti3" if op == "/" else "__modti3"
+            self.emit("    movq %rsp, %rbx")
+            self.emit("    andq $-16, %rsp")
+            self.emit(f"    call {func}")
+            self.emit("    movq %rbx, %rsp")
+        elif op == "&":
+            self.emit("    andq %r10, %rax")
+            self.emit("    andq %r11, %rdx")
+        elif op == "|":
+            self.emit("    orq %r10, %rax")
+            self.emit("    orq %r11, %rdx")
+        elif op == "^":
+            self.emit("    xorq %r10, %rax")
+            self.emit("    xorq %r11, %rdx")
+        elif op == "==":
+            self.emit("    xorq %r11, %rdx")
+            self.emit("    xorq %r10, %rax")
+            self.emit("    orq %rdx, %rax")
+            self.emit("    sete %al")
+            self.emit("    movzbl %al, %eax")
+        elif op == "!=":
+            self.emit("    xorq %r11, %rdx")
+            self.emit("    xorq %r10, %rax")
+            self.emit("    orq %rdx, %rax")
+            self.emit("    setne %al")
+            self.emit("    movzbl %al, %eax")
+        elif op in ("<", ">", "<=", ">="):
+            true_lbl = self.new_label("cmp128_t")
+            false_lbl = self.new_label("cmp128_f")
+            end_lbl = self.new_label("cmp128_e")
+            if is_unsigned_op:
+                hi_lt, hi_gt = "jb", "ja"
+            else:
+                hi_lt, hi_gt = "jl", "jg"
+            if op == "<":
+                self.emit("    cmpq %r11, %rdx")
+                self.emit(f"    {hi_lt} {true_lbl}")
+                self.emit(f"    {hi_gt} {false_lbl}")
+                self.emit("    cmpq %r10, %rax")
+                self.emit(f"    jb {true_lbl}")
+            elif op == ">":
+                self.emit("    cmpq %r11, %rdx")
+                self.emit(f"    {hi_gt} {true_lbl}")
+                self.emit(f"    {hi_lt} {false_lbl}")
+                self.emit("    cmpq %r10, %rax")
+                self.emit(f"    ja {true_lbl}")
+            elif op == "<=":
+                self.emit("    cmpq %r11, %rdx")
+                self.emit(f"    {hi_lt} {true_lbl}")
+                self.emit(f"    {hi_gt} {false_lbl}")
+                self.emit("    cmpq %r10, %rax")
+                self.emit(f"    jbe {true_lbl}")
+            elif op == ">=":
+                self.emit("    cmpq %r11, %rdx")
+                self.emit(f"    {hi_gt} {true_lbl}")
+                self.emit(f"    {hi_lt} {false_lbl}")
+                self.emit("    cmpq %r10, %rax")
+                self.emit(f"    jae {true_lbl}")
+            self.label(false_lbl)
+            self.emit("    xorl %eax, %eax")
+            self.emit(f"    jmp {end_lbl}")
+            self.label(true_lbl)
+            self.emit("    movl $1, %eax")
+            self.label(end_lbl)
+        else:
+            self.error(f"unhandled __int128 operator '{op}'", expr.line, expr.col)
+
     def gen_binary_op(self, expr: BinaryOp):
+        # __int128 operations
+        left_type_i = self.get_expr_type(expr.left)
+        right_type_i = self.get_expr_type(expr.right)
+        if (self._is_i128(left_type_i) or self._is_i128(right_type_i)) and \
+                expr.op in ("+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "!=", "<<", ">>", "&", "|", "^"):
+            self._gen_i128_binary_op(expr, left_type_i, right_type_i)
+            return
+
         # Float operations: arithmetic and comparison
         is_float_op = (self._is_float_type(expr.left) or self._is_float_type(expr.right) or
                         isinstance(expr.left, FloatLiteral) or isinstance(expr.right, FloatLiteral))
@@ -3955,7 +4340,12 @@ class CodeGen:
             else:
                 self.gen_expr(expr.operand)
                 op_type = self.get_expr_type(expr.operand)
-                if op_type and (op_type.base in ("long", "long long") or op_type.is_pointer()):
+                if self._is_i128(op_type):
+                    # negate 128-bit: negq lo; adcq $0, hi; negq hi
+                    self.emit("    negq %rax")
+                    self.emit("    adcq $0, %rdx")
+                    self.emit("    negq %rdx")
+                elif op_type and (op_type.base in ("long", "long long") or op_type.is_pointer()):
                     self.emit("    negq %rax")
                 else:
                     self.emit("    negl %eax")
@@ -3963,7 +4353,10 @@ class CodeGen:
         elif expr.op == "~":
             self.gen_expr(expr.operand)
             op_type = self.get_expr_type(expr.operand)
-            if op_type and (op_type.base in ("long", "long long") or op_type.is_pointer()):
+            if self._is_i128(op_type):
+                self.emit("    notq %rax")
+                self.emit("    notq %rdx")
+            elif op_type and (op_type.base in ("long", "long long") or op_type.is_pointer()):
                 self.emit("    notq %rax")
             else:
                 self.emit("    notl %eax")
@@ -4017,7 +4410,26 @@ class CodeGen:
             self.gen_lvalue_addr(expr.operand)
             self.emit("    pushq %rax")
 
-            if is_ptr:
+            if self._is_i128(operand_type):
+                # 128-bit increment/decrement; address was pushed to stack
+                self.emit("    popq %rcx")           # rcx = address
+                self.emit("    movq (%rcx), %rax")   # lo
+                self.emit("    movq 8(%rcx), %rdx")  # hi
+                if not is_prefix:
+                    self.emit("    pushq %rdx")       # save old hi
+                    self.emit("    pushq %rax")       # save old lo
+                if is_inc:
+                    self.emit("    addq $1, %rax")
+                    self.emit("    adcq $0, %rdx")
+                else:
+                    self.emit("    subq $1, %rax")
+                    self.emit("    sbbq $0, %rdx")
+                self.emit("    movq %rax, (%rcx)")
+                self.emit("    movq %rdx, 8(%rcx)")
+                if not is_prefix:
+                    self.emit("    popq %rax")
+                    self.emit("    popq %rdx")
+            elif is_ptr:
                 self.emit("    movq (%rax), %rax")
                 if not is_prefix:
                     self.emit("    movq %rax, %rdx")  # save old value
@@ -4078,7 +4490,10 @@ class CodeGen:
         """Emit a condition test — uses testq for pointers/floats/64-bit, cmpl for narrow ints."""
         et = self.get_expr_type(expr) if expr else None
         is_float = et and et.base in ("float", "double", "long double") and not et.is_pointer()
-        if et and (et.is_pointer() or et.size_bytes() == 8 or is_float):
+        if et and self._is_i128(et):
+            self.emit("    orq %rdx, %rax")
+            self.emit("    testq %rax, %rax")
+        elif et and (et.is_pointer() or et.size_bytes() == 8 or is_float):
             self.emit("    testq %rax, %rax")
         else:
             self.emit("    cmpl $0, %eax")
@@ -4229,6 +4644,23 @@ class CodeGen:
 
             self.gen_expr(expr.value)
 
+            # __int128 assignment: extend if needed, store both words
+            if target_type and target_type.base == "__int128" and not target_type.is_pointer():
+                if not self._is_i128(value_type):
+                    if value_type and value_type.is_unsigned:
+                        self.emit("    xorq %rdx, %rdx")
+                    else:
+                        self.emit("    cqo")
+                self.emit("    pushq %rdx")
+                self.emit("    pushq %rax")
+                self.gen_lvalue_addr(expr.target)
+                self.emit("    movq %rax, %rcx")
+                self.emit("    popq %rax")
+                self.emit("    popq %rdx")
+                self.emit("    movq %rax, (%rcx)")
+                self.emit("    movq %rdx, 8(%rcx)")
+                return
+
             # _Bool truncation: any non-zero value becomes 1
             if target_type and target_type.base == "_Bool" and not target_type.is_pointer():
                 self.emit("    testl %eax, %eax")
@@ -4332,6 +4764,10 @@ class CodeGen:
             target_type = self.get_expr_type(expr.target)
             is_ptr = target_type and target_type.is_pointer()
             is_float_target = target_type and target_type.base in ("float", "double", "long double") and not is_ptr
+
+            if self._is_i128(target_type) and op in ("+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"):
+                self._gen_i128_compound_assign(expr, op, target_type)
+                return
 
             if is_float_target and op in ("+", "-", "*", "/"):
                 # Float compound assignment: a += 1.0
@@ -4562,11 +4998,24 @@ class CodeGen:
         arg_struct_size = []  # size of struct arg (0 if not struct)
         arg_needs_convert = []
         arg_is_long_double = []  # long double: stays on stack, not in registers
+        arg_is_i128 = []  # __int128: 2 int registers, push rdx:rax
 
         for i, arg in enumerate(expr.args):
             at = self.get_expr_type(arg)
             # Check if param type or arg type is struct
             pt = param_types[i] if i < len(param_types) else None
+
+            # __int128: 2-register ABI only when the declared param type is __int128.
+            # If param type is unknown (pt=None) or non-__int128, truncate to lo 64 bits.
+            if self._is_i128(pt):
+                arg_is_float.append(False)
+                arg_is_struct.append(True)
+                arg_struct_size.append(16)
+                arg_needs_convert.append(False)
+                arg_is_long_double.append(False)
+                arg_is_i128.append(True)
+                continue
+
             is_struct = False
             struct_size = 0
             if pt and self._is_struct_by_value(pt):
@@ -4582,6 +5031,7 @@ class CodeGen:
                 arg_struct_size.append(struct_size)
                 arg_needs_convert.append(False)
                 arg_is_long_double.append(False)
+                arg_is_i128.append(False)
                 continue
 
             # Check if long double: needs 16 bytes on stack (X87 class in ABI)
@@ -4596,6 +5046,7 @@ class CodeGen:
                 arg_struct_size.append(16)
                 arg_needs_convert.append(False)
                 arg_is_long_double.append(True)
+                arg_is_i128.append(False)
                 continue
 
             is_flt = (at and at.base in ("float", "double") and
@@ -4618,6 +5069,7 @@ class CodeGen:
             arg_struct_size.append(0)
             arg_needs_convert.append(needs_conv)
             arg_is_long_double.append(False)
+            arg_is_i128.append(False)
 
         # Count actual pushes and how many will be popped to registers.
         # Also compute per-arg whether it goes to a register (for push ordering).
@@ -4681,6 +5133,15 @@ class CodeGen:
         def _push_non_ld_arg(idx):
             """Push one non-long-double arg at position idx."""
             arg = expr.args[idx]
+            if arg_is_i128[idx]:
+                # __int128: gen_expr leaves lo=%rax; extend if needed; push hi:lo
+                self.gen_expr(arg)
+                at = self.get_expr_type(arg)
+                if not self._is_i128(at):
+                    self._gen_i128_extend(at)
+                self.emit("    pushq %rdx")   # hi (popped second → hi reg)
+                self.emit("    pushq %rax")   # lo (popped first → lo reg)
+                return
             if arg_is_struct[idx]:
                 self._push_struct_arg(arg, arg_struct_size[idx])
                 return

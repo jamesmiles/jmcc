@@ -251,6 +251,7 @@ class TypeSpec:
             "int": 4,
             "long": 8,
             "long long": 8,
+            "__int128": 16,
             "float": 4,
             "double": 8,
             "long double": 16,

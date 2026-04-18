@@ -31,6 +31,22 @@ class Preprocessor:
         "alloca.h": """
 #define alloca __builtin_alloca
 """,
+        "setjmp.h": """
+typedef long int __jmp_buf[8];
+struct __jmp_buf_tag {
+    __jmp_buf __jmpbuf;
+    int __mask_was_saved;
+    int __jmpbuf_pad;
+    unsigned long __saved_mask[16];
+};
+typedef struct __jmp_buf_tag jmp_buf[1];
+typedef struct __jmp_buf_tag sigjmp_buf[1];
+#define setjmp(env) __sigsetjmp((env), 0)
+int __sigsetjmp(struct __jmp_buf_tag env[1], int savemask);
+void longjmp(struct __jmp_buf_tag env[1], int val);
+#define sigsetjmp(env, savemask) __sigsetjmp((env), (savemask))
+void siglongjmp(struct __jmp_buf_tag env[1], int val);
+""",
         "stddef.h": """
 typedef long ptrdiff_t;
 typedef unsigned long size_t;
@@ -436,7 +452,7 @@ unsigned int umask(unsigned int mask);
 #define SIG_DFL ((void (*)(int))0)
 #define SIG_IGN ((void (*)(int))1)
 typedef void (*sighandler_t)(int);
-typedef unsigned long sigset_t;
+typedef struct { unsigned long __val[16]; } sigset_t;
 typedef int pid_t;
 typedef int uid_t;
 typedef long clock_t;
@@ -448,16 +464,23 @@ typedef struct {
     int si_signo;
     int si_errno;
     int si_code;
+    int __pad0;
     int _pad[28];
 } siginfo_t;
 struct sigaction {
-    void (*sa_handler)(int);
     void (*sa_sigaction)(int, siginfo_t *, void *);
     sigset_t sa_mask;
     int sa_flags;
+    int __sa_pad;
     void (*sa_restorer)(void);
 };
+#define sa_handler sa_sigaction
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
+int sigaddset(sigset_t *set, int signum);
+int sigdelset(sigset_t *set, int signum);
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 sighandler_t signal(int signum, sighandler_t handler);
 int raise(int sig);
 int kill(int pid, int sig);
@@ -468,6 +491,13 @@ int kill(int pid, int sig);
 #define SA_RESTART 0x10000000
 #define SA_NODEFER 0x40000000
 #define SA_RESETHAND 0x80000000
+#define FPE_INTDIV 1
+#define FPE_INTOVF 2
+#define FPE_FLTDIV 3
+#define FPE_FLTOVF 4
+#define FPE_FLTUND 5
+#define FPE_FLTRES 6
+#define FPE_FLTINV 7
 """,
         "sys/time.h": """
 struct timeval {
@@ -772,7 +802,12 @@ int inet_aton(const char *cp, struct in_addr *inp);
                 elif not active:
                     output.append("")
                 elif cmd == "define":
-                    self._handle_define(' '.join(directive[1:]), stripped)
+                    # Use original stripped line to preserve whitespace inside string literals
+                    # (splitting on whitespace would collapse "    " to " ")
+                    import re as _re
+                    _m = _re.match(r'#\s*define\s+(.*)', stripped)
+                    _define_rest = _m.group(1) if _m else ' '.join(directive[1:])
+                    self._handle_define(_define_rest, stripped)
                     output.append("")
                 elif cmd == "undef":
                     if len(directive) > 1:
