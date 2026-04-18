@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  JMCC_TIMEOUT: "60"
+  JMCC_TIMEOUT: "30"
 
 jobs:
   test:

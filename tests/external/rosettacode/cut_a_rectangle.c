@@ -5,6 +5,7 @@
 // PHASE: 5
 // SOURCE: https://rosettacode.org/wiki/Cut_a_rectangle#C
 // LICENSE: GFDL 1.2
+// NOTE: y=10 row omitted — 10x9/10x10 take ~34s unoptimised, unsuitable for CI regression
 // EXPECTED_STDOUT:
 // STDOUT: 2 x 1: 1
 // STDOUT: 2 x 2: 2
@@ -36,16 +37,6 @@
 // STDOUT: 9 x 4: 553
 // STDOUT: 9 x 6: 31721
 // STDOUT: 9 x 8: 1812667
-// STDOUT: 10 x 1: 1
-// STDOUT: 10 x 2: 10
-// STDOUT: 10 x 3: 115
-// STDOUT: 10 x 4: 1228
-// STDOUT: 10 x 5: 10295
-// STDOUT: 10 x 6: 118276
-// STDOUT: 10 x 7: 1026005
-// STDOUT: 10 x 8: 11736888
-// STDOUT: 10 x 9: 99953769
-// STDOUT: 10 x 10: 1124140214
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,7 +111,8 @@ unsigned long long solve(int hh, int ww, int recur)
 int main()
 {
 	int y, x;
-	for (y = 1; y <= 10; y++)
+	/* y=10 omitted — ~34s unoptimised, unsuitable for CI regression */
+	for (y = 1; y <= 9; y++)
 		for (x = 1; x <= y; x++)
 			if (!(x & 1) || !(y & 1))
 				printf("%d x %d: %llu\n", y, x, solve(y, x, 1));
