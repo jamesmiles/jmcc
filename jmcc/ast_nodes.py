@@ -34,6 +34,25 @@ class StructDef:
         if isinstance(dim, UnaryOp) and dim.op == '-':
             val = StructDef._eval_dim(dim.operand)
             return -val if val is not None else None
+        if isinstance(dim, SizeofExpr):
+            if dim.is_type:
+                ts = dim.operand
+                size = ts.size_bytes()
+                if ts.struct_def and not ts.is_pointer():
+                    size = ts.struct_def.size_bytes()
+                if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
+                    for d in ts.array_sizes:
+                        dv = StructDef._eval_dim(d)
+                        if dv is not None:
+                            size *= dv
+                return size
+            else:
+                return StructDef._eval_dim(dim.operand)
+        if isinstance(dim, CastExpr):
+            return StructDef._eval_dim(dim.operand)
+        if isinstance(dim, Identifier):
+            # Try enum values via EnumDef lookup (not directly accessible here; return None)
+            return None
         return None
 
     def _member_total_size(self, ts):
