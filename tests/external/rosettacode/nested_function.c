@@ -6,6 +6,7 @@
 // SOURCE: https://rosettacode.org/wiki/Nested_function#C
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
+// STDOUT:
 // STDOUT: 1. first
 // STDOUT: 2. second
 // STDOUT: 3. third

@@ -1537,7 +1537,7 @@ class CodeGen:
         self.emit("    ret")
 
     def gen_var_decl(self, decl: VarDecl):
-        if decl.name in ("__skip__", ""):
+        if decl.name in ("__skip__", "__nested_skip__", ""):
             return  # Skip no-op declarations
 
         size = decl.type_spec.size_bytes()
@@ -2822,12 +2822,20 @@ class CodeGen:
             alloc = (struct_size + 7) & ~7
             self.stack_offset -= alloc
             temp_off = self.stack_offset
-            self.gen_expr(expr)
-            # Small structs are returned in %rax/%rdx
-            self.emit(f"    movq %rax, {temp_off}(%rbp)")
-            if struct_size > 8:
-                self.emit(f"    movq %rdx, {temp_off + 8}(%rbp)")
-            self.emit(f"    leaq {temp_off}(%rbp), %rax")
+            if struct_size > 16:
+                # Pre-allocate temp as the hidden return buffer so gen_func_call
+                # writes the struct directly there (avoids double-indirection).
+                self._struct_ret_dest = temp_off
+                self.gen_expr(expr)
+                # Struct is now at temp_off; %rax == &temp_off (hidden ret addr)
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
+            else:
+                self.gen_expr(expr)
+                # Small structs returned in %rax/%rdx
+                self.emit(f"    movq %rax, {temp_off}(%rbp)")
+                if struct_size > 8:
+                    self.emit(f"    movq %rdx, {temp_off + 8}(%rbp)")
+                self.emit(f"    leaq {temp_off}(%rbp), %rax")
         elif isinstance(expr, InitList):
             # Bare compound literal (type was parsed separately or omitted)
             # Infer struct type from context if available, or use pointer size per member
@@ -3855,6 +3863,7 @@ class CodeGen:
                     self.emit("    negq %rax")
                 else:
                     self.emit("    negl %eax")
+                    self.emit("    cltq")  # sign-extend 32-bit result to 64-bit
         elif expr.op == "~":
             self.gen_expr(expr.operand)
             op_type = self.get_expr_type(expr.operand)

@@ -6,6 +6,7 @@
 // SOURCE: https://rosettacode.org/wiki/Word_wrap#C
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
+// STDOUT:
 // STDOUT: == greedy wrap at 80 (score 311) ==
 // STDOUT:
 // STDOUT: In olden times when wishing still helped one, there lived a king whose daughters

@@ -17,6 +17,8 @@ class Parser:
         self.typedefs: dict = {}    # typedef name -> TypeSpec
         self.declared_vars: set = set()  # variable names that shadow enum constants
         self._in_func_args = False
+        self._hoisted_funcs: list = []      # (FuncDecl, enclosing_func_name) staged for lifting
+        self._current_func_name: str = ""   # name of top-level function being parsed
 
     def error(self, msg, token=None):
         t = token or self.current()
@@ -1375,18 +1377,34 @@ class Parser:
                 parenthesized = True
         name = self.expect(TokenType.IDENTIFIER, "variable name").value
 
-        # Local function declaration: int f(char *);
+        # Local function declaration or definition: int f(char *); / int f(int n) { ... }
         if self.at(TokenType.LPAREN):
-            self.advance()  # (
-            depth = 1
-            while depth > 0 and not self.at(TokenType.EOF):
-                if self.match(TokenType.LPAREN):
+            # Lookahead past the closing ')' to see if '{' follows (definition vs declaration)
+            scan, depth = self.pos + 1, 1
+            while scan < len(self.tokens) and depth > 0:
+                if self.tokens[scan].type == TokenType.LPAREN:
                     depth += 1
-                elif self.match(TokenType.RPAREN):
+                elif self.tokens[scan].type == TokenType.RPAREN:
                     depth -= 1
-                else:
-                    self.advance()
-            # Return a no-op VarDecl
+                scan += 1
+            if scan < len(self.tokens) and self.tokens[scan].type == TokenType.LBRACE:
+                # Nested function definition — parse fully and stage for lifting
+                func = self.parse_func_decl(base_type, name, t)
+                self._hoisted_funcs.append((func, self._current_func_name))
+                self.match(TokenType.SEMICOLON)  # trailing ';' is optional (GCC allows omitting it)
+                return VarDecl(type_spec=TypeSpec(base="void"), name="__nested_skip__",
+                               line=t.line, col=t.col)
+            else:
+                # Forward declaration — skip parameter list
+                self.advance()  # (
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN):
+                        depth += 1
+                    elif self.match(TokenType.RPAREN):
+                        depth -= 1
+                    else:
+                        self.advance()
             return VarDecl(type_spec=TypeSpec(base="void"), name="__skip__", line=t.line, col=t.col)
 
         # Create type for this specific declarator
@@ -1459,6 +1477,9 @@ class Parser:
             self.expect(TokenType.SEMICOLON, "';'")
             return Block(stmts=decls, line=first.line, col=first.col)
         else:
+            # Nested function definition: semicolon was already consumed (or omitted)
+            if isinstance(first, VarDecl) and first.name == "__nested_skip__":
+                return NullStmt(line=first.line, col=first.col)
             self.expect(TokenType.SEMICOLON, "';'")
             return first
 
@@ -1468,6 +1489,13 @@ class Parser:
         decls = []
         while not self.at(TokenType.EOF):
             decl = self.parse_top_level()
+            # Iteratively lift nested functions until none remain (handles arbitrary nesting depth)
+            if self._hoisted_funcs:
+                staged = self._hoisted_funcs[:]
+                self._hoisted_funcs.clear()
+                if isinstance(decl, FuncDecl) and decl.body is not None:
+                    lifted = self._lift_nested_functions(decl, staged)
+                    decls.extend(lifted)
             if decl:
                 if isinstance(decl, list):
                     decls.extend(decl)
@@ -1901,7 +1929,10 @@ class Parser:
 
         # Function body or declaration
         if self.at(TokenType.LBRACE):
+            outer_name = self._current_func_name
+            self._current_func_name = name
             body = self.parse_block()
+            self._current_func_name = outer_name
         elif self.match(TokenType.COMMA) or self.match(TokenType.SEMICOLON):
             # Forward declaration (possibly comma-separated: int f(int), g(int), a;)
             body = None
@@ -2025,3 +2056,339 @@ class Parser:
             else:
                 type_spec.array_sizes = None
         return Param(type_spec=type_spec, name=name)
+
+    # ---- Nested function lifting ----
+
+    def _collect_local_types(self, node, out):
+        """Recursively collect VarDecl name -> TypeSpec from a statement tree."""
+        if node is None:
+            return
+        if isinstance(node, Block):
+            for s in node.stmts:
+                self._collect_local_types(s, out)
+        elif isinstance(node, VarDecl):
+            if node.name and node.name != "__skip__":
+                out[node.name] = node.type_spec
+        elif isinstance(node, IfStmt):
+            self._collect_local_types(node.then_body, out)
+            self._collect_local_types(node.else_body, out)
+        elif isinstance(node, (WhileStmt, DoWhileStmt)):
+            self._collect_local_types(node.body, out)
+        elif isinstance(node, ForStmt):
+            self._collect_local_types(node.init, out)
+            self._collect_local_types(node.body, out)
+        elif isinstance(node, SwitchStmt):
+            self._collect_local_types(node.body, out)
+        elif isinstance(node, CaseStmt):
+            self._collect_local_types(node.stmt, out)
+        elif isinstance(node, LabelStmt):
+            self._collect_local_types(node.stmt, out)
+
+    def _collect_local_names(self, node, out):
+        """Recursively collect VarDecl names from a statement tree."""
+        if node is None:
+            return
+        if isinstance(node, Block):
+            for s in node.stmts:
+                self._collect_local_names(s, out)
+        elif isinstance(node, VarDecl):
+            if node.name and node.name != "__skip__":
+                out.add(node.name)
+        elif isinstance(node, IfStmt):
+            self._collect_local_names(node.then_body, out)
+            self._collect_local_names(node.else_body, out)
+        elif isinstance(node, (WhileStmt, DoWhileStmt)):
+            self._collect_local_names(node.body, out)
+        elif isinstance(node, ForStmt):
+            self._collect_local_names(node.init, out)
+            self._collect_local_names(node.body, out)
+        elif isinstance(node, SwitchStmt):
+            self._collect_local_names(node.body, out)
+        elif isinstance(node, CaseStmt):
+            self._collect_local_names(node.stmt, out)
+        elif isinstance(node, LabelStmt):
+            self._collect_local_names(node.stmt, out)
+
+    def _find_free_vars(self, node, bound):
+        """Return set of identifier names referenced in node that are not in bound."""
+        free = set()
+        self._collect_free(node, bound, free)
+        return free
+
+    def _collect_free(self, node, bound, free):
+        if node is None:
+            return
+        if isinstance(node, Identifier):
+            if node.name not in bound:
+                free.add(node.name)
+        elif isinstance(node, (IntLiteral, CharLiteral, StringLiteral, FloatLiteral)):
+            pass
+        elif isinstance(node, BinaryOp):
+            self._collect_free(node.left, bound, free)
+            self._collect_free(node.right, bound, free)
+        elif isinstance(node, UnaryOp):
+            self._collect_free(node.operand, bound, free)
+        elif isinstance(node, Assignment):
+            self._collect_free(node.target, bound, free)
+            self._collect_free(node.value, bound, free)
+        elif isinstance(node, FuncCall):
+            self._collect_free(node.name, bound, free)
+            for a in node.args:
+                self._collect_free(a, bound, free)
+        elif isinstance(node, ArrayAccess):
+            self._collect_free(node.array, bound, free)
+            self._collect_free(node.index, bound, free)
+        elif isinstance(node, MemberAccess):
+            self._collect_free(node.obj, bound, free)
+        elif isinstance(node, TernaryOp):
+            self._collect_free(node.condition, bound, free)
+            self._collect_free(node.true_expr, bound, free)
+            self._collect_free(node.false_expr, bound, free)
+        elif isinstance(node, CastExpr):
+            self._collect_free(node.operand, bound, free)
+        elif isinstance(node, SizeofExpr):
+            if not node.is_type:
+                self._collect_free(node.operand, bound, free)
+        elif isinstance(node, CommaExpr):
+            for e in node.exprs:
+                self._collect_free(e, bound, free)
+        elif isinstance(node, InitList):
+            for item in node.items:
+                if item.value:
+                    self._collect_free(item.value, bound, free)
+        elif isinstance(node, StatementExpr):
+            self._collect_free(node.body, bound, free)
+        elif isinstance(node, BuiltinVaArg):
+            self._collect_free(node.ap, bound, free)
+        elif isinstance(node, GenericSelection):
+            self._collect_free(node.controlling, bound, free)
+            for assoc in node.associations:
+                self._collect_free(assoc.expr, bound, free)
+        elif isinstance(node, Block):
+            for s in node.stmts:
+                self._collect_free(s, bound, free)
+        elif isinstance(node, ReturnStmt):
+            self._collect_free(node.value, bound, free)
+        elif isinstance(node, ExprStmt):
+            self._collect_free(node.expr, bound, free)
+        elif isinstance(node, VarDecl):
+            if node.init:
+                self._collect_free(node.init, bound, free)
+        elif isinstance(node, IfStmt):
+            self._collect_free(node.condition, bound, free)
+            self._collect_free(node.then_body, bound, free)
+            self._collect_free(node.else_body, bound, free)
+        elif isinstance(node, WhileStmt):
+            self._collect_free(node.condition, bound, free)
+            self._collect_free(node.body, bound, free)
+        elif isinstance(node, DoWhileStmt):
+            self._collect_free(node.condition, bound, free)
+            self._collect_free(node.body, bound, free)
+        elif isinstance(node, ForStmt):
+            self._collect_free(node.init, bound, free)
+            self._collect_free(node.condition, bound, free)
+            self._collect_free(node.update, bound, free)
+            self._collect_free(node.body, bound, free)
+        elif isinstance(node, SwitchStmt):
+            self._collect_free(node.expr, bound, free)
+            self._collect_free(node.body, bound, free)
+        elif isinstance(node, CaseStmt):
+            self._collect_free(node.value, bound, free)
+            self._collect_free(node.stmt, bound, free)
+        elif isinstance(node, LabelStmt):
+            self._collect_free(node.stmt, bound, free)
+
+    def _rewrite_expr(self, expr, scalar_caps, array_caps, func_rename, cap_order, in_nested):
+        """
+        Rewrite an expression for nested-function lifting.
+          scalar_caps:  set of scalar captured var names
+          array_caps:   set of array captured var names
+          func_rename:  {old_name: new_name}
+          cap_order:    ordered list of all captured var names (for appending to calls)
+          in_nested:    True  = inside nested body (deref caps, forward __cap_ to recursive calls)
+                        False = inside outer body (no deref, pass &scalar / array to calls)
+        """
+        if expr is None:
+            return None
+        if isinstance(expr, Identifier):
+            if in_nested and expr.name in scalar_caps:
+                return UnaryOp(op="*",
+                               operand=Identifier(name=f"__cap_{expr.name}"))
+            if in_nested and expr.name in array_caps:
+                return Identifier(name=f"__cap_{expr.name}")
+            if expr.name in func_rename:
+                return Identifier(name=func_rename[expr.name])
+            return expr
+        if isinstance(expr, FuncCall):
+            callee_orig = expr.name.name if isinstance(expr.name, Identifier) else None
+            expr.name = self._rewrite_expr(expr.name, scalar_caps, array_caps,
+                                            func_rename, cap_order, in_nested)
+            expr.args = [self._rewrite_expr(a, scalar_caps, array_caps,
+                                             func_rename, cap_order, in_nested)
+                         for a in expr.args]
+            if callee_orig in func_rename:
+                for cap_name in cap_order:
+                    if in_nested:
+                        expr.args.append(Identifier(name=f"__cap_{cap_name}"))
+                    elif cap_name in scalar_caps:
+                        expr.args.append(UnaryOp(op="&",
+                                                  operand=Identifier(name=cap_name)))
+                    else:
+                        # Array capture: array name decays to pointer
+                        expr.args.append(Identifier(name=cap_name))
+            return expr
+        if isinstance(expr, BinaryOp):
+            expr.left  = self._rewrite_expr(expr.left,  scalar_caps, array_caps, func_rename, cap_order, in_nested)
+            expr.right = self._rewrite_expr(expr.right, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, UnaryOp):
+            expr.operand = self._rewrite_expr(expr.operand, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, Assignment):
+            expr.target = self._rewrite_expr(expr.target, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+            expr.value  = self._rewrite_expr(expr.value,  scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, ArrayAccess):
+            expr.array = self._rewrite_expr(expr.array, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+            expr.index = self._rewrite_expr(expr.index, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, MemberAccess):
+            expr.obj = self._rewrite_expr(expr.obj, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, TernaryOp):
+            expr.condition = self._rewrite_expr(expr.condition, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+            expr.true_expr  = self._rewrite_expr(expr.true_expr,  scalar_caps, array_caps, func_rename, cap_order, in_nested)
+            expr.false_expr = self._rewrite_expr(expr.false_expr, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, CastExpr):
+            expr.operand = self._rewrite_expr(expr.operand, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, SizeofExpr):
+            if not expr.is_type:
+                expr.operand = self._rewrite_expr(expr.operand, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, CommaExpr):
+            expr.exprs = [self._rewrite_expr(e, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+                          for e in expr.exprs]
+        elif isinstance(expr, InitList):
+            for item in expr.items:
+                if item.value:
+                    item.value = self._rewrite_expr(item.value, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, StatementExpr):
+            self._rewrite_stmts(expr.body, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, BuiltinVaArg):
+            expr.ap = self._rewrite_expr(expr.ap, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        elif isinstance(expr, GenericSelection):
+            expr.controlling = self._rewrite_expr(expr.controlling, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+            for assoc in expr.associations:
+                assoc.expr = self._rewrite_expr(assoc.expr, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        return expr
+
+    def _rewrite_stmts(self, node, scalar_caps, array_caps, func_rename, cap_order, in_nested):
+        """Recursively rewrite statements in place."""
+        if node is None:
+            return
+        R = lambda e: self._rewrite_expr(e, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        S = lambda n: self._rewrite_stmts(n, scalar_caps, array_caps, func_rename, cap_order, in_nested)
+        if isinstance(node, Block):
+            for s in node.stmts:
+                S(s)
+        elif isinstance(node, ExprStmt):
+            node.expr = R(node.expr)
+        elif isinstance(node, ReturnStmt):
+            if node.value:
+                node.value = R(node.value)
+        elif isinstance(node, VarDecl):
+            if node.init:
+                node.init = R(node.init)
+        elif isinstance(node, IfStmt):
+            node.condition = R(node.condition)
+            S(node.then_body)
+            if node.else_body:
+                S(node.else_body)
+        elif isinstance(node, WhileStmt):
+            node.condition = R(node.condition)
+            S(node.body)
+        elif isinstance(node, DoWhileStmt):
+            node.condition = R(node.condition)
+            S(node.body)
+        elif isinstance(node, ForStmt):
+            if node.init:
+                S(node.init)
+            if node.condition:
+                node.condition = R(node.condition)
+            if node.update:
+                node.update = R(node.update)
+            S(node.body)
+        elif isinstance(node, SwitchStmt):
+            node.expr = R(node.expr)
+            S(node.body)
+        elif isinstance(node, CaseStmt):
+            if node.value:
+                node.value = R(node.value)
+            if node.stmt:
+                S(node.stmt)
+        elif isinstance(node, LabelStmt):
+            if node.stmt:
+                S(node.stmt)
+
+    def _lift_nested_functions(self, outer_func, all_staged, match_name=None):
+        """
+        Lift all nested functions belonging to outer_func (and recursively to their children).
+        match_name: the name to match against in all_staged (defaults to outer_func.name,
+                    but uses the original pre-mangling name when recursing).
+        Returns list of hoisted FuncDecl nodes (innermost-first order).
+        """
+        from copy import deepcopy
+        if match_name is None:
+            match_name = outer_func.name
+
+        outer_names = {}
+        for p in outer_func.params:
+            outer_names[p.name] = p.type_spec
+        self._collect_local_types(outer_func.body, outer_names)
+
+        mine      = [(f, n) for f, n in all_staged if n == match_name]
+        remaining = [(f, n) for f, n in all_staged if n != match_name]
+
+        result = []
+        for nested_func, _ in mine:
+            original_name = nested_func.name
+            mangled_name  = f"__nested_{match_name}__{original_name}"
+
+            # Nested function's own scope (params + locals)
+            nested_scope = {p.name for p in nested_func.params}
+            self._collect_local_names(nested_func.body, nested_scope)
+
+            # Captured = free vars in nested body that exist in outer scope
+            free = self._find_free_vars(nested_func.body, nested_scope)
+            captured = sorted(free & set(outer_names))
+
+            scalar_caps = {n for n in captured if not outer_names[n].is_array()}
+            array_caps  = {n for n in captured if     outer_names[n].is_array()}
+
+            # Append hidden pointer params to nested function
+            for cap_name in captured:
+                cap_ts = outer_names[cap_name]
+                ptr_ts = deepcopy(cap_ts)
+                if cap_ts.is_array():
+                    # Array: strip dimensions, use pointer to element type
+                    ptr_ts.array_sizes = None
+                    ptr_ts.pointer_depth += 1
+                else:
+                    ptr_ts.pointer_depth += 1
+                nested_func.params.append(Param(type_spec=ptr_ts, name=f"__cap_{cap_name}"))
+
+            nested_func.name = mangled_name
+            func_rename = {original_name: mangled_name}
+
+            # Rewrite nested body: deref captured vars, rename self-recursive calls
+            self._rewrite_stmts(nested_func.body, scalar_caps, array_caps,
+                                 func_rename, captured, in_nested=True)
+
+            # Rewrite outer body: rename call sites, append addresses/values
+            self._rewrite_stmts(outer_func.body, scalar_caps, array_caps,
+                                 func_rename, captured, in_nested=False)
+
+            # Recursively lift functions staged inside nested_func
+            child_items = [(f, n) for f, n in remaining if n == original_name]
+            remaining   = [(f, n) for f, n in remaining if n != original_name]
+            child_hoisted = self._lift_nested_functions(nested_func, child_items + remaining,
+                                                         match_name=original_name)
+
+            result.extend(child_hoisted)
+            result.append(nested_func)
+
+        return result
