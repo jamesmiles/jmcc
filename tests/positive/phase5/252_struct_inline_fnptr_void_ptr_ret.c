@@ -1,5 +1,10 @@
-// Bug 252: inline function pointer struct member — jmcc misidentifies return type,
-// emits movslq after indirect call, corrupting void* return value for mmap addresses
+// TEST: struct_inline_fnptr_void_ptr_ret
+// DESCRIPTION: Inline fnptr struct member with void* return type must not lose pointer depth
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: ok
+// ENVIRONMENT: hosted
+// PHASE: 5
+
 #include <stdio.h>
 #include <stdlib.h>
 

@@ -507,8 +507,8 @@ class Parser:
                                 if self.match(TokenType.LPAREN): depth += 1
                                 elif self.match(TokenType.RPAREN): depth -= 1
                                 else: self.advance()
-                        # Preserve return type: void *(*fp)(args) has pointer_depth=2 so
-                        # calling it returns pointer_depth=1 (void*), not 0 (void).
+                        # Preserve return type base and pointer depth:
+                        # void *(*fp)(args) needs pd=ret_pd+1 so calling it returns void* (pd=1)
                         mem_type = TypeSpec(base=mem_type.base,
                                             pointer_depth=mem_type.pointer_depth + 1 + member_extra_stars,
                                             is_unsigned=mem_type.is_unsigned,
