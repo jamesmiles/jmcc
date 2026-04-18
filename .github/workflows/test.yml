@@ -25,23 +25,10 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y libx11-dev libxext-dev
 
-      - name: Run Phase 1 tests (must pass)
+      - name: Run full suite
         run: |
           mkdir -p output
-          python3 test_runner.py --native --compiler jmcc --phase 1
-
-      - name: Run Phase 2 tests (must pass)
-        run: python3 test_runner.py --native --compiler jmcc --phase 2
-
-      - name: Run Phase 3 tests (must pass)
-        run: python3 test_runner.py --native --compiler jmcc --phase 3
-
-      - name: Run negative tests (must pass)
-        run: python3 test_runner.py --native --compiler jmcc --negative-only
-
-      - name: Run full suite
-        if: always()
-        run: python3 test_runner.py --native --compiler jmcc
+          python3 test_runner.py --native --compiler jmcc
 
       - name: Upload test results
         if: always()
