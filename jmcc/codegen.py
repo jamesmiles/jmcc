@@ -3429,7 +3429,8 @@ class CodeGen:
             if inner and inner.is_pointer():
                 return TypeSpec(base=inner.base, pointer_depth=inner.pointer_depth - 1,
                                 struct_def=inner.struct_def, enum_def=inner.enum_def,
-                                is_unsigned=inner.is_unsigned)
+                                is_unsigned=inner.is_unsigned,
+                                func_ptr_native_depth=inner.func_ptr_native_depth)
             if inner and inner.is_array():
                 # Dereferencing array: element type (array decays to pointer, then deref)
                 return TypeSpec(base=inner.base, pointer_depth=0,
@@ -4373,7 +4374,12 @@ class CodeGen:
             self.gen_expr(expr.operand)
             # Determine pointed-to type for correct load size
             inner_type = self.get_expr_type(expr.operand)
-            if inner_type and inner_type.pointer_depth > 1:
+            # Dereferencing a function pointer is a no-op in C (*fp == fp)
+            if inner_type and (inner_type.is_func_ptr or
+                               (inner_type.func_ptr_native_depth > 0 and
+                                inner_type.pointer_depth == inner_type.func_ptr_native_depth)):
+                pass  # value already in %rax
+            elif inner_type and inner_type.pointer_depth > 1:
                 self.emit("    movq (%rax), %rax")
             elif inner_type and inner_type.base == "char" and inner_type.pointer_depth == 1:
                 if inner_type.is_unsigned:
@@ -5117,8 +5123,14 @@ class CodeGen:
                 if isinstance(call_target, UnaryOp) and call_target.op == "*":
                     inner = call_target.operand
                     inner_type = self.get_expr_type(inner)
+                    # inner_type is callable if it's a func ptr or at its native callable depth
+                    inner_callable = (
+                        (inner_type and inner_type.is_func_ptr) or
+                        (inner_type and inner_type.func_ptr_native_depth > 0 and
+                         inner_type.pointer_depth == inner_type.func_ptr_native_depth)
+                    )
                     if (inner_type and inner_type.is_pointer() and inner_type.pointer_depth >= 2
-                            and not inner_type.is_func_ptr):
+                            and not inner_callable):
                         # Pointer-to-function-pointer: need full dereference
                         self.gen_expr(call_target)
                     else:

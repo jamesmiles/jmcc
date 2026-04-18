@@ -271,6 +271,7 @@ class Parser:
                     is_extern=is_extern, struct_def=td.struct_def,
                     enum_def=td.enum_def,
                     is_func_ptr=td.is_func_ptr if pointer_depth == td.pointer_depth else False,
+                    func_ptr_native_depth=td.func_ptr_native_depth,
                     array_sizes=td.array_sizes,
                 )
             elif t.type == TokenType.IDENTIFIER and t.value == "__int128":
@@ -1931,7 +1932,8 @@ class Parser:
             # Preserve the return type info — function pointer that returns type_spec
             fptr_type = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth + 1,
                                   struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
-                                  is_unsigned=type_spec.is_unsigned, is_func_ptr=True)
+                                  is_unsigned=type_spec.is_unsigned, is_func_ptr=True,
+                                  func_ptr_native_depth=type_spec.pointer_depth + 1)
             self.typedefs[name] = fptr_type
             return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
 
