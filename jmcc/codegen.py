@@ -5019,6 +5019,23 @@ class CodeGen:
             self.emit("    bsfq %rax, %rax")
             return
 
+        # __builtin_add_overflow(a, b, *result): signed addition with overflow detection
+        if func_name == "__builtin_add_overflow" and len(expr.args) == 3:
+            self.gen_expr(expr.args[0])
+            self.emit("    pushq %rax")         # save a
+            self.gen_expr(expr.args[1])
+            self.emit("    popq %rcx")          # rcx=a, rax=b
+            self.emit("    addq %rcx, %rax")    # rax=a+b, sets OF
+            self.emit("    seto %cl")
+            self.emit("    movzbl %cl, %ecx")   # ecx=overflow flag
+            self.emit("    pushq %rcx")         # save overflow
+            self.emit("    pushq %rax")         # save sum
+            self.gen_expr(expr.args[2])         # rax=result_ptr
+            self.emit("    popq %rdx")          # rdx=sum
+            self.emit("    movq %rdx, (%rax)")  # *result_ptr = sum
+            self.emit("    popq %rax")          # rax=overflow (return value)
+            return
+
         is_indirect = not isinstance(expr.name, Identifier)
         is_fptr = False
         if isinstance(expr.name, Identifier):

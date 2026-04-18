@@ -1,5 +1,10 @@
-// Bug 253: __builtin_add_overflow not implemented as intrinsic
-// Used by SQLite's sqlite3AddInt64 for overflow-safe integer arithmetic
+// TEST: builtin_add_overflow
+// DESCRIPTION: __builtin_add_overflow intrinsic for overflow-safe i64 addition (SQLite pattern)
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: ok
+// ENVIRONMENT: hosted
+// PHASE: 5
+
 #include <stdio.h>
 #include <stdint.h>
 
