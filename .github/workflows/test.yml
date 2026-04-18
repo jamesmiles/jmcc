@@ -23,7 +23,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install system dependencies
-        run: sudo apt-get install -y libx11-dev
+        run: sudo apt-get install -y libx11-dev libxext-dev
 
       - name: Run Phase 1 tests (must pass)
         run: |
@@ -39,9 +39,9 @@ jobs:
       - name: Run negative tests (must pass)
         run: python3 test_runner.py --native --compiler jmcc --negative-only
 
-      - name: Run full suite (informational)
+      - name: Run full suite
         if: always()
-        run: python3 test_runner.py --native --compiler jmcc || true
+        run: python3 test_runner.py --native --compiler jmcc
 
       - name: Upload test results
         if: always()
