@@ -332,6 +332,10 @@ int execvp(const char *file, char *const argv[]);
 int execve(const char *path, char *const argv[], char *const envp[]);
 int fork(void);
 int _exit(int status);
+long pread(int fd, void *buf, unsigned long count, long offset);
+long pwrite(int fd, const void *buf, unsigned long count, long offset);
+long pread64(int fd, void *buf, unsigned long count, long offset);
+long pwrite64(int fd, const void *buf, unsigned long count, long offset);
 """,
         "fcntl.h": """
 #define O_RDONLY 0
