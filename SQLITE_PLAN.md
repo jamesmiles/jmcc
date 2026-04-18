@@ -9,6 +9,15 @@ SQLite is the next benchmark after Doom/Chocolate Doom. It's the de facto standa
 
 If jmcc can compile SQLite and pass its test suite, jmcc is production-worthy.
 
+## Status (2026-04-18)
+
+- **Phase 1** ✅ Complete
+- **Phase 2** ✅ Complete — full amalgamation compiles without any `-DOMIT` flags (~37 bugs fixed across sessions)
+- **Phase 3** ✅ Complete — CLI runs, all SQL features work, `.quit` exits cleanly
+- **Phase 4** ⬅ Next
+
+---
+
 ## Phase 1: Get the amalgamation
 
 Source: https://www.sqlite.org/download.html
@@ -26,27 +35,16 @@ Files:
 
 ## Phase 2: Try to compile
 
-Start with a simplified configuration to reduce surface area:
+Full amalgamation compiles without simplification flags:
 
 ```bash
-python3 jmcc.py sqlite3.c -o sqlite3.s \
-  -DSQLITE_THREADSAFE=0 \
-  -DSQLITE_OMIT_LOAD_EXTENSION \
-  -DSQLITE_TEMP_STORE=3 \
-  -DSQLITE_DEFAULT_MEMSTATUS=0 \
-  -DSQLITE_OMIT_DEPRECATED
+python3 jmcc.py sqlite3.c -o sqlite3.s
+python3 jmcc.py shell.c  -o shell.s
+as sqlite3.s -o sqlite3.o && as shell.s -o shell.o
+gcc -no-pie sqlite3.o shell.o -o sqlite3_cli -lreadline -lm
 ```
 
-Flags explained:
-- `THREADSAFE=0`: no mutex/pthread code
-- `OMIT_LOAD_EXTENSION`: no dlopen/dlsym
-- `TEMP_STORE=3`: always use memory for temp tables
-- `OMIT_DEPRECATED`: skip legacy API
-- `DEFAULT_MEMSTATUS=0`: skip memory usage tracking
-
-**Expected:** Compilation is slow (Python compiling 270k lines). Probably new jmcc bugs — complex preprocessor macros, deeply nested structs, unusual patterns.
-
-**Methodology:** Same as Doom — find first error, minimal reproducer, push failing test, wait for fix, rebuild.
+**Methodology:** find first error, minimal reproducer, push failing test, wait for fix, rebuild.
 
 ## Phase 3: Link and run basic queries
 
