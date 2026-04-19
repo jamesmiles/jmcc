@@ -1,7 +1,9 @@
 // TEST: macro_3level_string_escape
 // DESCRIPTION: 3-level macro expansion with string escapes and variadic args
 // EXPECTED_EXIT: 0
-// EXPECTED_STDOUT: OK  
+// EXPECTED_STDOUT: Node mynode replied with error:
+// STDOUT: someerror
+// STDOUT: OK
 // ENVIRONMENT: hosted
 #include <stdio.h>
 

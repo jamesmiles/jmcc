@@ -61,6 +61,23 @@ typedef int wchar_t;
 #define false 0
 #define __bool_true_false_are_defined 1
 """,
+        "stdatomic.h": """
+#ifndef _JMCC_STDATOMIC_H
+#define _JMCC_STDATOMIC_H
+typedef enum {
+    memory_order_relaxed = __ATOMIC_RELAXED,
+    memory_order_consume = __ATOMIC_CONSUME,
+    memory_order_acquire = __ATOMIC_ACQUIRE,
+    memory_order_release = __ATOMIC_RELEASE,
+    memory_order_acq_rel = __ATOMIC_ACQ_REL,
+    memory_order_seq_cst = __ATOMIC_SEQ_CST
+} memory_order;
+#define atomic_store_explicit(ptr, val, order) __atomic_store_n((ptr), (val), (order))
+#define atomic_load_explicit(ptr, order)       __atomic_load_n((ptr), (order))
+#define atomic_store(ptr, val)                 __atomic_store_n((ptr), (val), __ATOMIC_SEQ_CST)
+#define atomic_load(ptr)                       __atomic_load_n((ptr), __ATOMIC_SEQ_CST)
+#endif
+""",
         "stdarg.h": """
 typedef struct {
     unsigned int gp_offset;
@@ -322,11 +339,19 @@ float fmodf(float, float);
 #define HUGE_VALF (1.0f/0.0f)
 #define INFINITY  (1.0f/0.0f)
 #define NAN       (0.0f/0.0f)
+#define FP_NAN       0
+#define FP_INFINITE  1
+#define FP_ZERO      2
+#define FP_SUBNORMAL 3
+#define FP_NORMAL    4
 int isinf(double);
 int isinff(float);
 int isnan(double);
 int isnanf(float);
 int isfinite(double);
+int __fpclassify(double);
+int __fpclassifyf(float);
+#define fpclassify(x) __fpclassify(x)
 #define M_PI 3.14159265358979323846
 #define M_E  2.71828182845904523536
 #define M_LN2  0.69314718055994530942
@@ -1570,10 +1595,42 @@ class Macro:
         for i, param in enumerate(all_params):
             markers[param] = f"\x01PARAM{i}\x02"
 
-        # Replace params with markers (whole word)
+        # Replace params with markers (whole word), skipping string/char literals
         temp = result
+        # Split body into string-literal and non-string-literal segments so that
+        # parameter names inside strings (e.g. \n containing 'n') are not replaced.
+        str_placeholders = {}
+        def _protect_strings(s):
+            out = []
+            i = 0
+            idx = [0]
+            while i < len(s):
+                if s[i] in ('"', "'"):
+                    q = s[i]
+                    j = i + 1
+                    while j < len(s):
+                        if s[j] == '\\':
+                            j += 2
+                        elif s[j] == q:
+                            j += 1
+                            break
+                        else:
+                            j += 1
+                    key = f'\x04STR{idx[0]}\x04'
+                    idx[0] += 1
+                    str_placeholders[key] = s[i:j]
+                    out.append(key)
+                    i = j
+                else:
+                    out.append(s[i])
+                    i += 1
+            return ''.join(out)
+        temp = _protect_strings(temp)
         for param, marker in markers.items():
             temp = re.sub(r'\b' + re.escape(param) + r'\b', marker, temp)
+        # Restore string literals
+        for key, val in str_placeholders.items():
+            temp = temp.replace(key, val)
 
         # Handle ## (token paste): mark adjacent markers with a no-space sentinel
         # We use '\x03' as an indicator that "no space should be inserted" on that side

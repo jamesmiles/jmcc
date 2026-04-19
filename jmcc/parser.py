@@ -539,10 +539,10 @@ class Parser:
                     if mem_type.pointer_depth > 0:
                         mem_type.is_ptr_array = True
 
-                # Bit-field width: int x : 8;
+                # Bit-field width: int x : 8;  (use parse_assignment to avoid consuming comma)
                 bit_width = None
                 if self.match(TokenType.COLON):
-                    bw_expr = self.parse_expr()
+                    bw_expr = self.parse_assignment()
                     if isinstance(bw_expr, IntLiteral):
                         bit_width = bw_expr.value
 
@@ -576,8 +576,14 @@ class Parser:
                         else:
                             ets.array_sizes = [self.parse_expr()]
                         self.expect(TokenType.RBRACKET, "']'")
+                    # Bitfield width in comma-separated declarator: uint8_t a:4, b:4;
+                    extra_bit_width = None
+                    if self.match(TokenType.COLON):
+                        bw = self.parse_expr()
+                        if isinstance(bw, IntLiteral):
+                            extra_bit_width = bw.value
                     self.skip_attribute()
-                    members.append(StructMember(type_spec=ets, name=ename))
+                    members.append(StructMember(type_spec=ets, name=ename, bit_width=extra_bit_width))
 
                 self.expect(TokenType.SEMICOLON, "';'")
 
@@ -908,7 +914,6 @@ class Parser:
 
     def is_cast(self) -> bool:
         """Look ahead to determine if (... is a cast or grouping."""
-        # Save position
         saved = self.pos
         self.advance()  # skip (
         # Skip __attribute__((...)) before type
@@ -921,7 +926,24 @@ class Parser:
                     if self.match(TokenType.LPAREN): depth += 1
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
-        result = self.is_type_start()
+        if not self.is_type_start():
+            self.pos = saved
+            return False
+        # Consume the type to check that it's followed by ')' — ruling out (ident = ...)
+        try:
+            self.parse_type_spec()
+        except Exception:
+            self.pos = saved
+            return False
+        # Skip *, [], and pointer-to-function patterns after the type
+        while self.at(TokenType.STAR, TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+            self.advance()
+        while self.match(TokenType.LBRACKET):
+            while not self.at(TokenType.RBRACKET) and not self.at(TokenType.EOF):
+                self.advance()
+            if self.at(TokenType.RBRACKET):
+                self.advance()
+        result = self.at(TokenType.RPAREN)
         self.pos = saved
         return result
 
