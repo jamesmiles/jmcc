@@ -5517,14 +5517,12 @@ class CodeGen:
                     self.emit(f"    popq %rax")
                     self.emit(f"    movq %rax, %xmm{xmm_idx}")
                     xmm_idx += 1
-                else:
-                    break
+                # else: overflow float stays in Phase A stack slot, skip without popping
             else:
                 if int_idx < 6:
                     self.emit(f"    popq {self.ARG_REGS_64[int_idx]}")
                     int_idx += 1
-                else:
-                    break
+                # else: overflow int stays in Phase A stack slot, skip without popping
 
         # For functions returning struct > 16 bytes, pass hidden pointer in %rdi
         # Shift other int args to the right
