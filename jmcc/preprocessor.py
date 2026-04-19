@@ -111,6 +111,12 @@ typedef __va_list_tag __builtin_va_list[1];
 """,
         "float.h": """
 #define FLT_RADIX 2
+#define FLT_MANT_DIG 24
+#define DBL_MANT_DIG 53
+#define FLT_MAX_EXP 128
+#define DBL_MAX_EXP 1024
+#define FLT_MIN_EXP (-125)
+#define DBL_MIN_EXP (-1021)
 #define FLT_MIN 1.17549435e-38F
 #define FLT_MAX 3.40282347e+38F
 #define FLT_EPSILON 1.19209290e-07F
@@ -312,8 +318,15 @@ float sinf(float);
 float cosf(float);
 float tanf(float);
 float fmodf(float, float);
-#define INFINITY (__builtin_inff())
-#define NAN (__builtin_nanf(""))
+#define HUGE_VAL  (1.0/0.0)
+#define HUGE_VALF (1.0f/0.0f)
+#define INFINITY  (1.0f/0.0f)
+#define NAN       (0.0f/0.0f)
+int isinf(double);
+int isinff(float);
+int isnan(double);
+int isnanf(float);
+int isfinite(double);
 #define M_PI 3.14159265358979323846
 #define M_E  2.71828182845904523536
 #define M_LN2  0.69314718055994530942

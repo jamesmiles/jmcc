@@ -169,6 +169,7 @@ KEYWORDS = {
     "_Noreturn": TokenType.NORETURN,
     "_Static_assert": TokenType.STATIC_ASSERT,
     "_Thread_local": TokenType.THREAD_LOCAL,
+    "__thread": TokenType.THREAD_LOCAL,
 }
 
 

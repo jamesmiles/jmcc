@@ -62,7 +62,7 @@ class Parser:
         TokenType.UNSIGNED, TokenType.BOOL, TokenType.STRUCT, TokenType.UNION,
         TokenType.ENUM, TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC,
         TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER, TokenType.ATOMIC,
-        TokenType.AUTO,
+        TokenType.AUTO, TokenType.THREAD_LOCAL,
     }
 
     def _skip_asm_label(self):
@@ -162,6 +162,10 @@ class Parser:
                 self.advance()
             elif t.type == TokenType.AUTO:
                 # 'auto' storage class (no-op in C)
+                has_storage_class = True
+                self.advance()
+            elif t.type == TokenType.THREAD_LOCAL:
+                # __thread / _Thread_local: thread-local storage (no-op for jmcc)
                 has_storage_class = True
                 self.advance()
             elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
