@@ -2187,6 +2187,23 @@ class Parser:
                     elif self.match(TokenType.RPAREN): depth -= 1
                     else: self.advance()
             return Param(type_spec=type_spec, name=name)
+        # Named function-type parameter: void(callback)(int) → callback is void(*)(int)
+        if (not name and self.at(TokenType.LPAREN) and
+                self.peek(1).type == TokenType.IDENTIFIER and
+                self.peek(1).value not in self.typedefs and
+                self.peek(2).type == TokenType.RPAREN):
+            self.advance()  # (
+            name = self.advance().value  # callback
+            self.advance()  # )
+            # Skip trailing parameter list: (int, ...)
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            type_spec.pointer_depth += 1  # function type decays to pointer
+            return Param(type_spec=type_spec, name=name)
         # Abstract function/array type param: int (), int (int), int ([4]) — decays to ptr
         if not name and self.at(TokenType.LPAREN) and self.peek(1).type != TokenType.STAR:
             if (self.peek(1).type == TokenType.RPAREN or
