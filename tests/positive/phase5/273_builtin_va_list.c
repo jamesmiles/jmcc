@@ -1,3 +1,8 @@
+// TEST: builtin_va_list
+// DESCRIPTION: __builtin_va_list must be recognized as a type specifier (used by GCC stdarg.h)
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: OK
+// ENVIRONMENT: hosted
 /* __builtin_va_list must be recognized as a built-in type specifier.
    GCC exposes it in stdarg.h as: typedef __builtin_va_list __gnuc_va_list;
    Without this, any file that includes <stdarg.h> fails to compile. */

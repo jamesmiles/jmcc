@@ -69,6 +69,7 @@ typedef struct {
     void *reg_save_area;
 } __va_list_tag;
 typedef __va_list_tag va_list[1];
+typedef __va_list_tag __builtin_va_list[1];
 #define va_start(ap, param) __builtin_va_start(ap, param)
 #define va_end(ap) __builtin_va_end(ap)
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
