@@ -3955,9 +3955,12 @@ class CodeGen:
         else:
             self.gen_expr(expr.left)
             if use_single:
-                self.emit("    cvtsi2ss %eax, %xmm0")
+                if lt and not lt.is_pointer() and lt.size_bytes() >= 8:
+                    self.emit("    cvtsi2ssq %rax, %xmm0")
+                else:
+                    self.emit("    cvtsi2ss %eax, %xmm0")
             else:
-                self.emit("    cvtsi2sd %eax, %xmm0")
+                self._emit_int_to_double(lt)  # result in %xmm0
         self.emit("    subq $8, %rsp")
         if use_single:
             self.emit("    movss %xmm0, (%rsp)")  # save left (single)
@@ -3979,9 +3982,13 @@ class CodeGen:
         else:
             self.gen_expr(expr.right)
             if use_single:
-                self.emit("    cvtsi2ss %eax, %xmm1")
+                if rt and not rt.is_pointer() and rt.size_bytes() >= 8:
+                    self.emit("    cvtsi2ssq %rax, %xmm1")
+                else:
+                    self.emit("    cvtsi2ss %eax, %xmm1")
             else:
-                self.emit("    cvtsi2sd %eax, %xmm1")
+                self._emit_int_to_double(rt)      # result in %xmm0
+                self.emit("    movsd %xmm0, %xmm1")
 
         if use_single:
             self.emit("    movss (%rsp), %xmm0")  # restore left (single)
@@ -5834,13 +5841,13 @@ class CodeGen:
         self.gen_expr(expr.true_expr)
         if needs_promote and not true_is_float:
             # int -> double promotion for true branch
-            self.emit("    cvtsi2sd %eax, %xmm0")
+            self._emit_int_to_double(true_type)
             self.emit("    movq %xmm0, %rax")
         self.emit(f"    jmp {end_label}")
         self.label(false_label)
         self.gen_expr(expr.false_expr)
         if needs_promote and not false_is_float:
             # int -> double promotion for false branch
-            self.emit("    cvtsi2sd %eax, %xmm0")
+            self._emit_int_to_double(false_type)
             self.emit("    movq %xmm0, %rax")
         self.label(end_label)
