@@ -123,6 +123,22 @@ class CodeGen:
         self.emit(f"    addq %rcx, %rax")
         self.emit(f"{lbl}_done:")
 
+    def _emit_double_to_uint64(self):
+        """Double in %xmm0 → u64 in %rax.  cvttsd2si is signed; values >= 2^63 need correction."""
+        lbl = self.new_label("d2u64")
+        self._need_two63_const = True
+        self.emit(f"    ucomisd .Ljmcc_two63(%rip), %xmm0")  # compare d with 2^63
+        self.emit(f"    jb {lbl}_small")                       # d < 2^63: fits in signed int64
+        # d >= 2^63: subtract 2^63, convert, add 2^63 back as bit pattern
+        self.emit(f"    subsd .Ljmcc_two63(%rip), %xmm0")
+        self.emit(f"    cvttsd2siq %xmm0, %rax")
+        self.emit(f"    movabsq $-9223372036854775808, %rcx")   # 0x8000000000000000 = 2^63
+        self.emit(f"    addq %rcx, %rax")
+        self.emit(f"    jmp {lbl}_done")
+        self.emit(f"{lbl}_small:")
+        self.emit(f"    cvttsd2siq %xmm0, %rax")
+        self.emit(f"{lbl}_done:")
+
     def _is_struct_by_value(self, ts):
         """Check if a type is a struct passed/returned by value (not pointer, not array)."""
         return (ts and ts.struct_def is not None and ts.pointer_depth == 0
@@ -1982,8 +1998,16 @@ class CodeGen:
                 elif not is_float_var and is_float_init:
                     # float -> int: convert (value in xmm0 and rax)
                     self.emit(f"    movq %rax, %xmm0")
-                    self.emit(f"    cvttsd2si %xmm0, %eax")
-                    self.emit(f"    movl %eax, {offset}(%rbp)")
+                    var_size = decl.type_spec.size_bytes()
+                    if decl.type_spec.is_unsigned and var_size == 8:
+                        self._emit_double_to_uint64()
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
+                    elif var_size == 8:
+                        self.emit(f"    cvttsd2siq %xmm0, %rax")
+                        self.emit(f"    movq %rax, {offset}(%rbp)")
+                    else:
+                        self.emit(f"    cvttsd2si %xmm0, %eax")
+                        self.emit(f"    movl %eax, {offset}(%rbp)")
                 elif is_float_var:
                     # float -> float: store correctly
                     if decl.type_spec.base == "float":
@@ -2846,7 +2870,10 @@ class CodeGen:
                     elif src_is_float and not dst_is_float:
                         # float/double -> int
                         self.emit("    movq %rax, %xmm0")
-                        self.emit("    cvttsd2si %xmm0, %rax")
+                        if dst_type.is_unsigned and dst_size == 8:
+                            self._emit_double_to_uint64()
+                        else:
+                            self.emit("    cvttsd2siq %xmm0, %rax")
                     elif not src_is_float and dst_is_float:
                         # int -> float/double
                         self._emit_int_to_double(src_type)
@@ -4880,7 +4907,12 @@ class CodeGen:
                     self.emit("    movq %xmm0, %rax")
             elif not target_is_float and value_is_float:
                 self.emit("    movq %rax, %xmm0")
-                self.emit("    cvttsd2si %xmm0, %eax")
+                if target_type and target_type.is_unsigned and not target_type.is_pointer() and target_type.size_bytes() == 8:
+                    self._emit_double_to_uint64()
+                elif target_type and not target_type.is_pointer() and target_type.size_bytes() == 8:
+                    self.emit("    cvttsd2siq %xmm0, %rax")
+                else:
+                    self.emit("    cvttsd2si %xmm0, %eax")
             elif target_is_float and value_is_float and target_type and target_type.base == "float":
                 # double value → float target: truncate to float precision
                 self.emit("    movq %rax, %xmm0")
