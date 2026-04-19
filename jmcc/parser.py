@@ -1891,6 +1891,7 @@ class Parser:
             extra = [first]
             while True:
                 # Parse additional declarators
+                self.skip_attribute()  # e.g. __attribute__((deprecated)) before next name
                 extra_ptrs = 0
                 while self.match(TokenType.STAR):
                     extra_ptrs += 1

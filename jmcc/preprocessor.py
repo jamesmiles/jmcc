@@ -683,8 +683,15 @@ unsigned int ntohl(unsigned int netlong);
         "sys/socket.h": """
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
+#define SOCK_RAW 3
+#define AF_UNSPEC 0
+#define AF_UNIX 1
 #define AF_INET 2
+#define AF_INET6 10
+#define PF_UNSPEC 0
+#define PF_UNIX 1
 #define PF_INET 2
+#define PF_INET6 10
 #define SOL_SOCKET 1
 #define SO_DEBUG 1
 #define SO_REUSEADDR 2
@@ -724,6 +731,7 @@ struct winsize {
 int ioctl(int fd, unsigned long request, ...);
 """,
         "netdb.h": """
+#include <sys/socket.h>
 struct hostent {
     char *h_name;
     char **h_aliases;
@@ -731,7 +739,30 @@ struct hostent {
     int h_length;
     char **h_addr_list;
 };
+struct addrinfo {
+    int ai_flags;
+    int ai_family;
+    int ai_socktype;
+    int ai_protocol;
+    unsigned int ai_addrlen;
+    struct sockaddr *ai_addr;
+    char *ai_canonname;
+    struct addrinfo *ai_next;
+};
+#define AI_PASSIVE      0x0001
+#define AI_CANONNAME    0x0002
+#define AI_NUMERICHOST  0x0004
+#define AI_NUMERICSERV  0x0400
+#define AI_V4MAPPED     0x0008
+#define AI_ALL          0x0010
+#define AI_ADDRCONFIG   0x0020
+#define NI_NUMERICHOST  0x01
+#define NI_NUMERICSERV  0x02
 struct hostent *gethostbyname(const char *name);
+int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
+void freeaddrinfo(struct addrinfo *res);
+int getnameinfo(const struct sockaddr *sa, unsigned int salen, char *host, unsigned int hostlen, char *serv, unsigned int servlen, int flags);
+const char *gai_strerror(int errcode);
 """,
         "values.h": """
 #define MININT (-2147483647-1)
