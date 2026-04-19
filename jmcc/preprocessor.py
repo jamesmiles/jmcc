@@ -72,6 +72,12 @@ typedef enum {
     memory_order_acq_rel = __ATOMIC_ACQ_REL,
     memory_order_seq_cst = __ATOMIC_SEQ_CST
 } memory_order;
+typedef int atomic_int;
+typedef unsigned int atomic_uint;
+typedef unsigned long atomic_uintptr_t;
+typedef unsigned long atomic_size_t;
+typedef long atomic_long;
+typedef unsigned long atomic_ulong;
 #define atomic_store_explicit(ptr, val, order) __atomic_store_n((ptr), (val), (order))
 #define atomic_load_explicit(ptr, order)       __atomic_load_n((ptr), (order))
 #define atomic_store(ptr, val)                 __atomic_store_n((ptr), (val), __ATOMIC_SEQ_CST)
@@ -87,6 +93,7 @@ typedef struct {
 } __va_list_tag;
 typedef __va_list_tag va_list[1];
 typedef __va_list_tag __builtin_va_list[1];
+typedef __builtin_va_list __gnuc_va_list;
 #define va_start(ap, param) __builtin_va_start(ap, param)
 #define va_end(ap) __builtin_va_end(ap)
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
@@ -481,11 +488,27 @@ struct flock {
     long l_len;
     int l_pid;
 };
+#define POSIX_FADV_NORMAL 0
+#define POSIX_FADV_RANDOM 1
+#define POSIX_FADV_SEQUENTIAL 2
+#define POSIX_FADV_WILLNEED 3
+#define POSIX_FADV_DONTNEED 4
+#define POSIX_FADV_NOREUSE 5
 int open(const char *path, int flags, ...);
 int fcntl(int fd, int cmd, ...);
 int creat(const char *path, int mode);
+int posix_fadvise(int fd, long offset, long len, int advice);
 """,
         "sys/stat.h": """
+typedef unsigned long dev_t;
+typedef unsigned long ino_t;
+typedef unsigned int mode_t;
+typedef unsigned int nlink_t;
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+typedef long off_t;
+typedef long blksize_t;
+typedef long blkcnt_t;
 struct stat {
     unsigned long st_dev;
     unsigned long st_ino;
@@ -608,6 +631,16 @@ int kill(int pid, int sig);
 #define FPE_FLTUND 5
 #define FPE_FLTRES 6
 #define FPE_FLTINV 7
+typedef struct {
+    void *ss_sp;
+    int ss_flags;
+    unsigned long ss_size;
+} stack_t;
+#define SS_ONSTACK 1
+#define SS_DISABLE 2
+#define SIGSTKSZ 8192
+#define MINSIGSTKSZ 2048
+int sigaltstack(const stack_t *ss, stack_t *oss);
 """,
         "sys/time.h": """
 struct timeval {
@@ -653,7 +686,24 @@ unsigned int ntohl(unsigned int netlong);
 #define AF_INET 2
 #define PF_INET 2
 #define SOL_SOCKET 1
+#define SO_DEBUG 1
+#define SO_REUSEADDR 2
+#define SO_TYPE 3
+#define SO_ERROR 4
+#define SO_DONTROUTE 5
 #define SO_BROADCAST 6
+#define SO_KEEPALIVE 9
+#define SO_OOBINLINE 10
+#define SO_SNDBUF 7
+#define SO_RCVBUF 8
+#define SO_RCVLOWAT 18
+#define SO_SNDLOWAT 19
+#define SO_RCVTIMEO 20
+#define SO_SNDTIMEO 21
+#define SO_REUSEPORT 15
+#define SHUT_RD 0
+#define SHUT_WR 1
+#define SHUT_RDWR 2
 typedef unsigned int socklen_t;
 struct sockaddr { unsigned short sa_family; char sa_data[14]; };
 int socket(int domain, int type, int protocol);

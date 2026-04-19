@@ -16,6 +16,7 @@ class Parser:
         self.enum_values: dict = {} # enumerator name -> int value
         self.typedefs: dict = {}    # typedef name -> TypeSpec
         self.declared_vars: set = set()  # variable names that shadow enum constants
+        self.local_scope: set = set()   # param/variable names that shadow typedef names
         self._in_func_args = False
         self._hoisted_funcs: list = []      # (FuncDecl, enclosing_func_name) staged for lifting
         self._current_func_name: str = ""   # name of top-level function being parsed
@@ -105,8 +106,10 @@ class Parser:
     def is_type_start(self) -> bool:
         if self.current().type in self.TYPE_SPECIFIERS:
             return True
-        # Typedef names are also type specifiers
-        if self.current().type == TokenType.IDENTIFIER and self.current().value in self.typedefs:
+        # Typedef names are also type specifiers, unless shadowed by a local variable
+        if (self.current().type == TokenType.IDENTIFIER and
+                self.current().value in self.typedefs and
+                self.current().value not in self.local_scope):
             return True
         # __typeof__ / typeof are type specifiers
         if self.current().type == TokenType.IDENTIFIER and self.current().value in ("__typeof__", "__typeof", "typeof"):
@@ -961,6 +964,17 @@ class Parser:
         if self.at(TokenType.LPAREN) and self.is_cast():
             self.advance()  # (
             type_spec = self.parse_type_spec()
+            # Handle array-type sizeof: sizeof(char[N]) or sizeof(T[N])
+            while self.match(TokenType.STAR):
+                type_spec.pointer_depth += 1
+            if self.match(TokenType.LBRACKET):
+                dim_expr = None
+                if not self.at(TokenType.RBRACKET):
+                    dim_expr = self.parse_expr()
+                self.expect(TokenType.RBRACKET, "']'")
+                if type_spec.array_sizes is None:
+                    type_spec.array_sizes = []
+                type_spec.array_sizes.append(dim_expr if dim_expr is not None else None)
             self.expect(TokenType.RPAREN, "')'")
             return SizeofExpr(operand=type_spec, is_type=True, line=t.line, col=t.col)
         else:
@@ -1592,12 +1606,17 @@ class Parser:
                 if not self.match(TokenType.COMMA):
                     break
             self.expect(TokenType.SEMICOLON, "';'")
+            for d in decls:
+                if isinstance(d, VarDecl) and d.name:
+                    self.local_scope.add(d.name)
             return Block(stmts=decls, line=first.line, col=first.col)
         else:
             # Nested function definition: semicolon was already consumed (or omitted)
             if isinstance(first, VarDecl) and first.name == "__nested_skip__":
                 return NullStmt(line=first.line, col=first.col)
             self.expect(TokenType.SEMICOLON, "';'")
+            if isinstance(first, VarDecl) and first.name:
+                self.local_scope.add(first.name)
             return first
 
     # ---- Top-level parsing ----
@@ -2089,9 +2108,12 @@ class Parser:
         # Function body or declaration
         if self.at(TokenType.LBRACE):
             outer_name = self._current_func_name
+            outer_scope = self.local_scope
             self._current_func_name = name
+            self.local_scope = {p.name for p in params if p.name}
             body = self.parse_block()
             self._current_func_name = outer_name
+            self.local_scope = outer_scope
         elif self.match(TokenType.COMMA) or self.match(TokenType.SEMICOLON):
             # Forward declaration (possibly comma-separated: int f(int), g(int), a;)
             body = None
@@ -2181,6 +2203,7 @@ class Parser:
                 return Param(type_spec=type_spec, name=name)
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
+        self.skip_attribute()  # e.g. int x __attribute__((unused))
         # Array parameter: int a[] or int a[100] or int a[const 5] — decays to pointer
         # Supports multidimensional: int a[][2], int a[n][m]
         if self.match(TokenType.LBRACKET):
