@@ -1703,6 +1703,22 @@ class CodeGen:
                     # Value is in x87 st(0); fall through to leave/ret
                 else:
                     self.gen_expr(stmt.value)
+                    # Sign-extend narrow signed int into 64-bit return type
+                    val_type = self.get_expr_type(stmt.value)
+                    ret_is_int64 = (ret_type and not ret_type.is_pointer() and
+                                    ret_type.base not in ("float", "double", "long double") and
+                                    ret_type.size_bytes() == 8)
+                    val_is_narrow = (val_type and not val_type.is_pointer() and
+                                     val_type.base not in ("float", "double", "long double") and
+                                     not val_type.is_unsigned and val_type.size_bytes() < 8)
+                    if ret_is_int64 and val_is_narrow:
+                        vsz = val_type.size_bytes()
+                        if vsz == 4:
+                            self.emit("    cltq")
+                        elif vsz == 2:
+                            self.emit("    movswq %ax, %rax")
+                        elif vsz == 1:
+                            self.emit("    movsbq %al, %rax")
                     # Result is in %rax/%eax — convert/move to xmm0 if returning float/double
                     if ret_type and ret_type.base in ("float", "double") and not ret_type.is_pointer():
                         if not (ret_type.struct_def and ret_type.pointer_depth == 0):
