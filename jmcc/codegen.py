@@ -1349,6 +1349,17 @@ class CodeGen:
                                             struct_def=ts.struct_def).size_bytes()
                         elif ts.is_array():
                             return ts.size_bytes()
+            # sizeof(p->field) or sizeof(s.field) — member access
+            if isinstance(expr.operand, MemberAccess):
+                ts = self.get_expr_type(expr.operand)
+                if ts:
+                    size = ts.size_bytes()
+                    if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
+                        for dim in ts.array_sizes:
+                            dv = self._dim_value(dim) if dim is not None else None
+                            if dv is not None:
+                                size *= dv
+                    return size
             return 4
         return None
 
