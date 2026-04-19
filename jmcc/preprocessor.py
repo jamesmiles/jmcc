@@ -124,6 +124,10 @@ typedef __builtin_va_list __gnuc_va_list;
 #define LONG_LONG_MAX LLONG_MAX
 #define MB_LEN_MAX 16
 #define PATH_MAX 4096
+#define SSIZE_MAX LONG_MAX
+#define SIZE_MAX ULONG_MAX
+#define PTRDIFF_MAX LONG_MAX
+#define PTRDIFF_MIN LONG_MIN
 #endif
 """,
         "stdnoreturn.h": """
@@ -868,6 +872,7 @@ int inet_aton(const char *cp, struct in_addr *inp);
                                                   is_func=True, params=["__atomic_store_n_ptr", "__atomic_store_n_val", "__atomic_store_n_ord"], is_variadic=False)
         self.macros["__atomic_load_n"] = Macro("__atomic_load_n", body="(*((__typeof__(*(__atomic_load_n_ptr)))(__atomic_load_n_ptr)))",
                                                 is_func=True, params=["__atomic_load_n_ptr", "__atomic_load_n_ord"], is_variadic=False)
+        self.macros["__VERSION__"] = Macro("__VERSION__", body='"jmcc 0.1"')
 
     @staticmethod
     def _strip_comments(source: str) -> str:

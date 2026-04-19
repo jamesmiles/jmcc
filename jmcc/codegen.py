@@ -2783,6 +2783,17 @@ class CodeGen:
             self.emit(f"    leaq {lbl}(%rip), %rax")
 
         elif isinstance(expr, Identifier):
+            # C99 __func__ predefined identifier
+            if expr.name in ("__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"):
+                fname = self.current_func.name if self.current_func else ""
+                key = (fname, False)
+                lbl = self.string_label_cache.get(key)
+                if lbl is None:
+                    lbl = self.new_label("str")
+                    self.string_label_cache[key] = lbl
+                    self.string_literals.append((lbl, fname, False))
+                self.emit(f"    leaq {lbl}(%rip), %rax")
+                return
             # Function name used as value (address of function)
             if expr.name in self.known_functions:
                 loc, _ = self.get_var_location(expr.name)
@@ -3620,6 +3631,8 @@ class CodeGen:
     def get_expr_type(self, expr: Expr) -> Optional[TypeSpec]:
         """Try to determine the type of an expression."""
         if isinstance(expr, Identifier):
+            if expr.name in ("__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"):
+                return TypeSpec(base="char", pointer_depth=1, is_const=True)
             _, ts = self.get_var_location(expr.name)
             if ts is not None:
                 return ts
