@@ -234,6 +234,7 @@ class TypeSpec:
     is_extern: bool = False
     is_func_ptr: bool = False  # True for function pointer typedefs
     func_ptr_native_depth: int = 0  # pointer_depth at which this type is callable (for func ptr typedefs)
+    is_func_type: bool = False  # True for function-type typedefs: typedef void fn(params); — fn* is callable
     array_sizes: Optional[List[Optional['Expr']]] = None  # None = unsized, e.g. int[]
     struct_def: Optional[StructDef] = None  # populated for struct types
     enum_def: Optional[EnumDef] = None  # populated for enum types

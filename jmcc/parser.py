@@ -268,14 +268,20 @@ class Parser:
                         pointer_depth += star_count
                     else:
                         self.pos = saved_fptr_td  # not a match, restore
+                # Function-type typedef with one star becomes a callable function pointer
+                resolved_is_func_ptr = (
+                    (td.is_func_ptr and pointer_depth == td.pointer_depth) or
+                    (td.is_func_type and pointer_depth == 1)
+                )
+                resolved_fptr_depth = td.func_ptr_native_depth if td.is_func_ptr else (1 if (td.is_func_type and pointer_depth == 1) else 0)
                 return TypeSpec(
                     base=td.base, pointer_depth=pointer_depth,
                     is_unsigned=td.is_unsigned, is_const=is_const,
                     is_volatile=is_volatile, is_static=is_static,
                     is_extern=is_extern, struct_def=td.struct_def,
                     enum_def=td.enum_def,
-                    is_func_ptr=td.is_func_ptr if pointer_depth == td.pointer_depth else False,
-                    func_ptr_native_depth=td.func_ptr_native_depth,
+                    is_func_ptr=resolved_is_func_ptr,
+                    func_ptr_native_depth=resolved_fptr_depth,
                     array_sizes=td.array_sizes,
                 )
             elif t.type == TokenType.IDENTIFIER and t.value == "__int128":
@@ -1950,6 +1956,23 @@ class Parser:
             return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
 
         name = self.expect(TokenType.IDENTIFIER, "typedef name").value
+
+        # Function-type typedef: typedef void fn(params); — fn is a function type, fn* is callable
+        if self.at(TokenType.LPAREN):
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            fn_type = TypeSpec(base=type_spec.base, pointer_depth=0,
+                                struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
+                                is_unsigned=type_spec.is_unsigned, is_func_type=True,
+                                func_ptr_native_depth=1)
+            self.typedefs[name] = fn_type
+            self.expect(TokenType.SEMICOLON, "';'")
+            return TypedefDecl(type_spec=fn_type, name=name, line=t.line, col=t.col)
+
         # Handle typedef for arrays: typedef int arr_t[10]; or typedef int mat_t[3][4];
         if self.match(TokenType.LBRACKET):
             dims = []

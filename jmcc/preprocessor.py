@@ -530,6 +530,7 @@ unsigned int umask(unsigned int mask);
 #define SIG_DFL ((void (*)(int))0)
 #define SIG_IGN ((void (*)(int))1)
 typedef void (*sighandler_t)(int);
+typedef int sig_atomic_t;
 typedef struct { unsigned long __val[16]; } sigset_t;
 typedef int pid_t;
 typedef int uid_t;
