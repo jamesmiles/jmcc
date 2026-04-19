@@ -397,8 +397,9 @@ class CodeGen:
                         total_elems = 0
                         if decl.type_spec.array_sizes and decl.type_spec.array_sizes[0]:
                             first = decl.type_spec.array_sizes[0]
-                            if isinstance(first, IntLiteral):
-                                total_elems = first.value
+                            dv = self._dim_value(first)
+                            if dv is not None:
+                                total_elems = dv
                         # Check if init items are nested InitLists/compound literals or flat values
                         def _is_struct_init_item(item_val):
                             v = self._unwrap_compound_literal(item_val)
