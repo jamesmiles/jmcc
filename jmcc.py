@@ -3,6 +3,7 @@
 
 import sys
 import os
+sys.setrecursionlimit(10000)
 import argparse
 from jmcc.lexer import Lexer
 from jmcc.parser import Parser
