@@ -512,6 +512,17 @@ class GotoStmt(Stmt):
 
 
 @dataclass
+class IndirectGotoStmt(Stmt):
+    target: Optional["Expr"] = None
+
+
+@dataclass
+class LabelAddrExpr(Expr):
+    label: str = ""
+    func_name: str = ""
+
+
+@dataclass
 class LabelStmt(Stmt):
     label: str = ""
     stmt: Optional[Stmt] = None

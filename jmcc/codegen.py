@@ -561,6 +561,9 @@ class CodeGen:
                                             lbl = self.new_label("str")
                                             self.string_literals.append((lbl, val.value, val.wide))
                                             elems[j] = lbl
+                                        elif isinstance(val, LabelAddrExpr):
+                                            fname = val.func_name or (self.current_func.name if self.current_func else "")
+                                            elems[j] = f".Luser_{fname}_{val.label}"
                                         else:
                                             cv = self._try_eval_const(val)
                                             if cv is not None:
@@ -1599,6 +1602,9 @@ class CodeGen:
         elif isinstance(stmt, GotoStmt):
             fname = self.current_func.name if self.current_func else ""
             self.emit(f"    jmp .Luser_{fname}_{stmt.label}")
+        elif isinstance(stmt, IndirectGotoStmt):
+            self.gen_expr(stmt.target)
+            self.emit("    jmpq *%rax")
         elif isinstance(stmt, LabelStmt):
             fname = self.current_func.name if self.current_func else ""
             self.label(f".Luser_{fname}_{stmt.label}")
@@ -1783,6 +1789,12 @@ class CodeGen:
                     ts.array_sizes[0] = IntLiteral(value=count)
                 elif isinstance(decl.init, StringLiteral):
                     ts.array_sizes[0] = IntLiteral(value=len(decl.init.value) + 1)
+            # Annotate LabelAddrExpr nodes with the current function name
+            if decl.init and isinstance(decl.init, InitList):
+                fname = self.current_func.name
+                for item in decl.init.items:
+                    if isinstance(item.value, LabelAddrExpr):
+                        item.value.func_name = fname
             gdecl = GlobalVarDecl(type_spec=decl.type_spec, name=mangled, init=decl.init)
             self.global_vars[mangled] = gdecl
             self.static_locals[decl.name] = mangled
@@ -3053,6 +3065,10 @@ class CodeGen:
             if expr.items:
                 self.gen_expr(expr.items[0].value)
 
+        elif isinstance(expr, LabelAddrExpr):
+            fname = expr.func_name or (self.current_func.name if self.current_func else "")
+            self.emit(f"    leaq .Luser_{fname}_{expr.label}(%rip), %rax")
+
         else:
             self.error(f"unhandled expression type: {type(expr).__name__}", expr.line, expr.col)
 
@@ -3806,6 +3822,10 @@ class CodeGen:
                 selected = default_expr
             if selected is not None:
                 return self.get_expr_type(selected)
+        if isinstance(expr, CommaExpr):
+            return self.get_expr_type(expr.exprs[-1])
+        if isinstance(expr, LabelAddrExpr):
+            return TypeSpec(base="void", pointer_depth=1)
         return None
 
     def _generic_types_match(self, controlling: TypeSpec, assoc: TypeSpec) -> bool:

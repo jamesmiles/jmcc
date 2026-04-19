@@ -134,6 +134,12 @@ typedef __va_list_tag __builtin_va_list[1];
 #define DBL_MAX_EXP 1024
 #define FLT_MIN_EXP (-125)
 #define DBL_MIN_EXP (-1021)
+#define FLT_DIG 6
+#define DBL_DIG 15
+#define FLT_MAX_10_EXP 38
+#define DBL_MAX_10_EXP 308
+#define FLT_MIN_10_EXP (-37)
+#define DBL_MIN_10_EXP (-307)
 #define FLT_MIN 1.17549435e-38F
 #define FLT_MAX 3.40282347e+38F
 #define FLT_EPSILON 1.19209290e-07F
@@ -658,6 +664,14 @@ int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockadd
         "sys/ioctl.h": """
 #define FIONBIO 0x5421
 #define FIONREAD 0x541B
+#define TIOCGWINSZ 0x5413
+struct winsize {
+    unsigned short ws_row;
+    unsigned short ws_col;
+    unsigned short ws_xpixel;
+    unsigned short ws_ypixel;
+};
+int ioctl(int fd, unsigned long request, ...);
 """,
         "netdb.h": """
 struct hostent {

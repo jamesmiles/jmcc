@@ -457,6 +457,9 @@ class Parser:
                 if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
                     self.advance()  # (
                     self.advance()  # *
+                    # Skip const/volatile qualifier after * (e.g., long (*const name)(args))
+                    while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                        self.advance()
                     # Multiple stars: void (**name)(params) — pointer to function pointer
                     member_extra_stars = 0
                     while self.match(TokenType.STAR):
@@ -866,6 +869,12 @@ class Parser:
         if self.match(TokenType.TILDE):
             operand = self.parse_unary()
             return UnaryOp(op="~", operand=operand, line=t.line, col=t.col)
+        if self.match(TokenType.AND):
+            # GCC &&label extension: address of label
+            if self.at(TokenType.IDENTIFIER):
+                label = self.advance().value
+                return LabelAddrExpr(label=label, line=t.line, col=t.col)
+            self.error("expected label name after '&&'", t.line, t.col)
         if self.match(TokenType.AMP):
             operand = self.parse_unary()
             return UnaryOp(op="&", operand=operand, line=t.line, col=t.col)
@@ -1173,6 +1182,10 @@ class Parser:
 
         if self.at(TokenType.GOTO):
             self.advance()
+            if self.match(TokenType.STAR):
+                target = self.parse_expr()
+                self.expect(TokenType.SEMICOLON, "';'")
+                return IndirectGotoStmt(target=target, line=t.line, col=t.col)
             label = self.expect(TokenType.IDENTIFIER, "label").value
             self.expect(TokenType.SEMICOLON, "';'")
             return GotoStmt(label=label, line=t.line, col=t.col)
@@ -1949,6 +1962,28 @@ class Parser:
         td_attrs = self.skip_attribute() or set()  # } __attribute__((packed)) Name;
         if "packed" in td_attrs and type_spec.struct_def:
             type_spec.struct_def.is_packed = True
+
+        # Parenthesized function-type typedef: typedef void (FnName)(params);
+        # (different from function POINTER: typedef void (*FnPtr)(params))
+        if (self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.IDENTIFIER
+                and self.peek(2).type == TokenType.RPAREN):
+            self.advance()  # (
+            name = self.advance().value  # FnName
+            self.advance()  # )
+            # Skip param list
+            if self.match(TokenType.LPAREN):
+                depth = 1
+                while depth > 0 and not self.at(TokenType.EOF):
+                    if self.match(TokenType.LPAREN): depth += 1
+                    elif self.match(TokenType.RPAREN): depth -= 1
+                    else: self.advance()
+            fn_type = TypeSpec(base=type_spec.base, pointer_depth=type_spec.pointer_depth,
+                                struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
+                                is_unsigned=type_spec.is_unsigned, is_func_type=True,
+                                func_ptr_native_depth=1)
+            self.typedefs[name] = fn_type
+            self.expect(TokenType.SEMICOLON, "';'")
+            return TypedefDecl(type_spec=fn_type, name=name, line=t.line, col=t.col)
 
         # Function pointer typedef: typedef int (*name)(params);
         if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
