@@ -254,13 +254,52 @@ void *bsearch(const void *, const void *, size_t, size_t, int (*)(const void *, 
 double sin(double);
 double cos(double);
 double tan(double);
+double asin(double);
+double acos(double);
+double atan(double);
+double atan2(double, double);
+double sinh(double);
+double cosh(double);
+double tanh(double);
 double sqrt(double);
+double cbrt(double);
 double fabs(double);
 double pow(double, double);
 double log(double);
+double log2(double);
+double log10(double);
 double exp(double);
+double exp2(double);
 double floor(double);
 double ceil(double);
+double round(double);
+double trunc(double);
+double fmod(double, double);
+double hypot(double, double);
+double ldexp(double, int);
+double frexp(double, int *);
+double modf(double, double *);
+float sqrtf(float);
+float fabsf(float);
+float floorf(float);
+float ceilf(float);
+float roundf(float);
+float log2f(float);
+float log10f(float);
+float logf(float);
+float expf(float);
+float powf(float, float);
+float sinf(float);
+float cosf(float);
+float tanf(float);
+float fmodf(float, float);
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+#define M_PI 3.14159265358979323846
+#define M_E  2.71828182845904523536
+#define M_LN2  0.69314718055994530942
+#define M_LOG2E 1.44269504088896340736
+#define M_SQRT2 1.41421356237309504880
 """,
         # POSIX headers — keep stubs for now (real headers cause recursion
         # in macro expansion and parser failures with complex typedefs)
