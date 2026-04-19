@@ -125,6 +125,7 @@ typedef __builtin_va_list __gnuc_va_list;
 #define MB_LEN_MAX 16
 #define PATH_MAX 4096
 #define SSIZE_MAX LONG_MAX
+#define IOV_MAX 1024
 #define SIZE_MAX ULONG_MAX
 #define PTRDIFF_MAX LONG_MAX
 #define PTRDIFF_MIN LONG_MIN
@@ -769,6 +770,14 @@ int sendto(int sockfd, const void *buf, unsigned long len, int flags, const stru
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 int send(int sockfd, const void *buf, unsigned long len, int flags);
 int recv(int sockfd, void *buf, unsigned long len, int flags);
+""",
+        "sys/uio.h": """
+struct iovec {
+    void *iov_base;
+    unsigned long iov_len;
+};
+int readv(int fd, const struct iovec *iov, int iovcnt);
+int writev(int fd, const struct iovec *iov, int iovcnt);
 """,
         "sys/ioctl.h": """
 #define FIONBIO 0x5421
