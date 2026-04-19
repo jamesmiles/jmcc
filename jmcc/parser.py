@@ -1258,10 +1258,12 @@ class Parser:
 
     def parse_block(self) -> Block:
         t = self.expect(TokenType.LBRACE, "'{'")
+        saved_scope = set(self.local_scope)
         stmts = []
         while not self.at(TokenType.RBRACE) and not self.at(TokenType.EOF):
             stmts.append(self.parse_stmt())
         self.expect(TokenType.RBRACE, "'}'")
+        self.local_scope = saved_scope
         return Block(stmts=stmts, line=t.line, col=t.col)
 
     def parse_return(self) -> ReturnStmt:
@@ -1828,6 +1830,7 @@ class Parser:
                         init = self.parse_init_list()
                     else:
                         init = self.parse_expr()
+                self.skip_attribute()
                 self.expect(TokenType.SEMICOLON, "';'")
                 return GlobalVarDecl(type_spec=fptr_type, name=name, init=init, line=t.line, col=t.col)
 
@@ -1884,6 +1887,7 @@ class Parser:
             else:
                 init = self.parse_assignment()
 
+        self.skip_attribute()  # e.g. void (*fp)(int) __attribute__((common));
         first = GlobalVarDecl(type_spec=type_spec, name=name, init=init, line=t.line, col=t.col)
 
         # Handle comma-separated global declarations: int a, b = 3, c;

@@ -635,6 +635,23 @@ int kill(int pid, int sig);
 #define FPE_FLTUND 5
 #define FPE_FLTRES 6
 #define FPE_FLTINV 7
+#define SIGBUS 7
+#define SIGCHLD 17
+#define SIGCONT 18
+#define SIGSTOP 19
+#define SIGTSTP 20
+#define SIGTTIN 21
+#define SIGTTOU 22
+#define SIGURG 23
+#define SIGXCPU 24
+#define SIGXFSZ 25
+#define SIGVTALRM 26
+#define SIGPROF 27
+#define SIGWINCH 28
+#define SIGIO 29
+#define SIG_BLOCK 0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
 typedef struct {
     void *ss_sp;
     int ss_flags;
@@ -666,12 +683,15 @@ int setitimer(int which, const struct itimerval *new_value, struct itimerval *ol
 #define ITIMER_PROF 2
 """,
         "netinet/in.h": """
+#include <sys/socket.h>
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
+#define IPPROTO_IPV6 41
 typedef unsigned short in_port_t;
 typedef unsigned int in_addr_t;
 #define INADDR_ANY ((in_addr_t)0)
 #define INADDR_BROADCAST ((in_addr_t)0xffffffff)
+#define INADDR_LOOPBACK ((in_addr_t)0x7f000001)
 struct in_addr { in_addr_t s_addr; };
 struct sockaddr_in {
     unsigned short sin_family;
@@ -679,6 +699,19 @@ struct sockaddr_in {
     struct in_addr sin_addr;
     unsigned char sin_zero[8];
 };
+struct in6_addr {
+    unsigned char s6_addr[16];
+};
+struct sockaddr_in6 {
+    unsigned short sin6_family;
+    unsigned short sin6_port;
+    unsigned int sin6_flowinfo;
+    struct in6_addr sin6_addr;
+    unsigned int sin6_scope_id;
+};
+extern struct in6_addr in6addr_any;
+extern struct in6_addr in6addr_loopback;
+#define IPV6_V6ONLY 26
 unsigned short htons(unsigned short hostshort);
 unsigned short ntohs(unsigned short netshort);
 unsigned int htonl(unsigned int hostlong);
@@ -717,10 +750,25 @@ unsigned int ntohl(unsigned int netlong);
 #define SHUT_RDWR 2
 typedef unsigned int socklen_t;
 struct sockaddr { unsigned short sa_family; char sa_data[14]; };
+struct sockaddr_storage {
+    unsigned short ss_family;
+    char __ss_padding[126];
+    unsigned long __ss_align;
+};
 int socket(int domain, int type, int protocol);
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int shutdown(int sockfd, int how);
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+int getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int sendto(int sockfd, const void *buf, unsigned long len, int flags, const struct sockaddr *dest, socklen_t addrlen);
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
+int send(int sockfd, const void *buf, unsigned long len, int flags);
+int recv(int sockfd, void *buf, unsigned long len, int flags);
 """,
         "sys/ioctl.h": """
 #define FIONBIO 0x5421
