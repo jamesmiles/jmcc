@@ -1,3 +1,8 @@
+// TEST: thread_local_storage
+// DESCRIPTION: __thread and _Thread_local must be accepted as storage class specifiers (used by CPython pystate.c)
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: OK
+// ENVIRONMENT: hosted
 /* __thread and _Thread_local (C11) must be supported as storage class specifiers.
    CPython uses __thread for thread-local state (pystate.c).
    Without these, CPython fails to compile with "no supported thread-local

@@ -1,3 +1,8 @@
+// TEST: float_h_constants
+// DESCRIPTION: float.h constants (DBL_MANT_DIG etc.) and HUGE_VAL from math.h must be defined
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: OK
+// ENVIRONMENT: hosted
 /* float.h and math.h constants must be defined: HUGE_VAL, DBL_MANT_DIG,
    FLT_MANT_DIG, DBL_MAX_EXP etc. Missing from jmcc stubs; blocks lmathlib.c
    (Lua) and lstrlib.c. */
