@@ -1,3 +1,8 @@
+// TEST: struct_member_attribute
+// DESCRIPTION: __attribute__ on struct members must be accepted and ignored
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: OK
+// ENVIRONMENT: hosted
 /* __attribute__ on struct members must be accepted (and ignored).
    GCC's stddef.h defines max_align_t using this pattern — blocking
    any file that includes <stddef.h> or <stdlib.h> when jmcc is used. */

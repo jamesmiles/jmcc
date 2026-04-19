@@ -722,6 +722,18 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["__signed__"] = Macro("__signed__", body="signed")
         self.macros["__inline__"] = Macro("__inline__", body="inline")
         self.macros["__inline"] = Macro("__inline", body="inline")
+        # C11/GCC atomic memory-order constants
+        self.macros["__ATOMIC_RELAXED"] = Macro("__ATOMIC_RELAXED", body="0")
+        self.macros["__ATOMIC_CONSUME"] = Macro("__ATOMIC_CONSUME", body="1")
+        self.macros["__ATOMIC_ACQUIRE"] = Macro("__ATOMIC_ACQUIRE", body="2")
+        self.macros["__ATOMIC_RELEASE"] = Macro("__ATOMIC_RELEASE", body="3")
+        self.macros["__ATOMIC_ACQ_REL"] = Macro("__ATOMIC_ACQ_REL", body="4")
+        self.macros["__ATOMIC_SEQ_CST"] = Macro("__ATOMIC_SEQ_CST", body="5")
+        # GCC atomic builtins — single-threaded: reduce to plain load/store
+        self.macros["__atomic_store_n"] = Macro("__atomic_store_n", body="(*((__typeof__(*(__atomic_store_n_ptr)))(__atomic_store_n_ptr)) = (__atomic_store_n_val))",
+                                                  is_func=True, params=["__atomic_store_n_ptr", "__atomic_store_n_val", "__atomic_store_n_ord"], is_variadic=False)
+        self.macros["__atomic_load_n"] = Macro("__atomic_load_n", body="(*((__typeof__(*(__atomic_load_n_ptr)))(__atomic_load_n_ptr)))",
+                                                is_func=True, params=["__atomic_load_n_ptr", "__atomic_load_n_ord"], is_variadic=False)
 
     @staticmethod
     def _strip_comments(source: str) -> str:

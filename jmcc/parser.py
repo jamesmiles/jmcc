@@ -543,6 +543,9 @@ class Parser:
                     # member_offset/member_type resolve through it
                     members.append(StructMember(type_spec=mem_type, name=""))
 
+                # Skip __attribute__ after member name/array/bitfield
+                self.skip_attribute()
+
                 # Handle comma-separated members: int i, j, k; or int *p, a;
                 # In C, `*` binds to the individual declarator. Subsequent
                 # declarators start from the base pointer_depth (without the
@@ -563,6 +566,7 @@ class Parser:
                         else:
                             ets.array_sizes = [self.parse_expr()]
                         self.expect(TokenType.RBRACKET, "']'")
+                    self.skip_attribute()
                     members.append(StructMember(type_spec=ets, name=ename))
 
                 self.expect(TokenType.SEMICOLON, "';'")

@@ -1,3 +1,8 @@
+// TEST: atomic_builtins
+// DESCRIPTION: __ATOMIC_* constants, _Atomic qualifier, and __atomic_store/load_n builtins must work
+// EXPECTED_EXIT: 0
+// EXPECTED_STDOUT: OK
+// ENVIRONMENT: hosted
 /* GCC predefined atomic constants (__ATOMIC_RELAXED etc.) must be defined,
    and _Atomic type qualifier must work in typedefs. Without these, stdatomic.h
    fails to compile, blocking Redis and other projects that use C11 atomics. */
