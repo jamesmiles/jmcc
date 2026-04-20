@@ -43,9 +43,8 @@ jobs:
           if-no-files-found: ignore
 
   test-macos-arm64:
-    name: macOS arm64 experimental
+    name: macOS arm64 phase 1
     runs-on: macos-15
-    continue-on-error: true
     timeout-minutes: 10
 
     steps:
@@ -58,6 +57,11 @@ jobs:
 
       - name: Run compiler target tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Run Apple phase 1 smoke suite
+        run: |
+          mkdir -p output
+          python3 test_runner.py --native --compiler jmcc --target arm64-apple-darwin --suite apple-phase1 --positive-only
 
       - name: Upload compiler artifacts
         if: always()

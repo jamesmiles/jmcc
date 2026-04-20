@@ -153,9 +153,11 @@ def compile_with_reference(source_path, compiler, output_path, std="c11"):
     }
 
 
-def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=None):
+def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=None, target=None):
     """Compile a C file with JMCC (runs on host, Python)."""
     cmd = [sys.executable, str(PROJECT_DIR / "jmcc.py"), source_path, "-o", output_asm_path]
+    if target:
+        cmd.extend(["--target", target])
     for d in (defines or []):
         cmd.extend(["-D", d])
     for p in (include_paths or []):
@@ -333,7 +335,7 @@ def parse_test_metadata(source_path):
     return metadata
 
 
-def run_test(source_path, compiler="jmcc", skip_reference=False):
+def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
     """
     Run a single test. Returns a result dict.
     """
@@ -371,7 +373,7 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
 
         # Compile with JMCC
         comp = compile_with_jmcc(source_path, asm_path, defines=metadata.get("defines"),
-                                 include_paths=inc_paths if inc_paths else None)
+                                 include_paths=inc_paths if inc_paths else None, target=target)
 
         if metadata["expect_compile_fail"]:
             if not comp["success"]:
@@ -391,7 +393,7 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
         for helper_file in metadata.get("multi_file", []):
             helper_path = os.path.join(source_dir, helper_file)
             helper_asm = str(output_dir / f"{Path(helper_file).stem}.s")
-            hcomp = compile_with_jmcc(helper_path, helper_asm)
+            hcomp = compile_with_jmcc(helper_path, helper_asm, target=target)
             if not hcomp["success"]:
                 result["details"] = f"JMCC compilation failed (helper {helper_file}):\n{hcomp['stderr']}"
                 return result
@@ -472,15 +474,19 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: run.py <source.c> [--compiler jmcc|gcc|clang]")
+        print("Usage: run.py <source.c> [--compiler jmcc|gcc|clang] [--target target-triple]")
         sys.exit(1)
 
     source = sys.argv[1]
     compiler = "jmcc"
+    target = None
     if "--compiler" in sys.argv:
         idx = sys.argv.index("--compiler")
         compiler = sys.argv[idx + 1]
+    if "--target" in sys.argv:
+        idx = sys.argv.index("--target")
+        target = sys.argv[idx + 1]
 
     ensure_docker_image()
-    result = run_test(source, compiler=compiler)
+    result = run_test(source, compiler=compiler, target=target)
     print(json.dumps(result, indent=2))

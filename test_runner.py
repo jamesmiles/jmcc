@@ -24,10 +24,37 @@ from harness.run import (
     run_test,
 )
 
+APPLE_PHASE1_TESTS = (
+    "positive/phase1/001_return_zero.c",
+    "positive/phase1/002_return_literal.c",
+    "positive/phase1/003_addition.c",
+    "positive/phase1/011_local_var.c",
+    "positive/phase1/015_if_else.c",
+    "positive/phase1/019_while_loop.c",
+    "positive/phase1/021_function_call.c",
+    "positive/phase1/022_recursive_factorial.c",
+)
 
-def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=False, positive_only=False):
+NAMED_SUITES = {
+    "apple-phase1": APPLE_PHASE1_TESTS,
+}
+
+
+def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=False,
+                   positive_only=False, suite=None):
     """Discover test files matching criteria."""
     tests = []
+
+    if suite is not None:
+        for rel_path in NAMED_SUITES[suite]:
+            test_file = Path(test_dir, rel_path)
+            metadata = parse_test_metadata(test_file)
+            if phase is not None and metadata["phase"] != phase:
+                continue
+            if filter_pattern and filter_pattern not in str(test_file):
+                continue
+            tests.append(test_file)
+        return tests
 
     if not negative_only:
         for phase_dir in sorted(Path(test_dir, "positive").glob("phase*")):
@@ -68,7 +95,7 @@ def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=Fals
     return tests
 
 
-def run_all_tests(tests, compiler="jmcc", validate_references=False):
+def run_all_tests(tests, compiler="jmcc", validate_references=False, target=None):
     """Run all tests and return results."""
     results = []
 
@@ -84,7 +111,7 @@ def run_all_tests(tests, compiler="jmcc", validate_references=False):
                     print(f"  WARNING: {test_name} fails with {ref}: {ref_result['details']}")
 
         # Run with target compiler
-        result = run_test(test_file, compiler=compiler)
+        result = run_test(test_file, compiler=compiler, target=target)
         status = "PASS" if result["passed"] else "FAIL"
         print(f"  [{status}] {test_name}: {result['details']}")
         results.append(result)
@@ -149,6 +176,10 @@ def main():
                         help="Run only positive tests")
     parser.add_argument("--native", action="store_true",
                         help="Run without Docker (faster, uses host as/gcc)")
+    parser.add_argument("--target", default=None,
+                        help="JMCC compilation target (for jmcc compiler runs)")
+    parser.add_argument("--suite", choices=sorted(NAMED_SUITES.keys()),
+                        help="Run a named curated test suite")
     args = parser.parse_args()
 
     if args.native:
@@ -163,6 +194,7 @@ def main():
         filter_pattern=args.filter,
         negative_only=args.negative_only,
         positive_only=args.positive_only,
+        suite=args.suite,
     )
 
     if not tests:
@@ -180,6 +212,7 @@ def main():
         tests,
         compiler=args.compiler,
         validate_references=args.validate,
+        target=args.target,
     )
 
     # Output
