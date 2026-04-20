@@ -56,6 +56,8 @@ APPLE_PHASE1_TESTS = (
     "positive/phase1/031_shift_left.c",
     "positive/phase1/032_shift_right.c",
     "positive/phase1/034_var_assignment.c",
+    "positive/phase1/029_do_while.c",
+    "positive/phase1/033_global_var.c",
 )
 
 NAMED_SUITES = {
