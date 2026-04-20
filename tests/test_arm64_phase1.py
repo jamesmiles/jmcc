@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from harness.run import run_test
@@ -17,15 +19,12 @@ class ApplePhase1SuiteTests(unittest.TestCase):
             list(APPLE_PHASE1_TESTS),
         )
 
-    def test_arm64_phase1_suite_currently_fails_at_codegen(self):
+    def test_arm64_phase1_suite_runs_natively(self):
         source = TEST_DIR / APPLE_PHASE1_TESTS[0]
-        result = run_test(source, compiler="jmcc", target="arm64-apple-darwin")
+        with mock.patch.dict(os.environ, {"JMCC_NATIVE": "1"}):
+            result = run_test(source, compiler="jmcc", target="arm64-apple-darwin")
 
-        self.assertFalse(result["passed"])
-        self.assertIn(
-            "code generation for target 'arm64-apple-darwin' is not implemented",
-            result["details"],
-        )
+        self.assertTrue(result["passed"], result["details"])
 
 
 if __name__ == "__main__":

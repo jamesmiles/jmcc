@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import shutil
+import platform
 from pathlib import Path
 
 HARNESS_DIR = Path(__file__).parent
@@ -41,8 +42,17 @@ def ensure_docker_image():
 
 def _is_amd64():
     """Check if host is already amd64 (no emulation needed)."""
-    import platform
     return platform.machine() in ("x86_64", "AMD64")
+
+
+def _native_host_target():
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "darwin" and machine in ("arm64", "aarch64"):
+        return "arm64-apple-darwin"
+    if system == "linux" and machine in ("x86_64", "amd64"):
+        return "x86_64-linux"
+    return None
 
 
 def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
@@ -82,8 +92,17 @@ def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
         return TimeoutResult()
 
 
-def _native_assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None):
+def _native_assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None, target=None):
     """Assemble and link on the host without Docker."""
+    if target == "arm64-apple-darwin":
+        args = ["clang", "-arch", "arm64", "-o", output_path, asm_path]
+        args.extend(extra_asm_paths or [])
+        r = subprocess.run(
+            args,
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+        )
+        return {"success": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+
     obj_path = asm_path + ".o"
     extra_obj_paths = []
     try:
@@ -176,10 +195,17 @@ def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=
     }
 
 
-def assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None):
+def assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None, target=None):
     """Assemble and link JMCC output (native or Docker)."""
     if _use_native():
-        return _native_assemble_and_link(asm_path, output_path, freestanding, extra_asm_paths=extra_asm_paths)
+        effective_target = target or _native_host_target()
+        return _native_assemble_and_link(
+            asm_path,
+            output_path,
+            freestanding,
+            extra_asm_paths=extra_asm_paths,
+            target=effective_target,
+        )
     asm_name = os.path.basename(asm_path)
     out_name = os.path.basename(output_path)
 
@@ -401,7 +427,13 @@ def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
 
         # Assemble and link
         freestanding = metadata["environment"] == "freestanding"
-        link = assemble_and_link(asm_path, bin_path, freestanding=freestanding, extra_asm_paths=extra_asm_paths)
+        link = assemble_and_link(
+            asm_path,
+            bin_path,
+            freestanding=freestanding,
+            extra_asm_paths=extra_asm_paths,
+            target=target,
+        )
         if not link["success"]:
             result["details"] = f"Assembly/linking failed:\n{link['stderr']}"
             return result

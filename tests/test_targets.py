@@ -41,28 +41,25 @@ class TargetCliTests(unittest.TestCase):
             self.assertEqual(explicit_result.returncode, 0, explicit_result.stderr)
             self.assertEqual(default_path.read_text(), explicit_path.read_text())
 
-    def test_arm64_apple_darwin_target_reports_not_implemented(self):
+    def test_arm64_apple_darwin_target_compiles_simple_program(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "apple.s"
             result = self.run_jmcc("--target", "arm64-apple-darwin", "-o", str(output_path))
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "error: code generation for target 'arm64-apple-darwin' is not implemented",
-                result.stderr,
-            )
-            self.assertFalse(output_path.exists())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(output_path.exists())
+            assembly = output_path.read_text()
+            self.assertIn(".globl _main", assembly)
+            self.assertIn("stp x29, x30", assembly)
 
     def test_target_aliases_resolve_to_canonical_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "alias.s"
             result = self.run_jmcc("--target", "aarch64-apple-darwin", "-o", str(output_path))
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "error: code generation for target 'arm64-apple-darwin' is not implemented",
-                result.stderr,
-            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(output_path.exists())
+            self.assertIn(".globl _main", output_path.read_text())
 
 
 if __name__ == "__main__":

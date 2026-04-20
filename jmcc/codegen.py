@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Tuple
 from .ast_nodes import *
 from .errors import CodeGenError
 from .targets import DEFAULT_TARGET_TRIPLE, TargetSpec, resolve_target
+from .codegen_arm64_apple import Arm64AppleCodeGen
 
 
 class CodeGen:
@@ -16,6 +17,10 @@ class CodeGen:
 
     def __init__(self, target: Optional[TargetSpec | str] = None):
         self.target = resolve_target(target) if target is None or isinstance(target, str) else target
+        self._delegate = None
+        if self.target.triple == "arm64-apple-darwin":
+            self._delegate = Arm64AppleCodeGen(self.target)
+            return
         if not self.target.is_implemented or self.target.triple != DEFAULT_TARGET_TRIPLE:
             raise CodeGenError(f"code generation for target '{self.target.triple}' is not implemented")
 
@@ -182,6 +187,9 @@ class CodeGen:
             i += 1
 
     def generate(self, program: Program) -> str:
+        if self._delegate is not None:
+            return self._delegate.generate(program)
+
         self.emit("    .text")
 
         # First pass: collect globals, infer array sizes from initializers

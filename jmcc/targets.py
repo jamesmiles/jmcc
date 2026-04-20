@@ -38,7 +38,7 @@ _SUPPORTED_TARGETS = {
         abi="aapcs64",
         object_format="macho",
         backend_name="arm64_apple_darwin",
-        is_implemented=False,
+        is_implemented=True,
     ),
 }
 
