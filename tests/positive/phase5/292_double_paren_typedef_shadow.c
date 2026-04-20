@@ -21,7 +21,7 @@ int main(void) {
     list b = {3, NULL};
     list a = {7, &b};
     int t = total_len(&a);
-    if (t != 7) return 1;  /* stops after first since b.next is NULL */
+    if (t != 10) return 1;  /* processes both nodes: 7 + 3 = 10 */
     printf("OK\n");
     return 0;
 }
