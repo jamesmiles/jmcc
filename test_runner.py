@@ -39,6 +39,7 @@ APPLE_PHASE1_TESTS = (
     "positive/phase1/017_comparison_ne.c",
     "positive/phase1/018_comparison_lt.c",
     "positive/phase1/019_while_loop.c",
+    "positive/phase1/020_for_loop.c",
     "positive/phase1/021_function_call.c",
     "positive/phase1/022_recursive_factorial.c",
     "positive/phase1/025_logical_not.c",
