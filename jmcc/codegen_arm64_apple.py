@@ -11,6 +11,7 @@ from .ast_nodes import (
     CaseStmt,
     ContinueStmt,
     DoWhileStmt,
+    EnumDecl,
     Expr,
     ExprStmt,
     ForStmt,
@@ -25,9 +26,11 @@ from .ast_nodes import (
     NullStmt,
     Program,
     ReturnStmt,
+    SizeofExpr,
     Stmt,
     SwitchStmt,
     TernaryOp,
+    TypedefDecl,
     UnaryOp,
     VarDecl,
     WhileStmt,
@@ -126,7 +129,7 @@ class Arm64AppleCodeGen:
         for decl in program.declarations:
             if isinstance(decl, FuncDecl) and decl.body is not None:
                 self.gen_function(decl)
-            elif not isinstance(decl, (FuncDecl, GlobalVarDecl)):
+            elif not isinstance(decl, (FuncDecl, GlobalVarDecl, EnumDecl, TypedefDecl)):
                 self.error(
                     f"arm64-apple-darwin backend does not yet support top-level declaration type {type(decl).__name__}",
                     getattr(decl, "line", 0),
@@ -476,6 +479,8 @@ class Arm64AppleCodeGen:
             self.emit(f"    mov w0, #{expr.value}")
         elif isinstance(expr, Identifier):
             self.load_var(expr.name, expr.line, expr.col)
+        elif isinstance(expr, SizeofExpr):
+            self.gen_sizeof(expr)
         elif isinstance(expr, ArrayAccess):
             self.gen_array_access(expr)
         elif isinstance(expr, Assignment):
@@ -723,6 +728,27 @@ class Arm64AppleCodeGen:
     def gen_array_access(self, expr: ArrayAccess):
         self.gen_array_addr(expr)
         self.emit("    ldr w0, [x0]")
+
+    def sizeof_value(self, expr: SizeofExpr) -> int:
+        if expr.is_type:
+            type_spec = expr.operand
+        elif isinstance(expr.operand, Identifier):
+            type_spec = self.get_var_type(expr.operand.name)
+        else:
+            self.error("arm64-apple-darwin sizeof currently supports only type names and identifiers", expr.line, expr.col)
+
+        if type_spec is None:
+            self.error("arm64-apple-darwin could not resolve sizeof operand type", expr.line, expr.col)
+
+        size = type_spec.size_bytes(self.target)
+        if type_spec.is_array():
+            for dim in type_spec.array_sizes or []:
+                if isinstance(dim, IntLiteral):
+                    size *= dim.value
+        return size
+
+    def gen_sizeof(self, expr: SizeofExpr):
+        self.emit(f"    mov w0, #{self.sizeof_value(expr)}")
 
     def gen_func_call(self, expr: FuncCall):
         if not isinstance(expr.name, Identifier):
