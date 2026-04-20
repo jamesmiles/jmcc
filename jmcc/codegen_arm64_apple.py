@@ -27,6 +27,8 @@ from .ast_nodes import (
     LabelStmt,
     MemberAccess,
     CommaExpr,
+    CharLiteral,
+    InitList,
     NullStmt,
     Program,
     ReturnStmt,
@@ -106,12 +108,8 @@ class Arm64AppleCodeGen:
         )
 
     def slot_size(self, type_spec) -> int:
-        if type_spec is not None and type_spec.is_array():
-            size = type_spec.size_bytes(self.target)
-            for dim in type_spec.array_sizes or []:
-                if isinstance(dim, IntLiteral):
-                    size *= dim.value
-            return (size + 7) & ~7
+        if type_spec is not None and self.is_array_type(type_spec):
+            return (self.total_size(type_spec) + 7) & ~7
         if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
             return (type_spec.struct_def.size_bytes(self.target) + 7) & ~7
         return 8
@@ -127,7 +125,7 @@ class Arm64AppleCodeGen:
         return type_spec is not None and type_spec.is_pointer()
 
     def is_array_type(self, type_spec) -> bool:
-        return type_spec is not None and type_spec.is_array()
+        return type_spec is not None and (type_spec.is_array() or type_spec.is_ptr_array)
 
     def element_size(self, type_spec) -> int:
         if type_spec is None:
@@ -152,7 +150,7 @@ class Arm64AppleCodeGen:
         if type_spec is None:
             return 4
         size = type_spec.size_bytes(self.target)
-        if type_spec.is_array():
+        if self.is_array_type(type_spec):
             for dim in type_spec.array_sizes or []:
                 if isinstance(dim, IntLiteral):
                     size *= dim.value
@@ -174,10 +172,20 @@ class Arm64AppleCodeGen:
         self.emit(f"    adrp {reg}, {symbol}@PAGE")
         self.emit(f"    add {reg}, {reg}, {symbol}@PAGEOFF")
 
+    def infer_unsized_array(self, type_spec, init):
+        if type_spec is None or not self.is_array_type(type_spec) or not type_spec.array_sizes:
+            return
+        if type_spec.array_sizes[0] is not None:
+            return
+        if isinstance(init, InitList):
+            type_spec.array_sizes[0] = IntLiteral(value=len(init.items))
+        elif isinstance(init, StringLiteral) and type_spec.base == "char":
+            type_spec.array_sizes[0] = IntLiteral(value=len(init.value) + 1)
+
     def element_type(self, type_spec):
         if type_spec is None:
             return None
-        if type_spec.is_array():
+        if self.is_array_type(type_spec):
             if type_spec.array_sizes and len(type_spec.array_sizes) > 1:
                 return self.clone_type(type_spec, array_sizes=type_spec.array_sizes[1:])
             return self.clone_type(type_spec, array_sizes=None)
@@ -244,6 +252,7 @@ class Arm64AppleCodeGen:
         self.globals = {}
         for decl in program.declarations:
             if isinstance(decl, GlobalVarDecl):
+                self.infer_unsized_array(decl.type_spec, decl.init)
                 existing = self.globals.get(decl.name)
                 if existing is None or (existing.type_spec.is_extern and not decl.type_spec.is_extern):
                     self.globals[decl.name] = decl
@@ -316,11 +325,83 @@ class Arm64AppleCodeGen:
             self.emit(f'    .asciz "{self.escape_string(init.value)}"')
             return
 
+        if isinstance(init, InitList) and type_spec is not None and self.is_array_type(type_spec):
+            self.emit_global_array_init(type_spec, init, line, col)
+            return
+
         self.error(
             "arm64-apple-darwin backend does not yet support this global initializer",
             line,
             col,
         )
+
+    def emit_global_array_init(self, type_spec, init: InitList, line: int, col: int):
+        elem_type = self.element_type(type_spec)
+        count = type_spec.array_sizes[0].value if type_spec.array_sizes and isinstance(type_spec.array_sizes[0], IntLiteral) else len(init.items)
+        for index in range(count):
+            item = init.items[index].value if index < len(init.items) else None
+            self.emit_global_value(elem_type, item, line, col)
+
+    def emit_global_value(self, type_spec, value, line: int, col: int):
+        if self.is_array_type(type_spec):
+            if value is None:
+                self.emit(f"    .zero {self.total_size(type_spec)}")
+                return
+            if type_spec.base == "char" and isinstance(value, StringLiteral):
+                raw = value.value.encode("utf-8") + b"\0"
+                limit = self.total_size(type_spec)
+                raw = raw[:limit] + b"\0" * max(0, limit - len(raw))
+                for byte in raw:
+                    self.emit(f"    .byte {byte}")
+                return
+            if isinstance(value, InitList):
+                self.emit_global_array_init(type_spec, value, line, col)
+                return
+        if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
+            if not isinstance(value, InitList):
+                self.error("arm64-apple-darwin backend expects struct init list here", line, col)
+            data = bytearray(type_spec.struct_def.size_bytes(self.target))
+            for member, item in zip(type_spec.struct_def.members, value.items):
+                member_value = item.value
+                offset = type_spec.struct_def.member_offset(member.name) or 0
+                member_type = member.type_spec
+                if self.is_array_type(member_type) and member_type.base == "char" and isinstance(member_value, StringLiteral):
+                    raw = member_value.value.encode("utf-8") + b"\0"
+                    limit = self.total_size(member_type)
+                    raw = raw[:limit] + b"\0" * max(0, limit - len(raw))
+                    data[offset:offset + limit] = raw[:limit]
+                elif isinstance(member_value, (IntLiteral, CharLiteral)):
+                    size = member_type.size_bytes(self.target)
+                    intval = member_value.value if isinstance(member_value, IntLiteral) else ord(member_value.value)
+                    data[offset:offset + size] = int(intval & ((1 << (size * 8)) - 1)).to_bytes(size, "little", signed=False)
+                else:
+                    self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
+            for byte in data:
+                self.emit(f"    .byte {byte}")
+            return
+        if value is None:
+            self.emit(f"    .zero {self.total_size(type_spec)}")
+            return
+        if isinstance(value, StringLiteral) and type_spec is not None and type_spec.is_pointer():
+            label = self.string_label(value.value)
+            self.emit(f"    .quad {label}")
+            return
+        if isinstance(value, Identifier) and value.name in self.functions:
+            self.emit(f"    .quad {self.mangle(value.name)}")
+            return
+        if isinstance(value, (IntLiteral, CharLiteral)):
+            intval = value.value if isinstance(value, IntLiteral) else ord(value.value)
+            size = type_spec.size_bytes(self.target)
+            if size <= 1:
+                self.emit(f"    .byte {intval & 0xff}")
+            elif size <= 2:
+                self.emit(f"    .short {intval & 0xffff}")
+            elif size <= 4:
+                self.emit(f"    .long {intval & 0xffffffff}")
+            else:
+                self.emit(f"    .quad {intval}")
+            return
+        self.error("arm64-apple-darwin backend does not yet support this global initializer value", line, col)
 
     def alloc_slot(self, name: str, type_spec=None):
         if name in self.locals:
@@ -334,6 +415,7 @@ class Arm64AppleCodeGen:
             for child in stmt.stmts:
                 self.collect_locals_stmt(child)
         elif isinstance(stmt, VarDecl):
+            self.infer_unsized_array(stmt.type_spec, stmt.init)
             if stmt.type_spec is not None and stmt.type_spec.is_static:
                 self.static_locals[stmt.name] = self.static_local_label(stmt.name)
                 self.static_local_decls[self.static_locals[stmt.name]] = stmt
@@ -539,6 +621,9 @@ class Arm64AppleCodeGen:
     def gen_var_decl(self, decl: VarDecl):
         if decl.type_spec is not None and decl.type_spec.is_static:
             return
+        if decl.type_spec is not None and self.is_array_type(decl.type_spec) and isinstance(decl.init, InitList):
+            self.gen_local_array_init(decl)
+            return
         if decl.type_spec is not None and decl.init is None:
             if decl.type_spec.is_array() or (decl.type_spec.is_struct() and not decl.type_spec.is_pointer()):
                 return
@@ -547,6 +632,25 @@ class Arm64AppleCodeGen:
         else:
             self.gen_expr(decl.init)
         self.store_var(decl.name, line=decl.line, col=decl.col)
+
+    def gen_local_array_init(self, decl: VarDecl):
+        self.emit(f"    sub x9, x29, #{self.locals[decl.name]}")
+        elem_type = self.element_type(decl.type_spec)
+        elem_size = self.total_size(elem_type)
+        for index, item in enumerate(decl.init.items):
+            value = item.value
+            if value is None:
+                continue
+            self.gen_expr(value)
+            offset = index * elem_size
+            if elem_type is not None and self.is_pointer_type(elem_type):
+                self.emit(f"    str x0, [x9, #{offset}]")
+            elif elem_type is not None and elem_type.base == "char" and not elem_type.is_pointer():
+                self.emit(f"    strb w0, [x9, #{offset}]")
+            elif elem_type is not None and elem_type.base == "short" and not elem_type.is_pointer():
+                self.emit(f"    strh w0, [x9, #{offset}]")
+            else:
+                self.emit(f"    str w0, [x9, #{offset}]")
 
     def gen_if(self, stmt: IfStmt):
         else_label = self.new_label("else")
@@ -1029,6 +1133,8 @@ class Arm64AppleCodeGen:
         self.gen_member_addr(expr)
         member_type = self.get_expr_type(expr)
         if member_type is not None and member_type.is_struct() and not member_type.is_pointer():
+            return
+        if member_type is not None and self.is_array_type(member_type):
             return
         if member_type is not None and member_type.base == "char" and not member_type.is_pointer():
             self.emit("    ldrb w0, [x0]")
