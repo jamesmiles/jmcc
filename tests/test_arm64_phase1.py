@@ -1,4 +1,5 @@
 import os
+import platform
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -19,6 +20,10 @@ class ApplePhase1SuiteTests(unittest.TestCase):
             list(APPLE_PHASE1_TESTS),
         )
 
+    @unittest.skipUnless(
+        platform.system() == "Darwin" and platform.machine().lower() in ("arm64", "aarch64"),
+        "native Apple arm64 smoke execution requires a Darwin arm64 host",
+    )
     def test_arm64_phase1_suite_runs_natively(self):
         source = TEST_DIR / APPLE_PHASE1_TESTS[0]
         with mock.patch.dict(os.environ, {"JMCC_NATIVE": "1"}):
