@@ -16,6 +16,7 @@ from .ast_nodes import (
     Program,
     ReturnStmt,
     Stmt,
+    UnaryOp,
     VarDecl,
     WhileStmt,
 )
@@ -219,6 +220,8 @@ class Arm64AppleCodeGen:
             self.gen_assignment(expr)
         elif isinstance(expr, BinaryOp):
             self.gen_binary_op(expr)
+        elif isinstance(expr, UnaryOp):
+            self.gen_unary_op(expr)
         elif isinstance(expr, FuncCall):
             self.gen_func_call(expr)
         else:
@@ -259,6 +262,19 @@ class Arm64AppleCodeGen:
             self.emit(f"    cset w0, {cond}")
         else:
             self.error(f"binary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
+
+    def gen_unary_op(self, expr: UnaryOp):
+        self.gen_expr(expr.operand)
+
+        if expr.op == "-":
+            self.emit("    neg w0, w0")
+        elif expr.op == "!":
+            self.emit("    cmp w0, #0")
+            self.emit("    cset w0, eq")
+        elif expr.op == "~":
+            self.emit("    mvn w0, w0")
+        else:
+            self.error(f"unary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
     def gen_func_call(self, expr: FuncCall):
         if not isinstance(expr.name, Identifier):

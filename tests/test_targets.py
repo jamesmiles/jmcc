@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "tests" / "positive" / "phase1" / "001_return_zero.c"
+NEGATION_SOURCE = ROOT / "tests" / "positive" / "phase1" / "008_negation.c"
 
 
 class TargetCliTests(unittest.TestCase):
@@ -51,6 +52,28 @@ class TargetCliTests(unittest.TestCase):
             assembly = output_path.read_text()
             self.assertIn(".globl _main", assembly)
             self.assertIn("stp x29, x30", assembly)
+
+    def test_arm64_apple_darwin_target_supports_unary_negation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "negation.s"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "jmcc.py"),
+                    str(NEGATION_SOURCE),
+                    "--target",
+                    "arm64-apple-darwin",
+                    "-o",
+                    str(output_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(output_path.exists())
+            self.assertIn("neg w0, w0", output_path.read_text())
 
     def test_target_aliases_resolve_to_canonical_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
