@@ -8,6 +8,7 @@ from .ast_nodes import (
     Block,
     Expr,
     ExprStmt,
+    ForStmt,
     FuncCall,
     FuncDecl,
     Identifier,
@@ -84,6 +85,10 @@ class Arm64AppleCodeGen:
             if stmt.else_body is not None:
                 self.collect_locals_stmt(stmt.else_body)
         elif isinstance(stmt, WhileStmt):
+            self.collect_locals_stmt(stmt.body)
+        elif isinstance(stmt, ForStmt):
+            if stmt.init is not None:
+                self.collect_locals_stmt(stmt.init)
             self.collect_locals_stmt(stmt.body)
         elif isinstance(stmt, (ReturnStmt, ExprStmt)):
             return
@@ -166,6 +171,8 @@ class Arm64AppleCodeGen:
             self.gen_if(stmt)
         elif isinstance(stmt, WhileStmt):
             self.gen_while(stmt)
+        elif isinstance(stmt, ForStmt):
+            self.gen_for(stmt)
         else:
             self.error(
                 f"arm64-apple-darwin backend does not yet support statement type {type(stmt).__name__}",
@@ -211,6 +218,27 @@ class Arm64AppleCodeGen:
         self.emit(f"    b {start_label}")
         self.label(end_label)
 
+    def gen_for(self, stmt: ForStmt):
+        cond_label = self.new_label("for")
+        update_label = self.new_label("forupd")
+        end_label = self.new_label("forend")
+
+        if stmt.init is not None:
+            self.gen_stmt(stmt.init)
+
+        self.label(cond_label)
+        if stmt.condition is not None:
+            self.gen_expr(stmt.condition)
+            self.emit(f"    cbz w0, {end_label}")
+
+        self.gen_stmt(stmt.body)
+
+        self.label(update_label)
+        if stmt.update is not None:
+            self.gen_expr(stmt.update)
+        self.emit(f"    b {cond_label}")
+        self.label(end_label)
+
     def gen_expr(self, expr: Expr):
         if isinstance(expr, IntLiteral):
             self.emit(f"    mov w0, #{expr.value}")
@@ -238,6 +266,34 @@ class Arm64AppleCodeGen:
         self.store_var(expr.target.name, line=expr.line, col=expr.col)
 
     def gen_binary_op(self, expr: BinaryOp):
+        if expr.op == "&&":
+            false_label = self.new_label("andfalse")
+            end_label = self.new_label("andend")
+            self.gen_expr(expr.left)
+            self.emit(f"    cbz w0, {false_label}")
+            self.gen_expr(expr.right)
+            self.emit(f"    cbz w0, {false_label}")
+            self.emit("    mov w0, #1")
+            self.emit(f"    b {end_label}")
+            self.label(false_label)
+            self.emit("    mov w0, #0")
+            self.label(end_label)
+            return
+
+        if expr.op == "||":
+            true_label = self.new_label("ortrue")
+            end_label = self.new_label("orend")
+            self.gen_expr(expr.left)
+            self.emit(f"    cbnz w0, {true_label}")
+            self.gen_expr(expr.right)
+            self.emit(f"    cbnz w0, {true_label}")
+            self.emit("    mov w0, #0")
+            self.emit(f"    b {end_label}")
+            self.label(true_label)
+            self.emit("    mov w0, #1")
+            self.label(end_label)
+            return
+
         self.gen_expr(expr.left)
         self.push_x0()
         self.gen_expr(expr.right)
@@ -249,6 +305,10 @@ class Arm64AppleCodeGen:
             self.emit("    sub w0, w1, w0")
         elif expr.op == "*":
             self.emit("    mul w0, w1, w0")
+        elif expr.op == "<<":
+            self.emit("    lslv w0, w1, w0")
+        elif expr.op == ">>":
+            self.emit("    asrv w0, w1, w0")
         elif expr.op in {"==", "!=", "<", "<=", ">", ">="}:
             self.emit("    cmp w1, w0")
             cond = {
