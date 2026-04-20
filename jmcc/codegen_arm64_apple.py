@@ -23,13 +23,17 @@ from .ast_nodes import (
     IfStmt,
     IntLiteral,
     LabelStmt,
+    MemberAccess,
     NullStmt,
     Program,
     ReturnStmt,
     SizeofExpr,
+    StringLiteral,
     Stmt,
+    StructDecl,
     SwitchStmt,
     TernaryOp,
+    TypeSpec,
     TypedefDecl,
     UnaryOp,
     VarDecl,
@@ -51,6 +55,8 @@ class Arm64AppleCodeGen:
         self.locals: Dict[str, int] = {}
         self.local_types: Dict[str, object] = {}
         self.globals: Dict[str, GlobalVarDecl] = {}
+        self.functions: Dict[str, FuncDecl] = {}
+        self.string_literals: Dict[str, str] = {}
         self.stack_size = 0
         self.return_label: Optional[str] = None
         self.current_func: Optional[FuncDecl] = None
@@ -77,6 +83,19 @@ class Arm64AppleCodeGen:
         func_name = self.current_func.name if self.current_func is not None else "global"
         return f"Luser_{func_name}_{name}"
 
+    def string_label(self, value: str) -> str:
+        if value not in self.string_literals:
+            self.string_literals[value] = self.new_label("str")
+        return self.string_literals[value]
+
+    def escape_string(self, value: str) -> str:
+        return (
+            value.replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+            .replace("\"", "\\\"")
+        )
+
     def slot_size(self, type_spec) -> int:
         if type_spec is not None and type_spec.is_array():
             size = type_spec.size_bytes(self.target)
@@ -84,6 +103,8 @@ class Arm64AppleCodeGen:
                 if isinstance(dim, IntLiteral):
                     size *= dim.value
             return (size + 7) & ~7
+        if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
+            return (type_spec.struct_def.size_bytes(self.target) + 7) & ~7
         return 8
 
     def get_var_type(self, name: str):
@@ -118,18 +139,81 @@ class Arm64AppleCodeGen:
             return max(1, scalar_type)
         return max(1, type_spec.size_bytes(self.target))
 
+    def clone_type(self, type_spec, pointer_depth=None):
+        if type_spec is None:
+            return None
+        return TypeSpec(
+            base=type_spec.base,
+            pointer_depth=type_spec.pointer_depth if pointer_depth is None else pointer_depth,
+            is_unsigned=type_spec.is_unsigned,
+            array_sizes=type_spec.array_sizes,
+            struct_def=type_spec.struct_def,
+            enum_def=type_spec.enum_def,
+        )
+
+    def get_expr_type(self, expr: Expr):
+        if isinstance(expr, Identifier):
+            return self.get_var_type(expr.name)
+        if isinstance(expr, IntLiteral):
+            return TypeSpec(base="int")
+        if isinstance(expr, StringLiteral):
+            return TypeSpec(base="char", pointer_depth=1)
+        if isinstance(expr, Assignment):
+            return self.get_expr_type(expr.target)
+        if isinstance(expr, ArrayAccess):
+            array_type = self.get_expr_type(expr.array)
+            if array_type is None:
+                return None
+            if array_type.is_array() or array_type.is_pointer():
+                return self.clone_type(array_type, pointer_depth=max(array_type.pointer_depth - 1, 0))
+            return None
+        if isinstance(expr, MemberAccess):
+            obj_type = self.get_expr_type(expr.obj)
+            if obj_type is None:
+                return None
+            struct_type = self.clone_type(obj_type, pointer_depth=obj_type.pointer_depth - 1) if expr.arrow else obj_type
+            if struct_type is None or struct_type.struct_def is None:
+                return None
+            return struct_type.struct_def.member_type(expr.member)
+        if isinstance(expr, UnaryOp):
+            operand_type = self.get_expr_type(expr.operand)
+            if expr.op == "&" and operand_type is not None:
+                return self.clone_type(operand_type, pointer_depth=operand_type.pointer_depth + 1)
+            if expr.op == "*" and operand_type is not None:
+                return self.clone_type(operand_type, pointer_depth=max(operand_type.pointer_depth - 1, 0))
+            return TypeSpec(base="int")
+        if isinstance(expr, BinaryOp):
+            left_type = self.get_expr_type(expr.left)
+            right_type = self.get_expr_type(expr.right)
+            if expr.op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+                return TypeSpec(base="int")
+            if expr.op in {"+", "-"}:
+                if left_type is not None and left_type.is_pointer():
+                    return left_type
+                if right_type is not None and right_type.is_pointer():
+                    return right_type
+            return left_type or right_type or TypeSpec(base="int")
+        if isinstance(expr, SizeofExpr):
+            return TypeSpec(base="int")
+        return TypeSpec(base="int")
+
     def generate(self, program: Program) -> str:
         self.globals = {
             decl.name: decl
             for decl in program.declarations
             if isinstance(decl, GlobalVarDecl)
         }
+        self.functions = {
+            decl.name: decl
+            for decl in program.declarations
+            if isinstance(decl, FuncDecl)
+        }
 
         self.emit("    .text")
         for decl in program.declarations:
             if isinstance(decl, FuncDecl) and decl.body is not None:
                 self.gen_function(decl)
-            elif not isinstance(decl, (FuncDecl, GlobalVarDecl, EnumDecl, TypedefDecl)):
+            elif not isinstance(decl, (FuncDecl, GlobalVarDecl, EnumDecl, StructDecl, TypedefDecl)):
                 self.error(
                     f"arm64-apple-darwin backend does not yet support top-level declaration type {type(decl).__name__}",
                     getattr(decl, "line", 0),
@@ -150,6 +234,14 @@ class Arm64AppleCodeGen:
             self.emit(f"    .globl {self.mangle(decl.name)}")
             self.label(self.mangle(decl.name))
             self.emit(f"    .long {decl.init.value if decl.init is not None else 0}")
+
+        if self.string_literals:
+            self.emit("")
+            self.emit("    .data")
+            for value, label in self.string_literals.items():
+                self.emit("    .p2align 2")
+                self.label(label)
+                self.emit(f'    .asciz "{self.escape_string(value)}"')
         return "\n".join(self.output) + "\n"
 
     def alloc_slot(self, name: str, type_spec=None):
@@ -207,6 +299,8 @@ class Arm64AppleCodeGen:
         type_spec = self.get_var_type(name)
         if name in self.locals:
             if self.is_array_type(type_spec):
+                self.emit(f"    sub x0, x29, #{self.locals[name]}")
+            elif type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
                 self.emit(f"    sub x0, x29, #{self.locals[name]}")
             elif self.is_pointer_type(type_spec):
                 self.emit(f"    ldur x0, [x29, #-{self.locals[name]}]")
@@ -334,8 +428,9 @@ class Arm64AppleCodeGen:
         self.emit(f"    b {self.return_label}")
 
     def gen_var_decl(self, decl: VarDecl):
-        if decl.type_spec is not None and decl.type_spec.is_array() and decl.init is None:
-            return
+        if decl.type_spec is not None and decl.init is None:
+            if decl.type_spec.is_array() or (decl.type_spec.is_struct() and not decl.type_spec.is_pointer()):
+                return
         if decl.init is None:
             self.emit("    mov w0, #0")
         else:
@@ -479,6 +574,8 @@ class Arm64AppleCodeGen:
             self.emit(f"    mov w0, #{expr.value}")
         elif isinstance(expr, Identifier):
             self.load_var(expr.name, expr.line, expr.col)
+        elif isinstance(expr, StringLiteral):
+            self.gen_string_literal(expr)
         elif isinstance(expr, SizeofExpr):
             self.gen_sizeof(expr)
         elif isinstance(expr, ArrayAccess):
@@ -489,6 +586,8 @@ class Arm64AppleCodeGen:
             self.gen_binary_op(expr)
         elif isinstance(expr, UnaryOp):
             self.gen_unary_op(expr)
+        elif isinstance(expr, MemberAccess):
+            self.gen_member_access(expr)
         elif isinstance(expr, TernaryOp):
             self.gen_ternary(expr)
         elif isinstance(expr, FuncCall):
@@ -542,12 +641,20 @@ class Arm64AppleCodeGen:
             self.store_var(expr.target.name, line=expr.line, col=expr.col)
             return
 
-        if isinstance(expr.target, (UnaryOp, ArrayAccess)):
+        if isinstance(expr.target, (UnaryOp, ArrayAccess, MemberAccess)):
             self.push_x0()
             self.gen_lvalue_addr(expr.target)
             self.pop_reg("x1")
-            self.emit("    str w1, [x0]")
-            self.emit("    mov w0, w1")
+            target_type = self.get_expr_type(expr.target)
+            if target_type is not None and target_type.is_pointer():
+                self.emit("    str x1, [x0]")
+                self.emit("    mov x0, x1")
+            elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                self.emit("    strb w1, [x0]")
+                self.emit("    and w0, w1, #0xff")
+            else:
+                self.emit("    str w1, [x0]")
+                self.emit("    mov w0, w1")
             return
 
         self.error("assignment target is not yet supported on arm64-apple-darwin", expr.line, expr.col)
@@ -586,7 +693,33 @@ class Arm64AppleCodeGen:
         self.gen_expr(expr.right)
         self.pop_reg("x1")
 
-        if expr.op == "+":
+        left_type = self.get_expr_type(expr.left)
+        right_type = self.get_expr_type(expr.right)
+        left_ptr = left_type is not None and left_type.is_pointer()
+        right_ptr = right_type is not None and right_type.is_pointer()
+
+        if expr.op == "+" and left_ptr and not right_ptr:
+            scale = self.element_size(left_type)
+            self.emit("    sxtw x0, w0")
+            if scale != 1:
+                self.emit(f"    mov x2, #{scale}")
+                self.emit("    mul x0, x0, x2")
+            self.emit("    add x0, x1, x0")
+        elif expr.op == "+" and right_ptr and not left_ptr:
+            scale = self.element_size(right_type)
+            self.emit("    sxtw x1, w1")
+            if scale != 1:
+                self.emit(f"    mov x2, #{scale}")
+                self.emit("    mul x1, x1, x2")
+            self.emit("    add x0, x0, x1")
+        elif expr.op == "-" and left_ptr and not right_ptr:
+            scale = self.element_size(left_type)
+            self.emit("    sxtw x0, w0")
+            if scale != 1:
+                self.emit(f"    mov x2, #{scale}")
+                self.emit("    mul x0, x0, x2")
+            self.emit("    sub x0, x1, x0")
+        elif expr.op == "+":
             self.emit("    add w0, w1, w0")
         elif expr.op == "-":
             self.emit("    sub w0, w1, w0")
@@ -608,7 +741,7 @@ class Arm64AppleCodeGen:
         elif expr.op == ">>":
             self.emit("    asrv w0, w1, w0")
         elif expr.op in {"==", "!=", "<", "<=", ">", ">="}:
-            self.emit("    cmp w1, w0")
+            self.emit("    cmp x1, x0" if (left_ptr or right_ptr) else "    cmp w1, w0")
             cond = {
                 "==": "eq",
                 "!=": "ne",
@@ -666,7 +799,15 @@ class Arm64AppleCodeGen:
         elif expr.op == "&":
             self.gen_lvalue_addr(expr.operand)
         elif expr.op == "*":
-            self.emit("    ldr w0, [x0]")
+            operand_type = self.get_expr_type(expr.operand)
+            if operand_type is not None and operand_type.base == "char" and operand_type.pointer_depth == 1:
+                self.emit("    ldrb w0, [x0]")
+            elif operand_type is not None and operand_type.pointer_depth > 1:
+                self.emit("    ldr x0, [x0]")
+            elif operand_type is not None and operand_type.is_struct() and operand_type.pointer_depth == 1:
+                return
+            else:
+                self.emit("    ldr w0, [x0]")
         else:
             self.error(f"unary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
@@ -698,6 +839,9 @@ class Arm64AppleCodeGen:
         elif isinstance(expr, ArrayAccess):
             self.gen_array_addr(expr)
             return
+        elif isinstance(expr, MemberAccess):
+            self.gen_member_addr(expr)
+            return
         self.error("expression is not an lvalue", expr.line, expr.col)
 
     def gen_array_addr(self, expr: ArrayAccess):
@@ -727,7 +871,43 @@ class Arm64AppleCodeGen:
 
     def gen_array_access(self, expr: ArrayAccess):
         self.gen_array_addr(expr)
-        self.emit("    ldr w0, [x0]")
+        result_type = self.get_expr_type(expr)
+        if result_type is not None and result_type.base == "char" and not result_type.is_pointer():
+            self.emit("    ldrb w0, [x0]")
+        elif result_type is not None and result_type.is_pointer():
+            self.emit("    ldr x0, [x0]")
+        else:
+            self.emit("    ldr w0, [x0]")
+
+    def gen_member_addr(self, expr: MemberAccess):
+        obj_type = self.get_expr_type(expr.obj)
+        if obj_type is None:
+            self.error("could not resolve member base type", expr.line, expr.col)
+        struct_type = self.clone_type(obj_type, pointer_depth=obj_type.pointer_depth - 1) if expr.arrow else obj_type
+        if struct_type is None or struct_type.struct_def is None:
+            self.error("member access requires a struct type on arm64-apple-darwin", expr.line, expr.col)
+
+        if expr.arrow:
+            self.gen_expr(expr.obj)
+        else:
+            self.gen_lvalue_addr(expr.obj)
+
+        offset = struct_type.struct_def.member_offset(expr.member)
+        if offset is None:
+            self.error(f"unknown member '{expr.member}'", expr.line, expr.col)
+        self.emit(f"    add x0, x0, #{offset}")
+
+    def gen_member_access(self, expr: MemberAccess):
+        self.gen_member_addr(expr)
+        member_type = self.get_expr_type(expr)
+        if member_type is not None and member_type.is_struct() and not member_type.is_pointer():
+            return
+        if member_type is not None and member_type.base == "char" and not member_type.is_pointer():
+            self.emit("    ldrb w0, [x0]")
+        elif member_type is not None and member_type.is_pointer():
+            self.emit("    ldr x0, [x0]")
+        else:
+            self.emit("    ldr w0, [x0]")
 
     def sizeof_value(self, expr: SizeofExpr) -> int:
         if expr.is_type:
@@ -750,17 +930,43 @@ class Arm64AppleCodeGen:
     def gen_sizeof(self, expr: SizeofExpr):
         self.emit(f"    mov w0, #{self.sizeof_value(expr)}")
 
+    def gen_string_literal(self, expr: StringLiteral):
+        label = self.string_label(expr.value)
+        self.emit(f"    adrp x0, {label}@PAGE")
+        self.emit(f"    add x0, x0, {label}@PAGEOFF")
+
     def gen_func_call(self, expr: FuncCall):
         if not isinstance(expr.name, Identifier):
             self.error("only direct function calls are currently supported on arm64-apple-darwin", expr.line, expr.col)
         if len(expr.args) > len(self.ARG_REGS_64):
             self.error("more than 8 integer call arguments are not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
+        func_decl = self.functions.get(expr.name.name)
+        fixed_arg_count = len(func_decl.params) if func_decl is not None else len(expr.args)
+        stack_varargs = func_decl is not None and func_decl.is_variadic and len(expr.args) > fixed_arg_count
+        stack_bytes = 0
+        temp_arg_bytes = len(expr.args) * 16
+
         for arg in expr.args:
             self.gen_expr(arg)
             self.push_x0()
 
-        for index in range(len(expr.args) - 1, -1, -1):
-            self.pop_reg(self.ARG_REGS_64[index])
+        if stack_varargs:
+            stack_count = len(expr.args) - fixed_arg_count
+            stack_bytes = (stack_count * 8 + 15) & ~15
+            self.emit("    mov x10, sp")
+            self.emit(f"    sub sp, sp, #{stack_bytes}")
+            for index in range(len(expr.args) - 1, fixed_arg_count - 1, -1):
+                offset = (len(expr.args) - 1 - index) * 16
+                self.emit(f"    ldr x9, [x10, #{offset}]")
+                self.emit(f"    str x9, [sp, #{(index - fixed_arg_count) * 8}]")
+            for index in range(fixed_arg_count - 1, -1, -1):
+                offset = (len(expr.args) - 1 - index) * 16
+                self.emit(f"    ldr {self.ARG_REGS_64[index]}, [x10, #{offset}]")
+        else:
+            for index in range(fixed_arg_count - 1, -1, -1):
+                self.pop_reg(self.ARG_REGS_64[index])
 
         self.emit(f"    bl {self.mangle(expr.name.name)}")
+        if stack_bytes:
+            self.emit(f"    add sp, sp, #{stack_bytes + temp_arg_bytes}")
