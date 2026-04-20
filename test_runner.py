@@ -31,6 +31,7 @@ APPLE_PHASE1_TESTS = (
     "positive/phase1/004_subtraction.c",
     "positive/phase1/008_negation.c",
     "positive/phase1/011_local_var.c",
+    "positive/phase1/012_multiple_vars.c",
     "positive/phase1/013_if_true.c",
     "positive/phase1/014_if_false.c",
     "positive/phase1/015_if_else.c",
@@ -40,7 +41,11 @@ APPLE_PHASE1_TESTS = (
     "positive/phase1/019_while_loop.c",
     "positive/phase1/021_function_call.c",
     "positive/phase1/022_recursive_factorial.c",
+    "positive/phase1/025_logical_not.c",
     "positive/phase1/026_nested_if.c",
+    "positive/phase1/027_complex_expr.c",
+    "positive/phase1/028_parenthesized_expr.c",
+    "positive/phase1/034_var_assignment.c",
 )
 
 NAMED_SUITES = {
