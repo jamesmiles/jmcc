@@ -158,14 +158,14 @@ class Arm64AppleCodeGen:
                     size *= dim.value
         return max(1, size)
 
-    def clone_type(self, type_spec, pointer_depth=None):
+    def clone_type(self, type_spec, pointer_depth=None, array_sizes=None):
         if type_spec is None:
             return None
         return TypeSpec(
             base=type_spec.base,
             pointer_depth=type_spec.pointer_depth if pointer_depth is None else pointer_depth,
             is_unsigned=type_spec.is_unsigned,
-            array_sizes=type_spec.array_sizes,
+            array_sizes=type_spec.array_sizes if array_sizes is None else array_sizes,
             struct_def=type_spec.struct_def,
             enum_def=type_spec.enum_def,
         )
@@ -173,6 +173,17 @@ class Arm64AppleCodeGen:
     def emit_symbol_addr(self, symbol: str, reg: str = "x0"):
         self.emit(f"    adrp {reg}, {symbol}@PAGE")
         self.emit(f"    add {reg}, {reg}, {symbol}@PAGEOFF")
+
+    def element_type(self, type_spec):
+        if type_spec is None:
+            return None
+        if type_spec.is_array():
+            if type_spec.array_sizes and len(type_spec.array_sizes) > 1:
+                return self.clone_type(type_spec, array_sizes=type_spec.array_sizes[1:])
+            return self.clone_type(type_spec, array_sizes=None)
+        if type_spec.is_pointer():
+            return self.clone_type(type_spec, pointer_depth=max(type_spec.pointer_depth - 1, 0), array_sizes=None)
+        return None
 
     def get_expr_type(self, expr: Expr):
         if isinstance(expr, Identifier):
@@ -198,9 +209,7 @@ class Arm64AppleCodeGen:
             array_type = self.get_expr_type(expr.array)
             if array_type is None:
                 return None
-            if array_type.is_array() or array_type.is_pointer():
-                return self.clone_type(array_type, pointer_depth=max(array_type.pointer_depth - 1, 0))
-            return None
+            return self.element_type(array_type)
         if isinstance(expr, MemberAccess):
             obj_type = self.get_expr_type(expr.obj)
             if obj_type is None:
@@ -760,6 +769,9 @@ class Arm64AppleCodeGen:
             elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
                 self.emit("    strb w1, [x0]")
                 self.emit("    and w0, w1, #0xff")
+            elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
+                self.emit("    strh w1, [x0]")
+                self.emit("    and w0, w1, #0xffff")
             else:
                 self.emit("    str w1, [x0]")
                 self.emit("    mov w0, w1")
@@ -964,17 +976,19 @@ class Arm64AppleCodeGen:
             else:
                 self.gen_expr(expr.array)
         else:
-            self.gen_expr(expr.array)
+            array_type = self.get_expr_type(expr.array)
+            if self.is_array_type(array_type):
+                self.gen_lvalue_addr(expr.array)
+            else:
+                self.gen_expr(expr.array)
 
         self.push_x0()
         self.gen_expr(expr.index)
         self.emit("    sxtw x0, w0")
         self.pop_reg("x1")
 
-        if isinstance(expr.array, Identifier):
-            elem_size = self.element_size(self.get_var_type(expr.array.name))
-        else:
-            elem_size = 4
+        elem_type = self.element_type(array_type)
+        elem_size = self.total_size(elem_type)
 
         if elem_size != 1:
             self.emit(f"    mov x2, #{elem_size}")
@@ -986,6 +1000,8 @@ class Arm64AppleCodeGen:
         result_type = self.get_expr_type(expr)
         if result_type is not None and result_type.base == "char" and not result_type.is_pointer():
             self.emit("    ldrb w0, [x0]")
+        elif result_type is not None and result_type.base == "short" and not result_type.is_pointer():
+            self.emit("    ldrh w0, [x0]" if result_type.is_unsigned else "    ldrsh w0, [x0]")
         elif result_type is not None and result_type.is_pointer():
             self.emit("    ldr x0, [x0]")
         else:
@@ -1016,6 +1032,8 @@ class Arm64AppleCodeGen:
             return
         if member_type is not None and member_type.base == "char" and not member_type.is_pointer():
             self.emit("    ldrb w0, [x0]")
+        elif member_type is not None and member_type.base == "short" and not member_type.is_pointer():
+            self.emit("    ldrh w0, [x0]" if member_type.is_unsigned else "    ldrsh w0, [x0]")
         elif member_type is not None and member_type.is_pointer():
             self.emit("    ldr x0, [x0]")
         else:
