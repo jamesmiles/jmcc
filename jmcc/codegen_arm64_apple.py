@@ -158,14 +158,14 @@ class Arm64AppleCodeGen:
                     size *= dim.value
         return max(1, size)
 
-    def clone_type(self, type_spec, pointer_depth=None, array_sizes=None):
+    def clone_type(self, type_spec, pointer_depth=None, array_sizes=...):
         if type_spec is None:
             return None
         return TypeSpec(
             base=type_spec.base,
             pointer_depth=type_spec.pointer_depth if pointer_depth is None else pointer_depth,
             is_unsigned=type_spec.is_unsigned,
-            array_sizes=type_spec.array_sizes if array_sizes is None else array_sizes,
+            array_sizes=type_spec.array_sizes if array_sizes is ... else array_sizes,
             struct_def=type_spec.struct_def,
             enum_def=type_spec.enum_def,
         )
