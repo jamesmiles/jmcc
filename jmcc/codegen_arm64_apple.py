@@ -10,10 +10,12 @@ from .ast_nodes import (
     BreakStmt,
     CaseStmt,
     ContinueStmt,
+    CastExpr,
     DoWhileStmt,
     EnumDecl,
     Expr,
     ExprStmt,
+    FloatLiteral,
     ForStmt,
     FuncCall,
     FuncDecl,
@@ -24,6 +26,7 @@ from .ast_nodes import (
     IntLiteral,
     LabelStmt,
     MemberAccess,
+    CommaExpr,
     NullStmt,
     Program,
     ReturnStmt,
@@ -54,6 +57,8 @@ class Arm64AppleCodeGen:
         self.label_count = 0
         self.locals: Dict[str, int] = {}
         self.local_types: Dict[str, object] = {}
+        self.static_locals: Dict[str, str] = {}
+        self.static_local_decls: Dict[str, VarDecl] = {}
         self.globals: Dict[str, GlobalVarDecl] = {}
         self.functions: Dict[str, FuncDecl] = {}
         self.string_literals: Dict[str, str] = {}
@@ -82,6 +87,10 @@ class Arm64AppleCodeGen:
     def user_label(self, name: str) -> str:
         func_name = self.current_func.name if self.current_func is not None else "global"
         return f"Luser_{func_name}_{name}"
+
+    def static_local_label(self, name: str) -> str:
+        func_name = self.current_func.name if self.current_func is not None else "global"
+        return f"Lstatic_{func_name}_{name}"
 
     def string_label(self, value: str) -> str:
         if value not in self.string_literals:
@@ -139,6 +148,16 @@ class Arm64AppleCodeGen:
             return max(1, scalar_type)
         return max(1, type_spec.size_bytes(self.target))
 
+    def total_size(self, type_spec) -> int:
+        if type_spec is None:
+            return 4
+        size = type_spec.size_bytes(self.target)
+        if type_spec.is_array():
+            for dim in type_spec.array_sizes or []:
+                if isinstance(dim, IntLiteral):
+                    size *= dim.value
+        return max(1, size)
+
     def clone_type(self, type_spec, pointer_depth=None):
         if type_spec is None:
             return None
@@ -151,15 +170,30 @@ class Arm64AppleCodeGen:
             enum_def=type_spec.enum_def,
         )
 
+    def emit_symbol_addr(self, symbol: str, reg: str = "x0"):
+        self.emit(f"    adrp {reg}, {symbol}@PAGE")
+        self.emit(f"    add {reg}, {reg}, {symbol}@PAGEOFF")
+
     def get_expr_type(self, expr: Expr):
         if isinstance(expr, Identifier):
-            return self.get_var_type(expr.name)
+            var_type = self.get_var_type(expr.name)
+            if var_type is not None:
+                return var_type
+            if expr.name in self.functions:
+                return TypeSpec(base="void", pointer_depth=1)
+            return None
         if isinstance(expr, IntLiteral):
             return TypeSpec(base="int")
+        if isinstance(expr, FloatLiteral):
+            return TypeSpec(base="float" if expr.is_single else "double")
         if isinstance(expr, StringLiteral):
             return TypeSpec(base="char", pointer_depth=1)
         if isinstance(expr, Assignment):
             return self.get_expr_type(expr.target)
+        if isinstance(expr, CastExpr):
+            return expr.target_type
+        if isinstance(expr, CommaExpr):
+            return self.get_expr_type(expr.exprs[-1]) if expr.exprs else TypeSpec(base="int")
         if isinstance(expr, ArrayAccess):
             array_type = self.get_expr_type(expr.array)
             if array_type is None:
@@ -198,11 +232,12 @@ class Arm64AppleCodeGen:
         return TypeSpec(base="int")
 
     def generate(self, program: Program) -> str:
-        self.globals = {
-            decl.name: decl
-            for decl in program.declarations
-            if isinstance(decl, GlobalVarDecl)
-        }
+        self.globals = {}
+        for decl in program.declarations:
+            if isinstance(decl, GlobalVarDecl):
+                existing = self.globals.get(decl.name)
+                if existing is None or (existing.type_spec.is_extern and not decl.type_spec.is_extern):
+                    self.globals[decl.name] = decl
         self.functions = {
             decl.name: decl
             for decl in program.declarations
@@ -221,19 +256,19 @@ class Arm64AppleCodeGen:
                 )
 
         for decl in self.globals.values():
-            if decl.init is not None and not isinstance(decl.init, IntLiteral):
-                self.error(
-                    "arm64-apple-darwin backend only supports integer literal global initializers",
-                    decl.line,
-                    decl.col,
-                )
+            if decl.type_spec.is_extern:
+                continue
+            self.emit_global_decl(
+                self.mangle(decl.name),
+                decl.type_spec,
+                decl.init,
+                decl.line,
+                decl.col,
+                exported=not decl.type_spec.is_static,
+            )
 
-            self.emit("")
-            self.emit("    .data")
-            self.emit("    .p2align 2")
-            self.emit(f"    .globl {self.mangle(decl.name)}")
-            self.label(self.mangle(decl.name))
-            self.emit(f"    .long {decl.init.value if decl.init is not None else 0}")
+        for label, decl in self.static_local_decls.items():
+            self.emit_global_decl(label, decl.type_spec, decl.init, decl.line, decl.col, exported=False)
 
         if self.string_literals:
             self.emit("")
@@ -243,6 +278,40 @@ class Arm64AppleCodeGen:
                 self.label(label)
                 self.emit(f'    .asciz "{self.escape_string(value)}"')
         return "\n".join(self.output) + "\n"
+
+    def emit_global_decl(self, label: str, type_spec, init, line: int, col: int, exported: bool = True):
+        self.emit("")
+        self.emit("    .data")
+        self.emit("    .p2align 2")
+        if exported:
+            self.emit(f"    .globl {label}")
+        self.label(label)
+
+        if init is None:
+            self.emit(f"    .zero {self.total_size(type_spec)}")
+            return
+
+        if isinstance(init, IntLiteral):
+            size = type_spec.size_bytes(self.target)
+            if size <= 1:
+                self.emit(f"    .byte {init.value & 0xff}")
+            elif size <= 2:
+                self.emit(f"    .short {init.value & 0xffff}")
+            elif size <= 4:
+                self.emit(f"    .long {init.value & 0xffffffff}")
+            else:
+                self.emit(f"    .quad {init.value}")
+            return
+
+        if isinstance(init, StringLiteral) and type_spec is not None and type_spec.is_array() and type_spec.base == "char":
+            self.emit(f'    .asciz "{self.escape_string(init.value)}"')
+            return
+
+        self.error(
+            "arm64-apple-darwin backend does not yet support this global initializer",
+            line,
+            col,
+        )
 
     def alloc_slot(self, name: str, type_spec=None):
         if name in self.locals:
@@ -256,7 +325,12 @@ class Arm64AppleCodeGen:
             for child in stmt.stmts:
                 self.collect_locals_stmt(child)
         elif isinstance(stmt, VarDecl):
-            self.alloc_slot(stmt.name, stmt.type_spec)
+            if stmt.type_spec is not None and stmt.type_spec.is_static:
+                self.static_locals[stmt.name] = self.static_local_label(stmt.name)
+                self.static_local_decls[self.static_locals[stmt.name]] = stmt
+                self.local_types[stmt.name] = stmt.type_spec
+            else:
+                self.alloc_slot(stmt.name, stmt.type_spec)
         elif isinstance(stmt, IfStmt):
             self.collect_locals_stmt(stmt.then_body)
             if stmt.else_body is not None:
@@ -289,6 +363,7 @@ class Arm64AppleCodeGen:
     def prepare_function(self, func: FuncDecl):
         self.locals = {}
         self.local_types = {}
+        self.static_locals = {}
         self.stack_size = 0
         for param in func.params:
             self.alloc_slot(param.name, param.type_spec)
@@ -307,13 +382,32 @@ class Arm64AppleCodeGen:
             else:
                 self.emit(f"    ldur w0, [x29, #-{self.locals[name]}]")
             return
+        if name in self.static_locals:
+            label = self.static_locals[name]
+            self.emit_symbol_addr(label, "x9")
+            if self.is_array_type(type_spec) or (type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer()):
+                self.emit("    mov x0, x9")
+            elif self.is_pointer_type(type_spec):
+                self.emit("    ldr x0, [x9]")
+            elif type_spec is not None and type_spec.base == "char":
+                self.emit("    ldrb w0, [x9]")
+            else:
+                self.emit("    ldr w0, [x9]")
+            return
         if name in self.globals:
             mangled = self.mangle(name)
-            self.emit(f"    adrp x9, {mangled}@PAGE")
-            if self.is_pointer_type(type_spec):
-                self.emit(f"    ldr x0, [x9, {mangled}@PAGEOFF]")
+            self.emit_symbol_addr(mangled, "x9")
+            if self.is_array_type(type_spec) or (type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer()):
+                self.emit("    mov x0, x9")
+            elif self.is_pointer_type(type_spec):
+                self.emit("    ldr x0, [x9]")
+            elif type_spec is not None and type_spec.base == "char":
+                self.emit("    ldrb w0, [x9]")
             else:
-                self.emit(f"    ldr w0, [x9, {mangled}@PAGEOFF]")
+                self.emit("    ldr w0, [x9]")
+            return
+        if name in self.functions:
+            self.emit_symbol_addr(self.mangle(name))
             return
         self.error(f"undefined variable '{name}'", line, col)
 
@@ -324,10 +418,15 @@ class Arm64AppleCodeGen:
         if name in self.locals:
             self.emit(f"    stur {src_reg}, [x29, #-{self.locals[name]}]")
             return
+        if name in self.static_locals:
+            label = self.static_locals[name]
+            self.emit_symbol_addr(label, "x9")
+            self.emit(f"    str {src_reg}, [x9]")
+            return
         if name in self.globals:
             mangled = self.mangle(name)
-            self.emit(f"    adrp x9, {mangled}@PAGE")
-            self.emit(f"    str {src_reg}, [x9, {mangled}@PAGEOFF]")
+            self.emit_symbol_addr(mangled, "x9")
+            self.emit(f"    str {src_reg}, [x9]")
             return
         self.error(f"undefined variable '{name}'", line, col)
 
@@ -349,7 +448,8 @@ class Arm64AppleCodeGen:
 
         self.emit("")
         self.emit("    .p2align 2")
-        self.emit(f"    .globl {self.mangle(func.name)}")
+        if func.return_type is None or not func.return_type.is_static:
+            self.emit(f"    .globl {self.mangle(func.name)}")
         self.label(self.mangle(func.name))
         self.emit("    stp x29, x30, [sp, #-16]!")
         self.emit("    mov x29, sp")
@@ -428,6 +528,8 @@ class Arm64AppleCodeGen:
         self.emit(f"    b {self.return_label}")
 
     def gen_var_decl(self, decl: VarDecl):
+        if decl.type_spec is not None and decl.type_spec.is_static:
+            return
         if decl.type_spec is not None and decl.init is None:
             if decl.type_spec.is_array() or (decl.type_spec.is_struct() and not decl.type_spec.is_pointer()):
                 return
@@ -572,8 +674,14 @@ class Arm64AppleCodeGen:
     def gen_expr(self, expr: Expr):
         if isinstance(expr, IntLiteral):
             self.emit(f"    mov w0, #{expr.value}")
+        elif isinstance(expr, FloatLiteral):
+            self.error("floating-point expressions are not yet supported on arm64-apple-darwin", expr.line, expr.col)
         elif isinstance(expr, Identifier):
             self.load_var(expr.name, expr.line, expr.col)
+        elif isinstance(expr, CastExpr):
+            self.gen_cast(expr)
+        elif isinstance(expr, CommaExpr):
+            self.gen_comma(expr)
         elif isinstance(expr, StringLiteral):
             self.gen_string_literal(expr)
         elif isinstance(expr, SizeofExpr):
@@ -827,10 +935,14 @@ class Arm64AppleCodeGen:
             if expr.name in self.locals:
                 self.emit(f"    sub x0, x29, #{self.locals[expr.name]}")
                 return
+            if expr.name in self.static_locals:
+                self.emit_symbol_addr(self.static_locals[expr.name])
+                return
             if expr.name in self.globals:
-                mangled = self.mangle(expr.name)
-                self.emit(f"    adrp x0, {mangled}@PAGE")
-                self.emit(f"    add x0, x0, {mangled}@PAGEOFF")
+                self.emit_symbol_addr(self.mangle(expr.name))
+                return
+            if expr.name in self.functions:
+                self.emit_symbol_addr(self.mangle(expr.name))
                 return
             self.error(f"undefined variable '{expr.name}'", expr.line, expr.col)
         elif isinstance(expr, UnaryOp) and expr.op == "*":
@@ -912,23 +1024,35 @@ class Arm64AppleCodeGen:
     def sizeof_value(self, expr: SizeofExpr) -> int:
         if expr.is_type:
             type_spec = expr.operand
-        elif isinstance(expr.operand, Identifier):
-            type_spec = self.get_var_type(expr.operand.name)
         else:
-            self.error("arm64-apple-darwin sizeof currently supports only type names and identifiers", expr.line, expr.col)
+            type_spec = self.get_expr_type(expr.operand)
 
         if type_spec is None:
             self.error("arm64-apple-darwin could not resolve sizeof operand type", expr.line, expr.col)
 
-        size = type_spec.size_bytes(self.target)
-        if type_spec.is_array():
-            for dim in type_spec.array_sizes or []:
-                if isinstance(dim, IntLiteral):
-                    size *= dim.value
-        return size
+        return self.total_size(type_spec)
 
     def gen_sizeof(self, expr: SizeofExpr):
         self.emit(f"    mov w0, #{self.sizeof_value(expr)}")
+
+    def gen_cast(self, expr: CastExpr):
+        self.gen_expr(expr.operand)
+        target = expr.target_type
+        if target is None:
+            return
+        if target.is_pointer():
+            return
+        size = target.size_bytes(self.target)
+        if size <= 1:
+            self.emit("    and w0, w0, #0xff")
+        elif size <= 2:
+            self.emit("    and w0, w0, #0xffff")
+        elif size <= 4:
+            self.emit("    mov w0, w0")
+
+    def gen_comma(self, expr: CommaExpr):
+        for subexpr in expr.exprs:
+            self.gen_expr(subexpr)
 
     def gen_string_literal(self, expr: StringLiteral):
         label = self.string_label(expr.value)
@@ -936,16 +1060,19 @@ class Arm64AppleCodeGen:
         self.emit(f"    add x0, x0, {label}@PAGEOFF")
 
     def gen_func_call(self, expr: FuncCall):
-        if not isinstance(expr.name, Identifier):
-            self.error("only direct function calls are currently supported on arm64-apple-darwin", expr.line, expr.col)
         if len(expr.args) > len(self.ARG_REGS_64):
             self.error("more than 8 integer call arguments are not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
-        func_decl = self.functions.get(expr.name.name)
+        direct_name = expr.name.name if isinstance(expr.name, Identifier) and expr.name.name in self.functions else None
+        func_decl = self.functions.get(direct_name) if direct_name is not None else None
         fixed_arg_count = len(func_decl.params) if func_decl is not None else len(expr.args)
         stack_varargs = func_decl is not None and func_decl.is_variadic and len(expr.args) > fixed_arg_count
         stack_bytes = 0
         temp_arg_bytes = len(expr.args) * 16
+
+        if direct_name is None:
+            self.gen_expr(expr.name)
+            self.push_x0()
 
         for arg in expr.args:
             self.gen_expr(arg)
@@ -967,6 +1094,10 @@ class Arm64AppleCodeGen:
             for index in range(fixed_arg_count - 1, -1, -1):
                 self.pop_reg(self.ARG_REGS_64[index])
 
-        self.emit(f"    bl {self.mangle(expr.name.name)}")
+        if direct_name is not None:
+            self.emit(f"    bl {self.mangle(direct_name)}")
+        else:
+            self.pop_reg("x16")
+            self.emit("    blr x16")
         if stack_bytes:
             self.emit(f"    add sp, sp, #{stack_bytes + temp_arg_bytes}")
