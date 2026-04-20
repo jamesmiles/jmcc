@@ -497,7 +497,41 @@ class Arm64AppleCodeGen:
 
     def gen_assignment(self, expr: Assignment):
         if expr.op != "=":
-            self.error("only simple assignments are currently supported on arm64-apple-darwin", expr.line, expr.col)
+            if not isinstance(expr.target, Identifier):
+                self.error("compound assignments currently require identifier targets on arm64-apple-darwin", expr.line, expr.col)
+            self.load_var(expr.target.name, expr.line, expr.col)
+            self.push_x0()
+            self.gen_expr(expr.value)
+            self.pop_reg("x1")
+
+            op = expr.op[:-1]
+            if op == "+":
+                self.emit("    add w0, w1, w0")
+            elif op == "-":
+                self.emit("    sub w0, w1, w0")
+            elif op == "*":
+                self.emit("    mul w0, w1, w0")
+            elif op == "/":
+                self.emit("    sdiv w0, w1, w0")
+            elif op == "%":
+                self.emit("    sdiv w2, w1, w0")
+                self.emit("    msub w0, w2, w0, w1")
+            elif op == "&":
+                self.emit("    and w0, w1, w0")
+            elif op == "|":
+                self.emit("    orr w0, w1, w0")
+            elif op == "^":
+                self.emit("    eor w0, w1, w0")
+            elif op == "<<":
+                self.emit("    lslv w0, w1, w0")
+            elif op == ">>":
+                self.emit("    asrv w0, w1, w0")
+            else:
+                self.error(f"compound assignment '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
+
+            self.store_var(expr.target.name, line=expr.line, col=expr.col)
+            return
+
         self.gen_expr(expr.value)
         if isinstance(expr.target, Identifier):
             self.store_var(expr.target.name, line=expr.line, col=expr.col)
@@ -583,6 +617,38 @@ class Arm64AppleCodeGen:
             self.error(f"binary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
     def gen_unary_op(self, expr: UnaryOp):
+        if expr.op in {"++", "--"}:
+            if not isinstance(expr.operand, Identifier):
+                self.error(f"unary operator '{expr.op}' currently requires an identifier operand on arm64-apple-darwin", expr.line, expr.col)
+
+            name = expr.operand.name
+            type_spec = self.get_var_type(name)
+            is_pointer = self.is_pointer_type(type_spec)
+            delta = self.element_size(type_spec) if is_pointer else 1
+            self.load_var(name, expr.line, expr.col)
+
+            if expr.prefix:
+                if is_pointer:
+                    op = "add" if expr.op == "++" else "sub"
+                    self.emit(f"    {op} x0, x0, #{delta}")
+                    self.store_var(name, src_reg="x0", line=expr.line, col=expr.col)
+                else:
+                    op = "add" if expr.op == "++" else "sub"
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
+            else:
+                if is_pointer:
+                    self.emit("    mov x1, x0")
+                    op = "add" if expr.op == "++" else "sub"
+                    self.emit(f"    {op} x1, x1, #{delta}")
+                    self.store_var(name, src_reg="x1", line=expr.line, col=expr.col)
+                else:
+                    self.emit("    mov w1, w0")
+                    op = "add" if expr.op == "++" else "sub"
+                    self.emit(f"    {op} w1, w1, #1")
+                    self.store_var(name, src_reg="w1", line=expr.line, col=expr.col)
+            return
+
         self.gen_expr(expr.operand)
 
         if expr.op == "-":

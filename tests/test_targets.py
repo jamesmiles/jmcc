@@ -8,6 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "tests" / "positive" / "phase1" / "001_return_zero.c"
 ARM64_PHASE2_FRONTIERS = (
+    ROOT / "tests" / "positive" / "phase2" / "001_compound_assign.c",
+    ROOT / "tests" / "positive" / "phase2" / "002_prefix_inc.c",
+    ROOT / "tests" / "positive" / "phase2" / "003_postfix_inc.c",
     ROOT / "tests" / "positive" / "phase2" / "004_ternary.c",
     ROOT / "tests" / "positive" / "phase2" / "005_switch.c",
     ROOT / "tests" / "positive" / "phase2" / "006_switch_fallthrough.c",
