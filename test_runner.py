@@ -61,6 +61,7 @@ APPLE_PHASE1_TESTS = (
     "positive/phase2/004_ternary.c",
     "positive/phase2/007_break_loop.c",
     "positive/phase2/008_continue_loop.c",
+    "positive/phase2/016_goto.c",
 )
 
 NAMED_SUITES = {
