@@ -305,6 +305,17 @@ class Arm64AppleCodeGen:
             self.emit("    sub w0, w1, w0")
         elif expr.op == "*":
             self.emit("    mul w0, w1, w0")
+        elif expr.op == "/":
+            self.emit("    sdiv w0, w1, w0")
+        elif expr.op == "%":
+            self.emit("    sdiv w2, w1, w0")
+            self.emit("    msub w0, w2, w0, w1")
+        elif expr.op == "&":
+            self.emit("    and w0, w1, w0")
+        elif expr.op == "|":
+            self.emit("    orr w0, w1, w0")
+        elif expr.op == "^":
+            self.emit("    eor w0, w1, w0")
         elif expr.op == "<<":
             self.emit("    lslv w0, w1, w0")
         elif expr.op == ">>":
