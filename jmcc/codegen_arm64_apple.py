@@ -6,6 +6,8 @@ from .ast_nodes import (
     Assignment,
     BinaryOp,
     Block,
+    BreakStmt,
+    ContinueStmt,
     DoWhileStmt,
     Expr,
     ExprStmt,
@@ -13,12 +15,16 @@ from .ast_nodes import (
     FuncCall,
     FuncDecl,
     GlobalVarDecl,
+    GotoStmt,
     Identifier,
     IfStmt,
     IntLiteral,
+    LabelStmt,
+    NullStmt,
     Program,
     ReturnStmt,
     Stmt,
+    TernaryOp,
     UnaryOp,
     VarDecl,
     WhileStmt,
@@ -41,6 +47,8 @@ class Arm64AppleCodeGen:
         self.stack_size = 0
         self.return_label: Optional[str] = None
         self.current_func: Optional[FuncDecl] = None
+        self.break_labels: List[str] = []
+        self.continue_labels: List[str] = []
 
     def error(self, msg, line=0, col=0):
         raise CodeGenError(msg, line=line, col=col)
@@ -57,6 +65,10 @@ class Arm64AppleCodeGen:
 
     def mangle(self, name: str) -> str:
         return f"{self.target.layout.global_symbol_prefix}{name}"
+
+    def user_label(self, name: str) -> str:
+        func_name = self.current_func.name if self.current_func is not None else "global"
+        return f"Luser_{func_name}_{name}"
 
     def generate(self, program: Program) -> str:
         self.globals = {
@@ -116,7 +128,10 @@ class Arm64AppleCodeGen:
             if stmt.init is not None:
                 self.collect_locals_stmt(stmt.init)
             self.collect_locals_stmt(stmt.body)
-        elif isinstance(stmt, (ReturnStmt, ExprStmt)):
+        elif isinstance(stmt, LabelStmt):
+            if stmt.stmt is not None:
+                self.collect_locals_stmt(stmt.stmt)
+        elif isinstance(stmt, (ReturnStmt, ExprStmt, BreakStmt, ContinueStmt, GotoStmt, NullStmt)):
             return
         else:
             self.error(
@@ -213,6 +228,22 @@ class Arm64AppleCodeGen:
             self.gen_do_while(stmt)
         elif isinstance(stmt, ForStmt):
             self.gen_for(stmt)
+        elif isinstance(stmt, BreakStmt):
+            if not self.break_labels:
+                self.error("break outside loop", stmt.line, stmt.col)
+            self.emit(f"    b {self.break_labels[-1]}")
+        elif isinstance(stmt, ContinueStmt):
+            if not self.continue_labels:
+                self.error("continue outside loop", stmt.line, stmt.col)
+            self.emit(f"    b {self.continue_labels[-1]}")
+        elif isinstance(stmt, GotoStmt):
+            self.emit(f"    b {self.user_label(stmt.label)}")
+        elif isinstance(stmt, LabelStmt):
+            self.label(self.user_label(stmt.label))
+            if stmt.stmt is not None:
+                self.gen_stmt(stmt.stmt)
+        elif isinstance(stmt, NullStmt):
+            return
         else:
             self.error(
                 f"arm64-apple-darwin backend does not yet support statement type {type(stmt).__name__}",
@@ -251,27 +282,38 @@ class Arm64AppleCodeGen:
     def gen_while(self, stmt: WhileStmt):
         start_label = self.new_label("while")
         end_label = self.new_label("whileend")
+        self.break_labels.append(end_label)
+        self.continue_labels.append(start_label)
         self.label(start_label)
         self.gen_expr(stmt.condition)
         self.emit(f"    cbz w0, {end_label}")
         self.gen_stmt(stmt.body)
         self.emit(f"    b {start_label}")
         self.label(end_label)
+        self.break_labels.pop()
+        self.continue_labels.pop()
 
     def gen_do_while(self, stmt: DoWhileStmt):
         start_label = self.new_label("dowhile")
+        cond_label = self.new_label("dowhilecond")
         end_label = self.new_label("dowhileend")
-
+        self.break_labels.append(end_label)
+        self.continue_labels.append(cond_label)
         self.label(start_label)
         self.gen_stmt(stmt.body)
+        self.label(cond_label)
         self.gen_expr(stmt.condition)
         self.emit(f"    cbnz w0, {start_label}")
         self.label(end_label)
+        self.break_labels.pop()
+        self.continue_labels.pop()
 
     def gen_for(self, stmt: ForStmt):
         cond_label = self.new_label("for")
         update_label = self.new_label("forupd")
         end_label = self.new_label("forend")
+        self.break_labels.append(end_label)
+        self.continue_labels.append(update_label)
 
         if stmt.init is not None:
             self.gen_stmt(stmt.init)
@@ -288,6 +330,8 @@ class Arm64AppleCodeGen:
             self.gen_expr(stmt.update)
         self.emit(f"    b {cond_label}")
         self.label(end_label)
+        self.break_labels.pop()
+        self.continue_labels.pop()
 
     def gen_expr(self, expr: Expr):
         if isinstance(expr, IntLiteral):
@@ -300,6 +344,8 @@ class Arm64AppleCodeGen:
             self.gen_binary_op(expr)
         elif isinstance(expr, UnaryOp):
             self.gen_unary_op(expr)
+        elif isinstance(expr, TernaryOp):
+            self.gen_ternary(expr)
         elif isinstance(expr, FuncCall):
             self.gen_func_call(expr)
         else:
@@ -396,6 +442,17 @@ class Arm64AppleCodeGen:
             self.emit("    mvn w0, w0")
         else:
             self.error(f"unary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
+
+    def gen_ternary(self, expr: TernaryOp):
+        false_label = self.new_label("ternfalse")
+        end_label = self.new_label("ternend")
+        self.gen_expr(expr.condition)
+        self.emit(f"    cbz w0, {false_label}")
+        self.gen_expr(expr.true_expr)
+        self.emit(f"    b {end_label}")
+        self.label(false_label)
+        self.gen_expr(expr.false_expr)
+        self.label(end_label)
 
     def gen_func_call(self, expr: FuncCall):
         if not isinstance(expr.name, Identifier):

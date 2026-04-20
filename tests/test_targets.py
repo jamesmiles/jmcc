@@ -7,13 +7,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "tests" / "positive" / "phase1" / "001_return_zero.c"
+ARM64_PHASE2_FRONTIERS = (
+    ROOT / "tests" / "positive" / "phase2" / "004_ternary.c",
+    ROOT / "tests" / "positive" / "phase2" / "007_break_loop.c",
+    ROOT / "tests" / "positive" / "phase2" / "008_continue_loop.c",
+    ROOT / "tests" / "positive" / "phase2" / "016_goto.c",
+)
 NEGATION_SOURCE = ROOT / "tests" / "positive" / "phase1" / "008_negation.c"
 
 
 class TargetCliTests(unittest.TestCase):
     def run_jmcc(self, *args):
+        return self.run_jmcc_source(SOURCE, *args)
+
+    def run_jmcc_source(self, source, *args):
         return subprocess.run(
-            [sys.executable, str(ROOT / "jmcc.py"), str(SOURCE), *args],
+            [sys.executable, str(ROOT / "jmcc.py"), str(source), *args],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -83,6 +92,22 @@ class TargetCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(output_path.exists())
             self.assertIn(".globl _main", output_path.read_text())
+
+    def test_arm64_apple_darwin_compiles_phase2_frontiers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for source in ARM64_PHASE2_FRONTIERS:
+                output_path = Path(temp_dir) / f"{source.stem}.s"
+                result = self.run_jmcc_source(
+                    source,
+                    "--target",
+                    "arm64-apple-darwin",
+                    "-o",
+                    str(output_path),
+                )
+
+                self.assertEqual(result.returncode, 0, f"{source.name}: {result.stderr}")
+                self.assertTrue(output_path.exists(), source.name)
+                self.assertIn(".globl _main", output_path.read_text(), source.name)
 
 
 if __name__ == "__main__":
