@@ -51,7 +51,7 @@ class Arm64AppleCodeGen:
         return f"L{prefix}{self.label_count}"
 
     def mangle(self, name: str) -> str:
-        return f"_{name}"
+        return f"{self.target.layout.global_symbol_prefix}{name}"
 
     def generate(self, program: Program) -> str:
         self.emit("    .text")

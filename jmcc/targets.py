@@ -1,6 +1,7 @@
 """Target selection and metadata for JMCC."""
 
 from dataclasses import dataclass
+from .target_layout import ARM64_APPLE_DARWIN_LAYOUT, X86_64_LINUX_LAYOUT, TargetLayout
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class TargetSpec:
     object_format: str
     backend_name: str
     is_implemented: bool
+    layout: TargetLayout
 
 
 DEFAULT_TARGET_TRIPLE = "x86_64-linux"
@@ -29,6 +31,7 @@ _SUPPORTED_TARGETS = {
         object_format="elf",
         backend_name="x86_64_linux",
         is_implemented=True,
+        layout=X86_64_LINUX_LAYOUT,
     ),
     "arm64-apple-darwin": TargetSpec(
         triple="arm64-apple-darwin",
@@ -39,6 +42,7 @@ _SUPPORTED_TARGETS = {
         object_format="macho",
         backend_name="arm64_apple_darwin",
         is_implemented=True,
+        layout=ARM64_APPLE_DARWIN_LAYOUT,
     ),
 }
 
@@ -56,8 +60,10 @@ def supported_target_names() -> list[str]:
     return sorted(_SUPPORTED_TARGETS.keys())
 
 
-def resolve_target(target: str | None) -> TargetSpec:
+def resolve_target(target: TargetSpec | str | None) -> TargetSpec:
     """Resolve a target name or alias to a canonical target spec."""
+    if isinstance(target, TargetSpec):
+        return target
     if target is None:
         canonical = DEFAULT_TARGET_TRIPLE
     else:
