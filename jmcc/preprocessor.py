@@ -602,8 +602,22 @@ typedef struct {
     int si_signo;
     int si_errno;
     int si_code;
-    int __pad0;
-    int _pad[28];
+    int si_trapno;
+    int si_pid;
+    int si_uid;
+    int si_status;
+    long si_utime;
+    long si_stime;
+    long si_value;
+    long si_int;
+    void *si_ptr;
+    long si_overrun;
+    long si_timerid;
+    void *si_addr;
+    long si_band;
+    int si_fd;
+    short si_addr_lsb;
+    int __si_pad;
 } siginfo_t;
 struct sigaction {
     void (*sa_sigaction)(int, siginfo_t *, void *);
@@ -724,6 +738,7 @@ unsigned int ntohl(unsigned int netlong);
 #define SOCK_RAW 3
 #define AF_UNSPEC 0
 #define AF_UNIX 1
+#define AF_LOCAL AF_UNIX
 #define AF_INET 2
 #define AF_INET6 10
 #define PF_UNSPEC 0

@@ -885,9 +885,11 @@ class Parser:
             operand = self.parse_unary()
             return UnaryOp(op="*", operand=operand, line=t.line, col=t.col)
 
-        # sizeof
+        # sizeof / _Alignof
         if self.at(TokenType.SIZEOF):
             return self.parse_sizeof()
+        if self.at(TokenType.ALIGNOF):
+            return self.parse_alignof()
 
         # Cast or compound literal: (type) expr  OR  (type){ init }
         if self.at(TokenType.LPAREN) and self.is_cast():
@@ -980,6 +982,13 @@ class Parser:
         else:
             operand = self.parse_unary()
             return SizeofExpr(operand=operand, is_type=False, line=t.line, col=t.col)
+
+    def parse_alignof(self) -> Expr:
+        t = self.advance()  # _Alignof / __alignof__
+        self.expect(TokenType.LPAREN, "'('")
+        type_spec = self.parse_type_spec()
+        self.expect(TokenType.RPAREN, "')'")
+        return AlignofExpr(operand=type_spec, is_type=True, line=t.line, col=t.col)
 
     def parse_postfix(self) -> Expr:
         expr = self.parse_primary()

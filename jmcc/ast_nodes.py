@@ -396,6 +396,12 @@ class SizeofExpr(Expr):
 
 
 @dataclass
+class AlignofExpr(Expr):
+    operand: Optional[Union[Expr, "TypeSpec"]] = None
+    is_type: bool = False
+
+
+@dataclass
 class GenericAssoc:
     type_spec: Optional['TypeSpec'] = None  # None means 'default'
     expr: Optional[Expr] = None

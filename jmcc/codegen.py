@@ -1277,6 +1277,18 @@ class CodeGen:
             if cond is None:
                 return None
             return self._try_eval_const(expr.true_expr if cond else expr.false_expr)
+        if isinstance(expr, AlignofExpr):
+            if expr.is_type:
+                ts = expr.operand
+                size = ts.size_bytes()
+                if ts.struct_def and not ts.is_pointer():
+                    size = ts.struct_def.size_bytes()
+                align = 1
+                for p in (1, 2, 4, 8):
+                    if size >= p:
+                        align = p
+                return align
+            return None
         if isinstance(expr, SizeofExpr):
             if expr.is_type:
                 ts = expr.operand
@@ -3079,6 +3091,18 @@ class CodeGen:
         elif isinstance(expr, LabelAddrExpr):
             fname = expr.func_name or (self.current_func.name if self.current_func else "")
             self.emit(f"    leaq .Luser_{fname}_{expr.label}(%rip), %rax")
+
+        elif isinstance(expr, AlignofExpr):
+            ts = expr.operand
+            size = ts.size_bytes() if expr.is_type else 4
+            if expr.is_type and ts.struct_def and not ts.is_pointer():
+                size = ts.struct_def.size_bytes()
+            # Alignment = min(size, 8), rounded to nearest power of 2
+            align = 1
+            for p in (1, 2, 4, 8):
+                if size >= p:
+                    align = p
+            self.emit(f"    movl ${align}, %eax")
 
         else:
             self.error(f"unhandled expression type: {type(expr).__name__}", expr.line, expr.col)

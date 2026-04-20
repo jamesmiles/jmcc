@@ -161,6 +161,8 @@ KEYWORDS = {
     "while": TokenType.WHILE,
     "_Alignas": TokenType.ALIGNAS,
     "_Alignof": TokenType.ALIGNOF,
+    "__alignof__": TokenType.ALIGNOF,
+    "__alignof": TokenType.ALIGNOF,
     "_Atomic": TokenType.ATOMIC,
     "_Bool": TokenType.BOOL,
     "_Complex": TokenType.COMPLEX,
