@@ -42,10 +42,14 @@ APPLE_PHASE1_TESTS = (
     "positive/phase1/020_for_loop.c",
     "positive/phase1/021_function_call.c",
     "positive/phase1/022_recursive_factorial.c",
+    "positive/phase1/023_logical_and.c",
+    "positive/phase1/024_logical_or.c",
     "positive/phase1/025_logical_not.c",
     "positive/phase1/026_nested_if.c",
     "positive/phase1/027_complex_expr.c",
     "positive/phase1/028_parenthesized_expr.c",
+    "positive/phase1/031_shift_left.c",
+    "positive/phase1/032_shift_right.c",
     "positive/phase1/034_var_assignment.c",
 )
 
