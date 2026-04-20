@@ -1,19 +1,24 @@
-"""JMCC Code Generator - Emits x86-64 assembly (AT&T syntax) for Linux."""
+"""JMCC code generation for the selected target backend."""
 
 from typing import List, Dict, Optional, Tuple
 from .ast_nodes import *
 from .errors import CodeGenError
+from .targets import DEFAULT_TARGET_TRIPLE, TargetSpec, resolve_target
 
 
 class CodeGen:
-    """Generates x86-64 assembly from an AST."""
+    """Generates assembly from an AST."""
 
     # System V AMD64 ABI: integer args in rdi, rsi, rdx, rcx, r8, r9
     ARG_REGS_64 = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"]
     ARG_REGS_32 = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"]
     ARG_REGS_8 = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"]
 
-    def __init__(self):
+    def __init__(self, target: Optional[TargetSpec | str] = None):
+        self.target = resolve_target(target) if target is None or isinstance(target, str) else target
+        if not self.target.is_implemented or self.target.triple != DEFAULT_TARGET_TRIPLE:
+            raise CodeGenError(f"code generation for target '{self.target.triple}' is not implemented")
+
         self.output: List[str] = []
         self.string_literals: List[Tuple[str, str]] = []  # (label, value)
         self.string_label_cache: Dict[Tuple[str, bool], str] = {}  # (value, wide) -> label

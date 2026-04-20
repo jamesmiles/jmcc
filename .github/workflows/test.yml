@@ -2,7 +2,7 @@ name: JMCC Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
   pull_request:
     branches: [main]
 
@@ -10,7 +10,8 @@ env:
   JMCC_TIMEOUT: "30"
 
 jobs:
-  test:
+  test-linux-x86_64:
+    name: Linux x86_64
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -25,6 +26,9 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y libx11-dev libxext-dev
 
+      - name: Run compiler target tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: Run full suite
         run: |
           mkdir -p output
@@ -34,5 +38,31 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-linux-x86_64
           path: output/
+          if-no-files-found: ignore
+
+  test-macos-arm64:
+    name: macOS arm64 experimental
+    runs-on: macos-15
+    continue-on-error: true
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run compiler target tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Upload compiler artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-macos-arm64
+          path: output/
+          if-no-files-found: ignore
