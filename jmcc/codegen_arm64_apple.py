@@ -6,11 +6,13 @@ from .ast_nodes import (
     Assignment,
     BinaryOp,
     Block,
+    DoWhileStmt,
     Expr,
     ExprStmt,
     ForStmt,
     FuncCall,
     FuncDecl,
+    GlobalVarDecl,
     Identifier,
     IfStmt,
     IntLiteral,
@@ -35,6 +37,7 @@ class Arm64AppleCodeGen:
         self.output: List[str] = []
         self.label_count = 0
         self.locals: Dict[str, int] = {}
+        self.globals: Dict[str, GlobalVarDecl] = {}
         self.stack_size = 0
         self.return_label: Optional[str] = None
         self.current_func: Optional[FuncDecl] = None
@@ -56,16 +59,37 @@ class Arm64AppleCodeGen:
         return f"{self.target.layout.global_symbol_prefix}{name}"
 
     def generate(self, program: Program) -> str:
+        self.globals = {
+            decl.name: decl
+            for decl in program.declarations
+            if isinstance(decl, GlobalVarDecl)
+        }
+
         self.emit("    .text")
         for decl in program.declarations:
             if isinstance(decl, FuncDecl) and decl.body is not None:
                 self.gen_function(decl)
-            elif not isinstance(decl, FuncDecl):
+            elif not isinstance(decl, (FuncDecl, GlobalVarDecl)):
                 self.error(
                     f"arm64-apple-darwin backend does not yet support top-level declaration type {type(decl).__name__}",
                     getattr(decl, "line", 0),
                     getattr(decl, "col", 0),
                 )
+
+        for decl in self.globals.values():
+            if decl.init is not None and not isinstance(decl.init, IntLiteral):
+                self.error(
+                    "arm64-apple-darwin backend only supports integer literal global initializers",
+                    decl.line,
+                    decl.col,
+                )
+
+            self.emit("")
+            self.emit("    .data")
+            self.emit("    .p2align 2")
+            self.emit(f"    .globl {self.mangle(decl.name)}")
+            self.label(self.mangle(decl.name))
+            self.emit(f"    .long {decl.init.value if decl.init is not None else 0}")
         return "\n".join(self.output) + "\n"
 
     def alloc_slot(self, name: str):
@@ -85,6 +109,8 @@ class Arm64AppleCodeGen:
             if stmt.else_body is not None:
                 self.collect_locals_stmt(stmt.else_body)
         elif isinstance(stmt, WhileStmt):
+            self.collect_locals_stmt(stmt.body)
+        elif isinstance(stmt, DoWhileStmt):
             self.collect_locals_stmt(stmt.body)
         elif isinstance(stmt, ForStmt):
             if stmt.init is not None:
@@ -108,14 +134,26 @@ class Arm64AppleCodeGen:
         self.stack_size = (self.stack_size + 15) & ~15
 
     def load_var(self, name: str, line=0, col=0):
-        if name not in self.locals:
-            self.error(f"undefined variable '{name}'", line, col)
-        self.emit(f"    ldur w0, [x29, #-{self.locals[name]}]")
+        if name in self.locals:
+            self.emit(f"    ldur w0, [x29, #-{self.locals[name]}]")
+            return
+        if name in self.globals:
+            mangled = self.mangle(name)
+            self.emit(f"    adrp x9, {mangled}@PAGE")
+            self.emit(f"    ldr w0, [x9, {mangled}@PAGEOFF]")
+            return
+        self.error(f"undefined variable '{name}'", line, col)
 
     def store_var(self, name: str, src_reg="w0", line=0, col=0):
-        if name not in self.locals:
-            self.error(f"undefined variable '{name}'", line, col)
-        self.emit(f"    stur {src_reg}, [x29, #-{self.locals[name]}]")
+        if name in self.locals:
+            self.emit(f"    stur {src_reg}, [x29, #-{self.locals[name]}]")
+            return
+        if name in self.globals:
+            mangled = self.mangle(name)
+            self.emit(f"    adrp x9, {mangled}@PAGE")
+            self.emit(f"    str {src_reg}, [x9, {mangled}@PAGEOFF]")
+            return
+        self.error(f"undefined variable '{name}'", line, col)
 
     def push_x0(self):
         self.emit("    str x0, [sp, #-16]!")
@@ -171,6 +209,8 @@ class Arm64AppleCodeGen:
             self.gen_if(stmt)
         elif isinstance(stmt, WhileStmt):
             self.gen_while(stmt)
+        elif isinstance(stmt, DoWhileStmt):
+            self.gen_do_while(stmt)
         elif isinstance(stmt, ForStmt):
             self.gen_for(stmt)
         else:
@@ -216,6 +256,16 @@ class Arm64AppleCodeGen:
         self.emit(f"    cbz w0, {end_label}")
         self.gen_stmt(stmt.body)
         self.emit(f"    b {start_label}")
+        self.label(end_label)
+
+    def gen_do_while(self, stmt: DoWhileStmt):
+        start_label = self.new_label("dowhile")
+        end_label = self.new_label("dowhileend")
+
+        self.label(start_label)
+        self.gen_stmt(stmt.body)
+        self.gen_expr(stmt.condition)
+        self.emit(f"    cbnz w0, {start_label}")
         self.label(end_label)
 
     def gen_for(self, stmt: ForStmt):
