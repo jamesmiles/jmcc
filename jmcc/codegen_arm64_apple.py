@@ -3,10 +3,12 @@
 from typing import Dict, List, Optional
 
 from .ast_nodes import (
+    ArrayAccess,
     Assignment,
     BinaryOp,
     Block,
     BreakStmt,
+    CaseStmt,
     ContinueStmt,
     DoWhileStmt,
     Expr,
@@ -24,6 +26,7 @@ from .ast_nodes import (
     Program,
     ReturnStmt,
     Stmt,
+    SwitchStmt,
     TernaryOp,
     UnaryOp,
     VarDecl,
@@ -43,6 +46,7 @@ class Arm64AppleCodeGen:
         self.output: List[str] = []
         self.label_count = 0
         self.locals: Dict[str, int] = {}
+        self.local_types: Dict[str, object] = {}
         self.globals: Dict[str, GlobalVarDecl] = {}
         self.stack_size = 0
         self.return_label: Optional[str] = None
@@ -69,6 +73,47 @@ class Arm64AppleCodeGen:
     def user_label(self, name: str) -> str:
         func_name = self.current_func.name if self.current_func is not None else "global"
         return f"Luser_{func_name}_{name}"
+
+    def slot_size(self, type_spec) -> int:
+        if type_spec is not None and type_spec.is_array():
+            size = type_spec.size_bytes(self.target)
+            for dim in type_spec.array_sizes or []:
+                if isinstance(dim, IntLiteral):
+                    size *= dim.value
+            return (size + 7) & ~7
+        return 8
+
+    def get_var_type(self, name: str):
+        if name in self.local_types:
+            return self.local_types[name]
+        if name in self.globals:
+            return self.globals[name].type_spec
+        return None
+
+    def is_pointer_type(self, type_spec) -> bool:
+        return type_spec is not None and type_spec.is_pointer()
+
+    def is_array_type(self, type_spec) -> bool:
+        return type_spec is not None and type_spec.is_array()
+
+    def element_size(self, type_spec) -> int:
+        if type_spec is None:
+            return 4
+        if type_spec.is_array():
+            return max(1, type_spec.size_bytes(self.target))
+        if type_spec.is_pointer():
+            if type_spec.pointer_depth > 1:
+                return self.target.layout.pointer_size
+            scalar_type = type_spec.struct_def.size_bytes(self.target) if type_spec.struct_def else {
+                "_Bool": 1,
+                "char": 1,
+                "short": 2,
+                "int": 4,
+                "long": 8,
+                "long long": 8,
+            }.get(type_spec.base, 4)
+            return max(1, scalar_type)
+        return max(1, type_spec.size_bytes(self.target))
 
     def generate(self, program: Program) -> str:
         self.globals = {
@@ -104,18 +149,19 @@ class Arm64AppleCodeGen:
             self.emit(f"    .long {decl.init.value if decl.init is not None else 0}")
         return "\n".join(self.output) + "\n"
 
-    def alloc_slot(self, name: str):
+    def alloc_slot(self, name: str, type_spec=None):
         if name in self.locals:
             return
-        self.stack_size += 8
+        self.stack_size += self.slot_size(type_spec)
         self.locals[name] = self.stack_size
+        self.local_types[name] = type_spec
 
     def collect_locals_stmt(self, stmt: Stmt):
         if isinstance(stmt, Block):
             for child in stmt.stmts:
                 self.collect_locals_stmt(child)
         elif isinstance(stmt, VarDecl):
-            self.alloc_slot(stmt.name)
+            self.alloc_slot(stmt.name, stmt.type_spec)
         elif isinstance(stmt, IfStmt):
             self.collect_locals_stmt(stmt.then_body)
             if stmt.else_body is not None:
@@ -128,6 +174,11 @@ class Arm64AppleCodeGen:
             if stmt.init is not None:
                 self.collect_locals_stmt(stmt.init)
             self.collect_locals_stmt(stmt.body)
+        elif isinstance(stmt, SwitchStmt):
+            self.collect_locals_stmt(stmt.body)
+        elif isinstance(stmt, CaseStmt):
+            if stmt.stmt is not None:
+                self.collect_locals_stmt(stmt.stmt)
         elif isinstance(stmt, LabelStmt):
             if stmt.stmt is not None:
                 self.collect_locals_stmt(stmt.stmt)
@@ -142,24 +193,37 @@ class Arm64AppleCodeGen:
 
     def prepare_function(self, func: FuncDecl):
         self.locals = {}
+        self.local_types = {}
         self.stack_size = 0
         for param in func.params:
-            self.alloc_slot(param.name)
+            self.alloc_slot(param.name, param.type_spec)
         self.collect_locals_stmt(func.body)
         self.stack_size = (self.stack_size + 15) & ~15
 
     def load_var(self, name: str, line=0, col=0):
+        type_spec = self.get_var_type(name)
         if name in self.locals:
-            self.emit(f"    ldur w0, [x29, #-{self.locals[name]}]")
+            if self.is_array_type(type_spec):
+                self.emit(f"    sub x0, x29, #{self.locals[name]}")
+            elif self.is_pointer_type(type_spec):
+                self.emit(f"    ldur x0, [x29, #-{self.locals[name]}]")
+            else:
+                self.emit(f"    ldur w0, [x29, #-{self.locals[name]}]")
             return
         if name in self.globals:
             mangled = self.mangle(name)
             self.emit(f"    adrp x9, {mangled}@PAGE")
-            self.emit(f"    ldr w0, [x9, {mangled}@PAGEOFF]")
+            if self.is_pointer_type(type_spec):
+                self.emit(f"    ldr x0, [x9, {mangled}@PAGEOFF]")
+            else:
+                self.emit(f"    ldr w0, [x9, {mangled}@PAGEOFF]")
             return
         self.error(f"undefined variable '{name}'", line, col)
 
-    def store_var(self, name: str, src_reg="w0", line=0, col=0):
+    def store_var(self, name: str, src_reg=None, line=0, col=0):
+        type_spec = self.get_var_type(name)
+        if src_reg is None:
+            src_reg = "x0" if self.is_pointer_type(type_spec) else "w0"
         if name in self.locals:
             self.emit(f"    stur {src_reg}, [x29, #-{self.locals[name]}]")
             return
@@ -196,7 +260,8 @@ class Arm64AppleCodeGen:
             self.emit(f"    sub sp, sp, #{self.stack_size}")
 
         for index, param in enumerate(func.params):
-            self.store_var(param.name, src_reg=self.ARG_REGS_32[index], line=func.line, col=func.col)
+            arg_reg = self.ARG_REGS_64[index] if self.is_pointer_type(param.type_spec) else self.ARG_REGS_32[index]
+            self.store_var(param.name, src_reg=arg_reg, line=func.line, col=func.col)
 
         self.gen_block(func.body)
         self.emit("    mov w0, #0")
@@ -228,6 +293,13 @@ class Arm64AppleCodeGen:
             self.gen_do_while(stmt)
         elif isinstance(stmt, ForStmt):
             self.gen_for(stmt)
+        elif isinstance(stmt, SwitchStmt):
+            self.gen_switch(stmt)
+        elif isinstance(stmt, CaseStmt):
+            if hasattr(stmt, "_label"):
+                self.label(stmt._label)
+            if stmt.stmt is not None:
+                self.gen_stmt(stmt.stmt)
         elif isinstance(stmt, BreakStmt):
             if not self.break_labels:
                 self.error("break outside loop", stmt.line, stmt.col)
@@ -259,6 +331,8 @@ class Arm64AppleCodeGen:
         self.emit(f"    b {self.return_label}")
 
     def gen_var_decl(self, decl: VarDecl):
+        if decl.type_spec is not None and decl.type_spec.is_array() and decl.init is None:
+            return
         if decl.init is None:
             self.emit("    mov w0, #0")
         else:
@@ -333,11 +407,77 @@ class Arm64AppleCodeGen:
         self.break_labels.pop()
         self.continue_labels.pop()
 
+    def gen_switch(self, stmt: SwitchStmt):
+        end_label = self.new_label("switchend")
+        self.break_labels.append(end_label)
+
+        self.gen_expr(stmt.expr)
+        self.emit("    mov w10, w0")
+
+        body = stmt.body
+        if not isinstance(body, Block):
+            if isinstance(body, CaseStmt):
+                body = Block(stmts=[body], line=body.line, col=body.col)
+            else:
+                self.emit(f"    b {end_label}")
+                self.gen_stmt(body)
+                self.label(end_label)
+                self.break_labels.pop()
+                return
+        stmt.body = body
+
+        cases = []
+        default_label = None
+
+        def collect_cases(node):
+            nonlocal default_label
+            if isinstance(node, CaseStmt):
+                label = self.new_label("case")
+                if node.is_default:
+                    default_label = label
+                else:
+                    cases.append((node, label))
+                node._label = label
+                if node.stmt is not None:
+                    collect_cases(node.stmt)
+            elif isinstance(node, Block):
+                for child in node.stmts:
+                    collect_cases(child)
+            elif isinstance(node, IfStmt):
+                if node.then_body is not None:
+                    collect_cases(node.then_body)
+                if node.else_body is not None:
+                    collect_cases(node.else_body)
+            elif isinstance(node, WhileStmt):
+                collect_cases(node.body)
+            elif isinstance(node, DoWhileStmt):
+                collect_cases(node.body)
+            elif isinstance(node, ForStmt):
+                collect_cases(node.body)
+            elif isinstance(node, LabelStmt) and node.stmt is not None:
+                collect_cases(node.stmt)
+
+        collect_cases(stmt.body)
+
+        for case_stmt, label in cases:
+            value = case_stmt.value
+            if not isinstance(value, IntLiteral):
+                self.error("arm64-apple-darwin switch currently requires integer literal case labels", case_stmt.line, case_stmt.col)
+            self.emit(f"    cmp w10, #{value.value}")
+            self.emit(f"    b.eq {label}")
+
+        self.emit(f"    b {default_label or end_label}")
+        self.gen_stmt(stmt.body)
+        self.label(end_label)
+        self.break_labels.pop()
+
     def gen_expr(self, expr: Expr):
         if isinstance(expr, IntLiteral):
             self.emit(f"    mov w0, #{expr.value}")
         elif isinstance(expr, Identifier):
             self.load_var(expr.name, expr.line, expr.col)
+        elif isinstance(expr, ArrayAccess):
+            self.gen_array_access(expr)
         elif isinstance(expr, Assignment):
             self.gen_assignment(expr)
         elif isinstance(expr, BinaryOp):
@@ -356,10 +496,22 @@ class Arm64AppleCodeGen:
             )
 
     def gen_assignment(self, expr: Assignment):
-        if expr.op != "=" or not isinstance(expr.target, Identifier):
-            self.error("only simple identifier assignments are currently supported on arm64-apple-darwin", expr.line, expr.col)
+        if expr.op != "=":
+            self.error("only simple assignments are currently supported on arm64-apple-darwin", expr.line, expr.col)
         self.gen_expr(expr.value)
-        self.store_var(expr.target.name, line=expr.line, col=expr.col)
+        if isinstance(expr.target, Identifier):
+            self.store_var(expr.target.name, line=expr.line, col=expr.col)
+            return
+
+        if isinstance(expr.target, (UnaryOp, ArrayAccess)):
+            self.push_x0()
+            self.gen_lvalue_addr(expr.target)
+            self.pop_reg("x1")
+            self.emit("    str w1, [x0]")
+            self.emit("    mov w0, w1")
+            return
+
+        self.error("assignment target is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
     def gen_binary_op(self, expr: BinaryOp):
         if expr.op == "&&":
@@ -440,6 +592,10 @@ class Arm64AppleCodeGen:
             self.emit("    cset w0, eq")
         elif expr.op == "~":
             self.emit("    mvn w0, w0")
+        elif expr.op == "&":
+            self.gen_lvalue_addr(expr.operand)
+        elif expr.op == "*":
+            self.emit("    ldr w0, [x0]")
         else:
             self.error(f"unary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
@@ -453,6 +609,54 @@ class Arm64AppleCodeGen:
         self.label(false_label)
         self.gen_expr(expr.false_expr)
         self.label(end_label)
+
+    def gen_lvalue_addr(self, expr: Expr):
+        if isinstance(expr, Identifier):
+            if expr.name in self.locals:
+                self.emit(f"    sub x0, x29, #{self.locals[expr.name]}")
+                return
+            if expr.name in self.globals:
+                mangled = self.mangle(expr.name)
+                self.emit(f"    adrp x0, {mangled}@PAGE")
+                self.emit(f"    add x0, x0, {mangled}@PAGEOFF")
+                return
+            self.error(f"undefined variable '{expr.name}'", expr.line, expr.col)
+        elif isinstance(expr, UnaryOp) and expr.op == "*":
+            self.gen_expr(expr.operand)
+            return
+        elif isinstance(expr, ArrayAccess):
+            self.gen_array_addr(expr)
+            return
+        self.error("expression is not an lvalue", expr.line, expr.col)
+
+    def gen_array_addr(self, expr: ArrayAccess):
+        if isinstance(expr.array, Identifier):
+            array_type = self.get_var_type(expr.array.name)
+            if self.is_array_type(array_type):
+                self.gen_lvalue_addr(expr.array)
+            else:
+                self.gen_expr(expr.array)
+        else:
+            self.gen_expr(expr.array)
+
+        self.push_x0()
+        self.gen_expr(expr.index)
+        self.emit("    sxtw x0, w0")
+        self.pop_reg("x1")
+
+        if isinstance(expr.array, Identifier):
+            elem_size = self.element_size(self.get_var_type(expr.array.name))
+        else:
+            elem_size = 4
+
+        if elem_size != 1:
+            self.emit(f"    mov x2, #{elem_size}")
+            self.emit("    mul x0, x0, x2")
+        self.emit("    add x0, x1, x0")
+
+    def gen_array_access(self, expr: ArrayAccess):
+        self.gen_array_addr(expr)
+        self.emit("    ldr w0, [x0]")
 
     def gen_func_call(self, expr: FuncCall):
         if not isinstance(expr.name, Identifier):

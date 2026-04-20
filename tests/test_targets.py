@@ -9,9 +9,16 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "tests" / "positive" / "phase1" / "001_return_zero.c"
 ARM64_PHASE2_FRONTIERS = (
     ROOT / "tests" / "positive" / "phase2" / "004_ternary.c",
+    ROOT / "tests" / "positive" / "phase2" / "005_switch.c",
+    ROOT / "tests" / "positive" / "phase2" / "006_switch_fallthrough.c",
     ROOT / "tests" / "positive" / "phase2" / "007_break_loop.c",
     ROOT / "tests" / "positive" / "phase2" / "008_continue_loop.c",
+    ROOT / "tests" / "positive" / "phase2" / "009_pointer_basic.c",
+    ROOT / "tests" / "positive" / "phase2" / "010_pointer_write.c",
+    ROOT / "tests" / "positive" / "phase2" / "011_array_basic.c",
+    ROOT / "tests" / "positive" / "phase2" / "012_array_sum.c",
     ROOT / "tests" / "positive" / "phase2" / "016_goto.c",
+    ROOT / "tests" / "positive" / "phase2" / "020_pointer_arithmetic.c",
 )
 NEGATION_SOURCE = ROOT / "tests" / "positive" / "phase1" / "008_negation.c"
 
