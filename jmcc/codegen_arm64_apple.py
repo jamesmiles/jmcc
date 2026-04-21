@@ -438,11 +438,14 @@ class Arm64AppleCodeGen:
                 return self.get_expr_type(selected)
             return TypeSpec(base="int")
         if isinstance(expr, TernaryOp):
-            # The type of a ternary is the type of its branches (use true branch)
-            t = self.get_expr_type(expr.true_expr)
-            if t is not None:
-                return t
-            return self.get_expr_type(expr.false_expr)
+            # C usual arithmetic conversions: if either branch is fp, result is fp
+            t_true = self.get_expr_type(expr.true_expr)
+            t_false = self.get_expr_type(expr.false_expr)
+            if self.is_fp_type(t_true):
+                return t_true
+            if self.is_fp_type(t_false):
+                return t_false
+            return t_true if t_true is not None else t_false
         if isinstance(expr, BuiltinVaArg):
             return expr.target_type
         if isinstance(expr, FuncCall):
@@ -457,6 +460,10 @@ class Arm64AppleCodeGen:
                 func_decl = self.functions.get(fn)
                 if func_decl is not None and func_decl.return_type is not None:
                     return func_decl.return_type
+                # Indirect call via function pointer variable
+                var_type = self.get_var_type(fn)
+                if var_type is not None and (var_type.is_func_ptr or var_type.is_func_type):
+                    return TypeSpec(base=var_type.base, is_unsigned=var_type.is_unsigned)
             return TypeSpec(base="int")
         return TypeSpec(base="int")
 
@@ -621,6 +628,49 @@ class Arm64AppleCodeGen:
                     count *= v
         return count
 
+    def _type_scalar_count(self, type_spec) -> int:
+        """Count how many flat scalar initializer slots are needed for this type."""
+        if self.is_array_type(type_spec):
+            elem = self.element_type(type_spec)
+            if type_spec.array_sizes and type_spec.array_sizes[0] is not None:
+                dim = type_spec.array_sizes[0]
+                if isinstance(dim, IntLiteral):
+                    n = dim.value
+                else:
+                    n = self._global_const_int(dim)
+                    if n is None:
+                        return 1
+            else:
+                return 1
+            return n * self._type_scalar_count(elem)
+        elif type_spec.is_struct() and not type_spec.is_pointer() and type_spec.struct_def is not None:
+            return sum(self._type_scalar_count(m.type_spec) for m in type_spec.struct_def.members)
+        else:
+            return 1
+
+    def _restructure_flat_init(self, type_spec, init, line: int, col: int):
+        """Convert a flat InitList into properly nested InitList for a struct type.
+        C allows struct arrays with no inner braces — values fill members in order."""
+        from jmcc.ast_nodes import InitItem as _II
+        struct_def = type_spec.struct_def
+        all_members = struct_def.members
+        flat_values = [item.value for item in init.items]
+        flat_cursor = 0
+        new_items = []
+        for member in all_members:
+            if flat_cursor >= len(flat_values):
+                break
+            count = self._type_scalar_count(member.type_spec)
+            if count == 1:
+                new_items.append(_II(value=flat_values[flat_cursor]))
+                flat_cursor += 1
+            else:
+                sub_vals = flat_values[flat_cursor:flat_cursor + count]
+                flat_cursor += count
+                sub_init = InitList(items=[_II(value=v) for v in sub_vals], line=line, col=col)
+                new_items.append(_II(value=sub_init))
+        return InitList(items=new_items, line=line, col=col)
+
     def emit_global_array_init(self, type_spec, init: InitList, line: int, col: int):
         """Emit global array data, supporting both braced and flat initializers."""
         elem_type = self.element_type(type_spec)
@@ -641,6 +691,13 @@ class Arm64AppleCodeGen:
         has_flat_items = (is_nested_array and init.items
                           and not isinstance(init.items[0].value, (InitList, StringLiteral)))
 
+        # Detect flat init for array-of-structs (no inner braces per element).
+        is_struct_elem = (elem_type.is_struct() and not elem_type.is_pointer()
+                          and elem_type.struct_def is not None)
+        has_flat_struct = (is_struct_elem and init.items
+                           and not isinstance(init.items[0].value, InitList)
+                           and len(init.items) > len(elem_type.struct_def.members))
+
         if has_flat_items:
             # Flat initializer: consume items sequentially across all sub-arrays
             flat_items = [item.value for item in init.items]
@@ -652,6 +709,26 @@ class Arm64AppleCodeGen:
                 from jmcc.ast_nodes import InitItem
                 dummy = InitList(items=[InitItem(value=v) for v in sub_items], line=line, col=col)
                 self.emit_global_array_init(elem_type, dummy, line, col)
+            return
+
+        if has_flat_struct:
+            # Flat init for array of structs: group scalars into per-element InitLists.
+            from jmcc.ast_nodes import InitItem
+            scalars_per = self._type_scalar_count(elem_type)
+            flat_values = [item.value for item in init.items]
+            # For implicit-size arrays (PT cases[] = {...}), count was set to len(init.items).
+            # Recompute to the actual number of struct elements.
+            if scalars_per > 0:
+                count = len(flat_values) // scalars_per
+            flat_cursor = 0
+            for _ in range(count):
+                if flat_cursor >= len(flat_values):
+                    self.emit_global_value(elem_type, None, line, col)
+                else:
+                    sub_vals = flat_values[flat_cursor:flat_cursor + scalars_per]
+                    flat_cursor += scalars_per
+                    elem_init = InitList(items=[InitItem(value=v) for v in sub_vals], line=line, col=col)
+                    self.emit_global_value(elem_type, elem_init, line, col)
             return
 
         # Build index-to-value map respecting designator_index (e.g. {5, [2]=2, 3} -> {0:5, 2:2, 3:3})
@@ -855,6 +932,10 @@ class Arm64AppleCodeGen:
         if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
             if not isinstance(value, InitList):
                 self.error("arm64-apple-darwin backend expects struct init list here", line, col)
+            # Restructure flat (brace-elided) initializer if needed
+            if (type_spec.struct_def is not None
+                    and len(value.items) > len(type_spec.struct_def.members)):
+                value = self._restructure_flat_init(type_spec, value, line, col)
             self.emit_global_struct_init(type_spec, value, line, col)
             return
         if value is None:
@@ -1322,6 +1403,8 @@ class Arm64AppleCodeGen:
                     return self.mangle(name)
                 if name in self.static_locals:
                     return self.static_locals[name]
+                if name in self.functions:
+                    return self.mangle(name)
             elif isinstance(operand, ArrayAccess):
                 arr = operand.array
                 idx = self._global_const_int(operand.index)
@@ -1458,8 +1541,16 @@ class Arm64AppleCodeGen:
                     )
                     int_idx += 1  # consumed an extra register
                 else:
-                    # > 16 bytes: hidden pointer in x{int_idx} — store as pointer for now
-                    self.emit_local_store("stur", f"x{int_idx}", dest_offset)
+                    # > 16 bytes: caller passes a hidden pointer in x{int_idx}.
+                    # Copy struct_size bytes from the pointer to our local stack space.
+                    for off in range(0, struct_size, 8):
+                        remaining = struct_size - off
+                        if remaining >= 8:
+                            self.emit(f"    ldr x10, [x{int_idx}, #{off}]")
+                            self.emit_local_store("stur", "x10", dest_offset - off)
+                        else:
+                            self.emit(f"    ldr w10, [x{int_idx}, #{off}]")
+                            self.emit_local_store("stur", "w10", dest_offset - off)
                 int_idx += 1
             else:
                 arg_reg = self.ARG_REGS_64[int_idx] if (self.is_pointer_type(param.type_spec) or self.is_wide_scalar(param.type_spec)) else self.ARG_REGS_32[int_idx]
@@ -1553,6 +1644,14 @@ class Arm64AppleCodeGen:
                         self.emit("    ldr x0, [x9]")
                         rem = struct_size - 8
                         self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
+            elif ret_type is not None and self.is_fp_type(ret_type):
+                expr_type = self.get_expr_type(stmt.value)
+                if not self.is_fp_type(expr_type):
+                    # Integer expression returned from a double/float function: coerce to fp
+                    if expr_type is not None and expr_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(expr_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(expr_type) else "    scvtf d0, w0")
             elif ret_type is not None and self.is_wide_scalar(ret_type):
                 expr_type = self.get_expr_type(stmt.value)
                 if expr_type is None or not (self.is_wide_scalar(expr_type) or expr_type.is_pointer()):
@@ -2798,9 +2897,29 @@ class Arm64AppleCodeGen:
                         self.pop_i128("x0", "x1")
                     return
                 is_pointer = self.is_pointer_type(type_spec)
+                is_fp = self.is_fp_type(type_spec)
                 delta = self.element_size(type_spec) if is_pointer else 1
                 self.load_var(name, expr.line, expr.col)
-                if expr.prefix:
+                if is_fp:
+                    # fp ++ / -- : d0 has current value; use fadd/fsub with 1.0
+                    import struct
+                    bits = struct.unpack('<Q', struct.pack('<d', 1.0))[0]
+                    lbl = self.float_literal_label(bits, 8)
+                    fp_op = "fadd" if expr.op == "++" else "fsub"
+                    if expr.prefix:
+                        self.emit(f"    adrp x9, {lbl}@PAGE")
+                        self.emit(f"    ldr d1, [x9, {lbl}@PAGEOFF]")
+                        self.emit(f"    {fp_op} d0, d0, d1")
+                        self.store_var(name, src_reg="d0", line=expr.line, col=expr.col)
+                    else:
+                        # post: save old d0, compute new, store, result = old
+                        self.push_d0()      # push old d0
+                        self.emit(f"    adrp x9, {lbl}@PAGE")
+                        self.emit(f"    ldr d1, [x9, {lbl}@PAGEOFF]")
+                        self.emit(f"    {fp_op} d0, d0, d1")
+                        self.store_var(name, src_reg="d0", line=expr.line, col=expr.col)
+                        self.pop_d0("d0")   # restore old value as result
+                elif expr.prefix:
                     op = "add" if expr.op == "++" else "sub"
                     if is_pointer:
                         self.emit(f"    {op} x0, x0, #{delta}")
@@ -2950,10 +3069,23 @@ class Arm64AppleCodeGen:
         end_label = self.new_label("ternend")
         self.gen_condition(expr.condition)
         self.emit(f"    cbz w0, {false_label}")
+        true_type = self.get_expr_type(expr.true_expr)
+        false_type = self.get_expr_type(expr.false_expr)
+        need_fp = self.is_fp_type(true_type) or self.is_fp_type(false_type)
         self.gen_expr(expr.true_expr)
+        if need_fp and not self.is_fp_type(true_type):
+            if true_type is not None and true_type.is_unsigned:
+                self.emit("    ucvtf d0, x0" if self.is_wide_scalar(true_type) else "    ucvtf d0, w0")
+            else:
+                self.emit("    scvtf d0, x0" if self.is_wide_scalar(true_type) else "    scvtf d0, w0")
         self.emit(f"    b {end_label}")
         self.label(false_label)
         self.gen_expr(expr.false_expr)
+        if need_fp and not self.is_fp_type(false_type):
+            if false_type is not None and false_type.is_unsigned:
+                self.emit("    ucvtf d0, x0" if self.is_wide_scalar(false_type) else "    ucvtf d0, w0")
+            else:
+                self.emit("    scvtf d0, x0" if self.is_wide_scalar(false_type) else "    scvtf d0, w0")
         self.label(end_label)
 
     def gen_lvalue_addr(self, expr: Expr):
@@ -3468,7 +3600,17 @@ class Arm64AppleCodeGen:
                     self.emit("    mov w0, #0")
                 return
 
-        direct_name = expr.name.name if isinstance(expr.name, Identifier) and expr.name.name in self.functions else None
+        # A bare identifier that is not a local/global variable is treated as a direct external
+        # call (implicit function declaration, K&R-style). If it IS a local/global variable, it's
+        # a function pointer and we load it at runtime.
+        if isinstance(expr.name, Identifier):
+            name = expr.name.name
+            if name in self.functions or (name not in self.locals and name not in self.globals):
+                direct_name = name
+            else:
+                direct_name = None
+        else:
+            direct_name = None
         func_decl = self.functions.get(direct_name) if direct_name is not None else None
         fixed_arg_count = len(func_decl.params) if func_decl is not None else len(expr.args)
         # Apple arm64: variadic args go on the stack; fixed args go in x0-x7 / d0-d7
@@ -3482,7 +3624,16 @@ class Arm64AppleCodeGen:
         temp_arg_bytes = len(expr.args) * 16
 
         if direct_name is None:
-            self.gen_expr(expr.name)
+            # (*fp)(args) is equivalent to fp(args) in C: strip no-op dereferences of
+            # function pointers (pointer_depth==1, no further dereference needed).
+            callee_expr = expr.name
+            while (isinstance(callee_expr, UnaryOp) and callee_expr.op == "*"):
+                inner_type = self.get_expr_type(callee_expr.operand)
+                if inner_type is not None and inner_type.pointer_depth == 1:
+                    callee_expr = callee_expr.operand
+                else:
+                    break
+            self.gen_expr(callee_expr)
             self.push_x0()
 
         # Evaluate all args, pushing them on the stack.
@@ -3505,6 +3656,26 @@ class Arm64AppleCodeGen:
                 continue
             arg_types.append(a_type)
             self.gen_expr(arg)
+            # Coerce argument to match declared parameter type (e.g. int→double, double→int).
+            if param_type is not None and a_type is not None:
+                param_is_fp = self.is_fp_type(param_type) and not param_type.is_pointer()
+                arg_is_fp = self.is_fp_type(a_type) and not a_type.is_pointer()
+                if param_is_fp and not arg_is_fp:
+                    # int/long → float/double: result is in x0/w0, convert to d0
+                    if param_type.base == "float":
+                        self.emit("    scvtf s0, x0")
+                        self.emit("    fcvt d0, s0")
+                    else:
+                        self.emit("    scvtf d0, x0")
+                    a_type = param_type
+                elif not param_is_fp and arg_is_fp:
+                    # float/double → int/long: result is in d0, convert to x0
+                    size = param_type.size_bytes(self.target) if param_type else 8
+                    if size <= 4:
+                        self.emit("    fcvtzs w0, d0")
+                    else:
+                        self.emit("    fcvtzs x0, d0")
+                    a_type = param_type
             if self.is_int128(a_type):
                 self.push_i128()
             elif self.is_fp_type(a_type):
@@ -3570,8 +3741,8 @@ class Arm64AppleCodeGen:
                     fp_idx += 1
                 elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()
                       and not self.is_array_type(a_type)
-                      and a_type.struct_def.size_bytes(self.target) > 8):
-                    # 9-16 byte struct occupies 2 x-registers
+                      and 8 < a_type.struct_def.size_bytes(self.target) <= 16):
+                    # 9-16 byte struct: passed in 2 x-registers
                     reg_assigns.append(('struct2', int_idx))
                     int_idx += 2
                 else:

@@ -1560,6 +1560,8 @@ class Parser:
             struct_def=base_type.struct_def,
             enum_def=base_type.enum_def,
             array_sizes=base_type.array_sizes,
+            is_func_ptr=base_type.is_func_ptr,
+            func_ptr_native_depth=base_type.func_ptr_native_depth,
         )
 
         # Array declaration
