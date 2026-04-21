@@ -210,6 +210,15 @@ class Arm64AppleCodeGen:
     def is_wide_scalar(self, type_spec) -> bool:
         return type_spec is not None and not type_spec.is_pointer() and not self.is_array_type(type_spec) and type_spec.size_bytes(self.target) > 4
 
+    def _is_struct_by_reg_value(self, expr) -> bool:
+        """Returns True if gen_expr(expr) puts struct bytes in x0[/x1] (not an address).
+        This is the case for FuncCall returning a struct ≤ 16 bytes."""
+        if isinstance(expr, FuncCall):
+            func_type = self.get_expr_type(expr)
+            return (func_type is not None and func_type.struct_def is not None and
+                    not func_type.is_pointer() and func_type.struct_def.size_bytes(self.target) <= 16)
+        return False
+
     def literal_is_wide(self, expr: IntLiteral) -> bool:
         return "L" in expr.suffix.upper() or expr.value > 0xFFFFFFFF or expr.value < -(1 << 31)
 
@@ -961,15 +970,42 @@ class Arm64AppleCodeGen:
         if self.stack_size:
             self.emit(f"    sub sp, sp, #{self.stack_size}")
 
-        for index, param in enumerate(func.params):
-            arg_reg = self.ARG_REGS_64[index] if (self.is_pointer_type(param.type_spec) or self.is_wide_scalar(param.type_spec)) else self.ARG_REGS_32[index]
-            self.store_var(param.name, src_reg=arg_reg, line=func.line, col=func.col)
+        int_idx = 0
+        fp_idx = 0
+        for param in func.params:
+            if self.is_fp_type(param.type_spec):
+                self.store_var(param.name, src_reg=f"d{fp_idx}", line=func.line, col=func.col)
+                fp_idx += 1
+            elif (param.type_spec is not None and param.type_spec.is_struct()
+                  and not param.type_spec.is_pointer()):
+                struct_size = param.type_spec.struct_def.size_bytes(self.target)
+                dest_offset = self.locals.get(param.name, 0)
+                if struct_size <= 4:
+                    self.emit_local_store("stur", f"w{int_idx}", dest_offset)
+                elif struct_size <= 8:
+                    self.emit_local_store("stur", f"x{int_idx}", dest_offset)
+                elif struct_size <= 16:
+                    self.emit_local_store("stur", f"x{int_idx}", dest_offset)
+                    rem = struct_size - 8
+                    self.emit_local_store(
+                        "stur",
+                        f"w{int_idx + 1}" if rem <= 4 else f"x{int_idx + 1}",
+                        dest_offset - 8,
+                    )
+                    int_idx += 1  # consumed an extra register
+                else:
+                    # > 16 bytes: hidden pointer in x{int_idx} — store as pointer for now
+                    self.emit_local_store("stur", f"x{int_idx}", dest_offset)
+                int_idx += 1
+            else:
+                arg_reg = self.ARG_REGS_64[int_idx] if (self.is_pointer_type(param.type_spec) or self.is_wide_scalar(param.type_spec)) else self.ARG_REGS_32[int_idx]
+                self.store_var(param.name, src_reg=arg_reg, line=func.line, col=func.col)
+                int_idx += 1
 
         self.gen_block(func.body)
         self.emit("    mov w0, #0")
         self.label(self.return_label)
-        if self.stack_size:
-            self.emit(f"    add sp, sp, #{self.stack_size}")
+        self.emit("    mov sp, x29")
         self.emit("    ldp x29, x30, [sp], #16")
         self.emit("    ret")
 
@@ -1034,7 +1070,21 @@ class Arm64AppleCodeGen:
         else:
             self.gen_expr(stmt.value)
             ret_type = self.current_func.return_type if self.current_func else None
-            if ret_type is not None and self.is_wide_scalar(ret_type):
+            if ret_type is not None and ret_type.is_struct() and not ret_type.is_pointer():
+                # gen_expr put either an address (Identifier/MemberAccess) or bytes (FuncCall)
+                # in x0.  Load struct bytes into x0[/x1] unless already done.
+                if not self._is_struct_by_reg_value(stmt.value):
+                    struct_size = ret_type.struct_def.size_bytes(self.target)
+                    if struct_size <= 4:
+                        self.emit("    ldr w0, [x0]")
+                    elif struct_size <= 8:
+                        self.emit("    ldr x0, [x0]")
+                    elif struct_size <= 16:
+                        self.emit("    mov x9, x0")
+                        self.emit("    ldr x0, [x9]")
+                        rem = struct_size - 8
+                        self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
+            elif ret_type is not None and self.is_wide_scalar(ret_type):
                 expr_type = self.get_expr_type(stmt.value)
                 if expr_type is None or not (self.is_wide_scalar(expr_type) or expr_type.is_pointer()):
                     expr_size = expr_type.size_bytes(self.target) if expr_type is not None else 4
@@ -1071,19 +1121,44 @@ class Arm64AppleCodeGen:
             self.gen_local_struct_init(decl)
             return
         if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and decl.init is not None:
-            # struct var = expr: gen_expr returns source address in x0; copy via memcpy
             self.gen_expr(decl.init)
             struct_size = decl.type_spec.struct_def.size_bytes(self.target)
-            self.push_x0()
-            if decl.name in self.locals:
-                self.emit(f"    sub x0, x29, #{self.locals[decl.name]}")
-            elif decl.name in self.static_locals:
-                self.emit_symbol_addr(self.static_locals[decl.name], "x0")
-            elif decl.name in self.globals:
-                self.emit_symbol_addr(self.mangle(decl.name), "x0")
-            self.pop_reg("x1")
-            self.emit(f"    mov x2, #{struct_size}")
-            self.emit("    bl _memcpy")
+            if self._is_struct_by_reg_value(decl.init):
+                # FuncCall returned bytes in x0[/x1] — store directly
+                if decl.name in self.locals:
+                    dest_offset = self.locals[decl.name]
+                    if struct_size <= 4:
+                        self.emit_local_store("stur", "w0", dest_offset)
+                    elif struct_size <= 8:
+                        self.emit_local_store("stur", "x0", dest_offset)
+                    elif struct_size <= 16:
+                        self.emit_local_store("stur", "x0", dest_offset)
+                        rem = struct_size - 8
+                        self.emit_local_store("stur", "w1" if rem <= 4 else "x1", dest_offset - 8)
+                elif decl.name in self.static_locals:
+                    self.push_x0()
+                    self.emit_symbol_addr(self.static_locals[decl.name], "x0")
+                    self.pop_reg("x1")
+                    self.emit(f"    mov x2, #{struct_size}")
+                    self.emit("    bl _memcpy")
+                elif decl.name in self.globals:
+                    self.push_x0()
+                    self.emit_symbol_addr(self.mangle(decl.name), "x0")
+                    self.pop_reg("x1")
+                    self.emit(f"    mov x2, #{struct_size}")
+                    self.emit("    bl _memcpy")
+            else:
+                # gen_expr returned source address in x0 — copy via memcpy
+                self.push_x0()
+                if decl.name in self.locals:
+                    self.emit(f"    sub x0, x29, #{self.locals[decl.name]}")
+                elif decl.name in self.static_locals:
+                    self.emit_symbol_addr(self.static_locals[decl.name], "x0")
+                elif decl.name in self.globals:
+                    self.emit_symbol_addr(self.mangle(decl.name), "x0")
+                self.pop_reg("x1")
+                self.emit(f"    mov x2, #{struct_size}")
+                self.emit("    bl _memcpy")
             return
         if decl.type_spec is not None and decl.init is None:
             if decl.type_spec.is_array() or (decl.type_spec.is_struct() and not decl.type_spec.is_pointer()):
@@ -1323,9 +1398,22 @@ class Arm64AppleCodeGen:
 
         for case_stmt, label in cases:
             value = case_stmt.value
-            if not isinstance(value, IntLiteral):
-                self.error("arm64-apple-darwin switch currently requires integer literal case labels", case_stmt.line, case_stmt.col)
-            self.emit(f"    cmp w10, #{value.value}")
+            if isinstance(value, IntLiteral):
+                case_val = value.value
+            elif (isinstance(value, UnaryOp) and value.op == "-"
+                  and isinstance(value.operand, IntLiteral)):
+                case_val = -value.operand.value
+            elif (isinstance(value, UnaryOp) and value.op == "+"
+                  and isinstance(value.operand, IntLiteral)):
+                case_val = value.operand.value
+            else:
+                self.error("arm64-apple-darwin switch requires integer literal case labels", case_stmt.line, case_stmt.col)
+                continue
+            if 0 <= case_val <= 4095:
+                self.emit(f"    cmp w10, #{case_val}")
+            else:
+                self.emit_int_constant(case_val & 0xFFFFFFFF, "w11")
+                self.emit("    cmp w10, w11")
             self.emit(f"    b.eq {label}")
 
         self.emit(f"    b {default_label or end_label}")
@@ -1512,11 +1600,30 @@ class Arm64AppleCodeGen:
             target_type = self.get_var_type(expr.target.name)
             if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
                 struct_size = target_type.struct_def.size_bytes(self.target)
-                self.push_x0()
-                self.gen_lvalue_addr(expr.target)
-                self.pop_reg("x1")
-                self.emit(f"    mov x2, #{struct_size}")
-                self.emit("    bl _memcpy")
+                if self._is_struct_by_reg_value(expr.value):
+                    # FuncCall bytes in x0[/x1] — store directly
+                    if expr.target.name in self.locals:
+                        dest_offset = self.locals[expr.target.name]
+                        if struct_size <= 4:
+                            self.emit_local_store("stur", "w0", dest_offset)
+                        elif struct_size <= 8:
+                            self.emit_local_store("stur", "x0", dest_offset)
+                        elif struct_size <= 16:
+                            self.emit_local_store("stur", "x0", dest_offset)
+                            rem = struct_size - 8
+                            self.emit_local_store("stur", "w1" if rem <= 4 else "x1", dest_offset - 8)
+                    else:
+                        self.push_x0()
+                        self.gen_lvalue_addr(expr.target)
+                        self.pop_reg("x1")
+                        self.emit(f"    mov x2, #{struct_size}")
+                        self.emit("    bl _memcpy")
+                else:
+                    self.push_x0()
+                    self.gen_lvalue_addr(expr.target)
+                    self.pop_reg("x1")
+                    self.emit(f"    mov x2, #{struct_size}")
+                    self.emit("    bl _memcpy")
                 return
             self.store_var(expr.target.name, line=expr.line, col=expr.col)
             return
@@ -1575,11 +1682,41 @@ class Arm64AppleCodeGen:
             target_type = self.get_expr_type(expr.target)
             if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
                 struct_size = target_type.struct_def.size_bytes(self.target)
-                self.push_x0()
-                self.gen_lvalue_addr(expr.target)
-                self.pop_reg("x1")
-                self.emit(f"    mov x2, #{struct_size}")
-                self.emit("    bl _memcpy")
+                if self._is_struct_by_reg_value(expr.value):
+                    # FuncCall bytes in x0[/x1] — compute dest address, then store
+                    if struct_size <= 4:
+                        self.push_x0()
+                        self.gen_lvalue_addr(expr.target)
+                        self.pop_reg("x1")
+                        self.emit("    str w1, [x0]")
+                    elif struct_size <= 8:
+                        self.push_x0()
+                        self.gen_lvalue_addr(expr.target)
+                        self.pop_reg("x1")
+                        self.emit("    str x1, [x0]")
+                    elif struct_size <= 16:
+                        self.push_x0()  # save x0 (bytes 0-7)
+                        self.emit("    mov x10, x1")  # save x1 (bytes 8-15 or w1)
+                        self.gen_lvalue_addr(expr.target)
+                        self.pop_reg("x1")
+                        self.emit("    str x1, [x0]")
+                        rem = struct_size - 8
+                        if rem <= 4:
+                            self.emit("    str w10, [x0, #8]")
+                        else:
+                            self.emit("    str x10, [x0, #8]")
+                    else:
+                        self.push_x0()
+                        self.gen_lvalue_addr(expr.target)
+                        self.pop_reg("x1")
+                        self.emit(f"    mov x2, #{struct_size}")
+                        self.emit("    bl _memcpy")
+                else:
+                    self.push_x0()
+                    self.gen_lvalue_addr(expr.target)
+                    self.pop_reg("x1")
+                    self.emit(f"    mov x2, #{struct_size}")
+                    self.emit("    bl _memcpy")
                 return
             if self.is_fp_type(target_type):
                 self.push_d0()
@@ -1940,7 +2077,9 @@ class Arm64AppleCodeGen:
         self.gen_array_addr(expr)
         result_type = self.get_expr_type(expr)
         if self.is_array_type(result_type):
-            return  # result is an array subtype (e.g., row of 2D array); address stays in x0
+            return  # result is an array subtype; address stays in x0
+        if result_type is not None and result_type.is_struct() and not result_type.is_pointer():
+            return  # struct element: keep address in x0
         if result_type is not None and result_type.base == "char" and not result_type.is_pointer():
             self.emit("    ldrb w0, [x0]" if result_type.is_unsigned else "    ldrsb w0, [x0]")
         elif result_type is not None and result_type.base == "short" and not result_type.is_pointer():
@@ -2134,6 +2273,31 @@ class Arm64AppleCodeGen:
                 if fn == "__builtin_va_copy" and len(expr.args) >= 2:
                     self._gen_va_copy(expr)
                 return
+            if fn in ("__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64"):
+                self.gen_expr(expr.args[0])
+                if fn == "__builtin_bswap16":
+                    self.emit("    rev16 w0, w0")
+                    self.emit("    and w0, w0, #0xffff")
+                elif fn == "__builtin_bswap32":
+                    self.emit("    rev w0, w0")
+                else:
+                    self.emit("    rev x0, x0")
+                return
+            if fn == "__builtin_alloca":
+                self.gen_expr(expr.args[0])
+                self.emit("    add x0, x0, #15")
+                self.emit("    and x0, x0, #-16")
+                self.emit("    sub sp, sp, x0")
+                self.emit("    mov x0, sp")
+                return
+            if fn == "__builtin_constant_p":
+                arg = expr.args[0] if expr.args else None
+                from jmcc.ast_nodes import IntLiteral as _IL, FloatLiteral as _FL, CharLiteral as _CL, StringLiteral as _SL
+                if isinstance(arg, (_IL, _FL, _CL, _SL)):
+                    self.emit("    mov w0, #1")
+                else:
+                    self.emit("    mov w0, #0")
+                return
 
         direct_name = expr.name.name if isinstance(expr.name, Identifier) and expr.name.name in self.functions else None
         func_decl = self.functions.get(direct_name) if direct_name is not None else None
@@ -2152,13 +2316,42 @@ class Arm64AppleCodeGen:
             self.gen_expr(expr.name)
             self.push_x0()
 
-        # Evaluate all args, pushing them on the stack. FP args spill as d0.
+        # Evaluate all args, pushing them on the stack.
+        # For struct ≤ 8 bytes: load the bytes (ldr x0/w0) before pushing.
+        # For struct 9-16 bytes: push address + a sentinel so pop knows to use 2 regs.
+        # FP args spill as d0.
         arg_types = []
         for arg in expr.args:
             arg_types.append(self.get_expr_type(arg))
+            a_type = arg_types[-1]
             self.gen_expr(arg)
-            if self.is_fp_type(arg_types[-1]):
+            if self.is_fp_type(a_type):
                 self.push_d0()
+            elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()):
+                struct_size = a_type.struct_def.size_bytes(self.target)
+                if self._is_struct_by_reg_value(arg):
+                    # gen_expr already put bytes in x0[/x1]
+                    if struct_size > 8:
+                        # push x1 first (high), then x0 (low) so pop order is: x0 low, x1 high
+                        self.emit("    str x1, [sp, #-16]!")
+                    self.push_x0()
+                else:
+                    # gen_expr returned address; load bytes
+                    if struct_size <= 4:
+                        self.emit("    ldr w0, [x0]")
+                        self.push_x0()
+                    elif struct_size <= 8:
+                        self.emit("    ldr x0, [x0]")
+                        self.push_x0()
+                    elif struct_size <= 16:
+                        self.emit("    mov x9, x0")
+                        self.emit("    ldr x0, [x9]")
+                        rem = struct_size - 8
+                        self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
+                        self.emit("    str x1, [sp, #-16]!")  # push high bytes
+                        self.push_x0()                        # push low bytes
+                    else:
+                        self.push_x0()  # pass address for large structs
             else:
                 self.push_x0()
 
@@ -2181,23 +2374,33 @@ class Arm64AppleCodeGen:
                 else:
                     self.emit(f"    ldr {self.ARG_REGS_64[index]}, [x10, #{offset}]")
         else:
-            # Non-variadic: pop args in reverse into x0-x7 / d0-d7
+            # Non-variadic: pop args in reverse into x0-x7 / d0-d7.
+            # reg_assigns is a list of tuples ('fp', idx), ('int', idx), or ('struct2', idx)
             int_idx = 0
             fp_idx = 0
             reg_assigns = []
             for a_type in arg_types:
                 if self.is_fp_type(a_type):
-                    reg_assigns.append(f"d{fp_idx}")
+                    reg_assigns.append(('fp', fp_idx))
                     fp_idx += 1
+                elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()
+                      and a_type.struct_def.size_bytes(self.target) > 8):
+                    # 9-16 byte struct occupies 2 x-registers
+                    reg_assigns.append(('struct2', int_idx))
+                    int_idx += 2
                 else:
-                    reg_assigns.append(self.ARG_REGS_64[int_idx])
+                    reg_assigns.append(('int', int_idx))
                     int_idx += 1
             for index in range(len(expr.args) - 1, -1, -1):
-                a_type = arg_types[index] if index < len(arg_types) else None
-                if self.is_fp_type(a_type):
-                    self.pop_d0(reg_assigns[index])
+                kind, idx = reg_assigns[index]
+                if kind == 'fp':
+                    self.pop_d0(f"d{idx}")
+                elif kind == 'struct2':
+                    # low bytes in x{idx}, high bytes in x{idx+1}
+                    self.pop_reg(self.ARG_REGS_64[idx])         # pop low (x0 first)
+                    self.pop_reg(self.ARG_REGS_64[idx + 1])     # pop high (x1)
                 else:
-                    self.pop_reg(reg_assigns[index])
+                    self.pop_reg(self.ARG_REGS_64[idx])
 
         if direct_name is not None:
             self.emit(f"    bl {self.mangle(direct_name)}")
