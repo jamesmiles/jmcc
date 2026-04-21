@@ -21,6 +21,7 @@ from .ast_nodes import (
     ForStmt,
     FuncCall,
     FuncDecl,
+    GenericSelection,
     GlobalVarDecl,
     GotoStmt,
     Identifier,
@@ -211,16 +212,25 @@ class Arm64AppleCodeGen:
         self.emit(f"    adrp {reg}, {symbol}@PAGE")
         self.emit(f"    add {reg}, {reg}, {symbol}@PAGEOFF")
 
+    def emit_extern_func_addr(self, symbol: str, reg: str = "x0"):
+        """Load address of an external function via GOT on macOS arm64."""
+        self.emit(f"    adrp {reg}, {symbol}@GOTPAGE")
+        self.emit(f"    ldr {reg}, [{reg}, {symbol}@GOTPAGEOFF]")
+
     def is_wide_scalar(self, type_spec) -> bool:
         return type_spec is not None and not type_spec.is_pointer() and not self.is_array_type(type_spec) and type_spec.size_bytes(self.target) > 4
 
     def _is_struct_by_reg_value(self, expr) -> bool:
         """Returns True if gen_expr(expr) puts struct bytes in x0[/x1] (not an address).
-        This is the case for FuncCall returning a struct ≤ 16 bytes."""
+        This is the case for FuncCall returning a struct ≤ 16 bytes, or compound literals."""
         if isinstance(expr, FuncCall):
             func_type = self.get_expr_type(expr)
             return (func_type is not None and func_type.struct_def is not None and
                     not func_type.is_pointer() and func_type.struct_def.size_bytes(self.target) <= 16)
+        if isinstance(expr, CastExpr) and isinstance(expr.operand, InitList):
+            t = expr.target_type
+            return (t is not None and t.is_struct() and not t.is_pointer()
+                    and t.struct_def is not None and t.struct_def.size_bytes(self.target) <= 16)
         return False
 
     def literal_is_wide(self, expr: IntLiteral) -> bool:
@@ -333,6 +343,11 @@ class Arm64AppleCodeGen:
         if isinstance(expr, SizeofExpr):
             return TypeSpec(base="int")
         if isinstance(expr, AlignofExpr):
+            return TypeSpec(base="int")
+        if isinstance(expr, GenericSelection):
+            selected = self._resolve_generic(expr)
+            if selected is not None:
+                return self.get_expr_type(selected)
             return TypeSpec(base="int")
         if isinstance(expr, FuncCall):
             if isinstance(expr.name, Identifier):
@@ -773,7 +788,13 @@ class Arm64AppleCodeGen:
             return
         if name in self.globals:
             mangled = self.mangle(name)
-            self.emit_symbol_addr(mangled, "x9")
+            g = self.globals[name]
+            is_extern_global = g.type_spec is not None and g.type_spec.is_extern
+            if is_extern_global:
+                self.emit(f"    adrp x9, {mangled}@GOTPAGE")
+                self.emit(f"    ldr x9, [x9, {mangled}@GOTPAGEOFF]")
+            else:
+                self.emit_symbol_addr(mangled, "x9")
             if self.is_array_type(type_spec) or (type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer()):
                 self.emit("    mov x0, x9")
             elif self.is_fp_type(type_spec):
@@ -794,7 +815,11 @@ class Arm64AppleCodeGen:
                 self.emit("    ldr w0, [x9]")
             return
         if name in self.functions:
-            self.emit_symbol_addr(self.mangle(name))
+            func_decl = self.functions.get(name)
+            if func_decl is not None and func_decl.body is not None:
+                self.emit_symbol_addr(self.mangle(name))
+            else:
+                self.emit_extern_func_addr(self.mangle(name))
             return
         self.error(f"undefined variable '{name}'", line, col)
 
@@ -835,7 +860,13 @@ class Arm64AppleCodeGen:
             return
         if name in self.globals:
             mangled = self.mangle(name)
-            self.emit_symbol_addr(mangled, "x9")
+            g = self.globals[name]
+            is_extern_global = g.type_spec is not None and g.type_spec.is_extern
+            if is_extern_global:
+                self.emit(f"    adrp x9, {mangled}@GOTPAGE")
+                self.emit(f"    ldr x9, [x9, {mangled}@GOTPAGEOFF]")
+            else:
+                self.emit_symbol_addr(mangled, "x9")
             if is_fp:
                 self.emit(f"    str {src_reg}, [x9]")
             elif type_spec is not None and type_spec.base == "char" and not type_spec.is_pointer():
@@ -1171,13 +1202,24 @@ class Arm64AppleCodeGen:
             self.gen_local_struct_init(decl)
             return
         # Compound literal: (Type){init} — treat as struct/array init
-        if (decl.type_spec is not None and isinstance(decl.init, CastExpr)
-                and isinstance(decl.init.operand, InitList)):
-            unwrapped = VarDecl(
-                name=decl.name, type_spec=decl.type_spec,
-                init=decl.init.operand, line=decl.line, col=decl.col,
-            )
-            return self.gen_var_decl(unwrapped)
+        if (isinstance(decl.init, CastExpr) and isinstance(decl.init.operand, InitList)):
+            compound_type = decl.init.target_type
+            # If var is a struct and compound type is also struct: unwrap and use struct init path
+            if (decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer()
+                    and compound_type is not None and compound_type.is_struct() and not compound_type.is_pointer()):
+                unwrapped = VarDecl(
+                    name=decl.name, type_spec=decl.type_spec,
+                    init=decl.init.operand, line=decl.line, col=decl.col,
+                )
+                return self.gen_var_decl(unwrapped)
+            # Otherwise: gen_cast materializes it, returns value/address in x0
+            self.gen_expr(decl.init)
+            if decl.name in self.locals:
+                if self.is_pointer_type(decl.type_spec) or self.is_wide_scalar(decl.type_spec):
+                    self.emit_local_store("stur", "x0", self.locals[decl.name])
+                else:
+                    self.emit_local_store("stur", "w0", self.locals[decl.name])
+            return
         if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and decl.init is not None:
             self.gen_expr(decl.init)
             struct_size = decl.type_spec.struct_def.size_bytes(self.target)
@@ -1532,6 +1574,8 @@ class Arm64AppleCodeGen:
             self.emit(f"    add x0, x0, {lbl}@PAGEOFF")
         elif isinstance(expr, FuncCall):
             self.gen_func_call(expr)
+        elif isinstance(expr, GenericSelection):
+            self._gen_generic_selection(expr)
         else:
             self.error(
                 f"arm64-apple-darwin backend does not yet support expression type {type(expr).__name__}",
@@ -1748,7 +1792,7 @@ class Arm64AppleCodeGen:
                             self.emit("    str w10, [x9]")
                     return
 
-        if isinstance(expr.target, (UnaryOp, ArrayAccess, MemberAccess)):
+        if isinstance(expr.target, (UnaryOp, ArrayAccess, MemberAccess, GenericSelection)):
             target_type = self.get_expr_type(expr.target)
             if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
                 struct_size = target_type.struct_def.size_bytes(self.target)
@@ -2107,10 +2151,22 @@ class Arm64AppleCodeGen:
                 self.emit_symbol_addr(self.static_locals[expr.name])
                 return
             if expr.name in self.globals:
-                self.emit_symbol_addr(self.mangle(expr.name))
+                g = self.globals[expr.name]
+                is_extern_global = g.type_spec is not None and g.type_spec.is_extern
+                if is_extern_global:
+                    self.emit(f"    adrp x0, {self.mangle(expr.name)}@GOTPAGE")
+                    self.emit(f"    ldr x0, [x0, {self.mangle(expr.name)}@GOTPAGEOFF]")
+                else:
+                    self.emit_symbol_addr(self.mangle(expr.name))
                 return
             if expr.name in self.functions:
-                self.emit_symbol_addr(self.mangle(expr.name))
+                func_decl = self.functions.get(expr.name)
+                if func_decl is not None and func_decl.body is not None:
+                    # Locally defined function — ADRP+ADD ok
+                    self.emit_symbol_addr(self.mangle(expr.name))
+                else:
+                    # External function — use GOT indirection
+                    self.emit_extern_func_addr(self.mangle(expr.name))
                 return
             self.error(f"undefined variable '{expr.name}'", expr.line, expr.col)
         elif isinstance(expr, UnaryOp) and expr.op == "*":
@@ -2122,7 +2178,42 @@ class Arm64AppleCodeGen:
         elif isinstance(expr, MemberAccess):
             self.gen_member_addr(expr)
             return
+        elif isinstance(expr, GenericSelection):
+            selected = self._resolve_generic(expr)
+            if selected is not None:
+                self.gen_lvalue_addr(selected)
+                return
         self.error("expression is not an lvalue", expr.line, expr.col)
+
+    def _resolve_generic(self, expr: GenericSelection):
+        """Select the matching association expr from a _Generic expression."""
+        ct = self.get_expr_type(expr.controlling)
+        selected = None
+        default_expr = None
+        for assoc in expr.associations:
+            if assoc.type_spec is None:
+                default_expr = assoc.expr
+            elif ct is not None and self._generic_types_match(ct, assoc.type_spec):
+                selected = assoc.expr
+                break
+        return selected if selected is not None else default_expr
+
+    def _generic_types_match(self, controlling, assoc):
+        ctrl_const = controlling.is_const if controlling.pointer_depth > 0 else False
+        if controlling.pointer_depth != assoc.pointer_depth:
+            return False
+        if controlling.is_unsigned != assoc.is_unsigned:
+            return False
+        if controlling.base != assoc.base:
+            return False
+        if ctrl_const != assoc.is_const:
+            return False
+        return True
+
+    def _gen_generic_selection(self, expr: GenericSelection):
+        selected = self._resolve_generic(expr)
+        if selected is not None:
+            self.gen_expr(selected)
 
     def gen_array_addr(self, expr: ArrayAccess):
         if isinstance(expr.array, Identifier):
@@ -2263,6 +2354,65 @@ class Arm64AppleCodeGen:
         self.emit_int_constant(self.alignof_value(expr), "w0")
 
     def gen_cast(self, expr: CastExpr):
+        # Compound literal: (Type){...} — allocate a temporary on the stack
+        if isinstance(expr.operand, InitList):
+            target = expr.target_type
+            if target is not None:
+                size = self.total_size(target)
+                alloc = (size + 15) & ~15
+                # Allocate temp space on stack dynamically
+                self.emit(f"    sub sp, sp, #{alloc}")
+                self.emit(f"    mov x9, sp")
+                if target.is_struct() and not target.is_pointer():
+                    struct_def = target.struct_def
+                    if struct_def is not None:
+                        for i, item in enumerate(expr.operand.items):
+                            if i >= len(struct_def.members):
+                                break
+                            member = struct_def.members[i]
+                            moff = struct_def.member_offset(member.name) or 0
+                            self.gen_expr(item.value)
+                            msz = self.total_size(member.type_spec) if member.type_spec else 4
+                            if msz <= 1:
+                                self.emit(f"    strb w0, [x9, #{moff}]")
+                            elif msz <= 2:
+                                self.emit(f"    strh w0, [x9, #{moff}]")
+                            elif msz <= 4:
+                                self.emit(f"    str w0, [x9, #{moff}]")
+                            else:
+                                self.emit(f"    str x0, [x9, #{moff}]")
+                    # Return struct by value if ≤ 16 bytes
+                    if size <= 8:
+                        self.emit("    ldr x0, [x9]")
+                    elif size <= 16:
+                        self.emit("    ldr x0, [x9]")
+                        self.emit("    ldr x1, [x9, #8]")
+                    self.emit(f"    add sp, sp, #{alloc}")
+                    return
+                elif self.is_array_type(target):
+                    # For array compound literals, return address
+                    elem_type = self.element_type(target)
+                    elem_sz = self.total_size(elem_type)
+                    for i, item in enumerate(expr.operand.items):
+                        self.gen_expr(item.value)
+                        off = i * elem_sz
+                        if elem_sz <= 1:
+                            self.emit(f"    strb w0, [x9, #{off}]")
+                        elif elem_sz <= 2:
+                            self.emit(f"    strh w0, [x9, #{off}]")
+                        elif elem_sz <= 4:
+                            self.emit(f"    str w0, [x9, #{off}]")
+                        else:
+                            self.emit(f"    str x0, [x9, #{off}]")
+                    self.emit("    mov x0, x9")
+                    # Note: sp is NOT restored here — array pointer stays valid
+                    return
+                else:
+                    self.emit(f"    add sp, sp, #{alloc}")
+            # Fallback: evaluate first element
+            if expr.operand.items:
+                self.gen_expr(expr.operand.items[0].value)
+            return
         self.gen_expr(expr.operand)
         target = expr.target_type
         if target is None:
