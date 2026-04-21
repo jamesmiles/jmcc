@@ -238,6 +238,8 @@ class TypeSpec:
     is_func_ptr: bool = False  # True for function pointer typedefs
     func_ptr_native_depth: int = 0  # pointer_depth at which this type is callable (for func ptr typedefs)
     is_func_type: bool = False  # True for function-type typedefs: typedef void fn(params); — fn* is callable
+    func_ptr_is_variadic: bool = False  # True if the pointed-to function is variadic (has ...)
+    func_ptr_param_count: Optional[int] = None  # number of fixed named params for variadic func ptr types
     array_sizes: Optional[List[Optional['Expr']]] = None  # None = unsized, e.g. int[]
     struct_def: Optional[StructDef] = None  # populated for struct types
     enum_def: Optional[EnumDef] = None  # populated for enum types

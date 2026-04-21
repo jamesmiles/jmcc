@@ -3694,6 +3694,24 @@ class Arm64AppleCodeGen:
         # Apple arm64: variadic args go on the stack; fixed args go in x0-x7 / d0-d7
         stack_varargs = func_decl is not None and func_decl.is_variadic and len(expr.args) > fixed_arg_count
 
+        # For indirect (function pointer) calls, check if the callee TypeSpec has variadic info.
+        if not stack_varargs and direct_name is None:
+            callee_expr_for_type = expr.name
+            while isinstance(callee_expr_for_type, UnaryOp) and callee_expr_for_type.op == "*":
+                callee_expr_for_type = callee_expr_for_type.operand
+            callee_ts = None
+            if isinstance(callee_expr_for_type, Identifier):
+                cname = callee_expr_for_type.name
+                cdecl = self.locals.get(cname) or self.globals.get(cname)
+                if cdecl is not None and hasattr(cdecl, 'type_spec'):
+                    callee_ts = cdecl.type_spec
+            if callee_ts is None:
+                callee_ts = self.get_expr_type(callee_expr_for_type)
+            if (callee_ts is not None and callee_ts.func_ptr_is_variadic
+                    and callee_ts.func_ptr_param_count is not None):
+                fixed_arg_count = callee_ts.func_ptr_param_count
+                stack_varargs = len(expr.args) > fixed_arg_count
+
         # Only limit fixed args to 8; variadic extras go on the stack
         max_reg_args = fixed_arg_count if stack_varargs else len(expr.args)
         if max_reg_args > len(self.ARG_REGS_64):
@@ -3856,11 +3874,19 @@ class Arm64AppleCodeGen:
 
         if direct_name is not None:
             self.emit(f"    bl {self.mangle(direct_name)}")
+        elif stack_varargs:
+            # For indirect variadic calls: the function pointer sits in the staging area at
+            # x10 + n_args*16 (pushed before args). sp has been repositioned to the variadic
+            # area so pop_reg("x16") would read from the wrong slot.
+            self.emit(f"    ldr x16, [x10, #{len(expr.args) * 16}]")
+            self.emit("    blr x16")
         else:
             self.pop_reg("x16")
             self.emit("    blr x16")
         if stack_bytes:
-            self.emit(f"    add sp, sp, #{stack_bytes + temp_arg_bytes}")
+            # For indirect variadic calls we didn't pop the function pointer; add its 16 bytes too.
+            extra = 16 if (direct_name is None and stack_varargs) else 0
+            self.emit(f"    add sp, sp, #{stack_bytes + temp_arg_bytes + extra}")
 
     def _gen_va_start(self, expr: FuncCall):
         """arm64 Apple Darwin va_start: ap = (char*)(x29 + 16)

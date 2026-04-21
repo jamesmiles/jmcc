@@ -1487,15 +1487,34 @@ class Parser:
                 # Function pointer: (*fp)(params) or (*fp[4])(params)
                 self.advance()  # (
                 depth = 1
+                fp_comma_count = 0
+                fp_is_variadic = False
+                fp_has_params = False
                 while depth > 0 and not self.at(TokenType.EOF):
-                    if self.match(TokenType.LPAREN): depth += 1
-                    elif self.match(TokenType.RPAREN): depth -= 1
-                    else: self.advance()
+                    if self.match(TokenType.LPAREN):
+                        depth += 1
+                    elif self.match(TokenType.RPAREN):
+                        depth -= 1
+                    elif depth == 1 and self.match(TokenType.ELLIPSIS):
+                        fp_is_variadic = True
+                    elif depth == 1 and self.match(TokenType.COMMA):
+                        fp_comma_count += 1
+                    else:
+                        tok = self.current()
+                        if depth == 1 and tok.type == TokenType.IDENTIFIER:
+                            fp_has_params = True
+                        self.advance()
+                # fixed_param_count for variadic: commas before ... separate fixed params
+                # (last comma is between last fixed param and ...)
+                fp_param_count = (fp_comma_count if fp_is_variadic
+                                  else (fp_comma_count + 1 if fp_has_params else 0))
                 ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars,
                               is_unsigned=base_type.is_unsigned,
                               struct_def=base_type.struct_def,
                               is_ptr_array=bool(fptr_arr_sizes),
-                              array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
+                              array_sizes=fptr_arr_sizes if fptr_arr_sizes else None,
+                              func_ptr_is_variadic=fp_is_variadic,
+                              func_ptr_param_count=fp_param_count if fp_is_variadic else None)
             else:
                 ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars)
             init = None
@@ -1816,17 +1835,34 @@ class Parser:
                     # Function pointer (possibly array): int (*name)(params) or int (*name[N])(params)
                     self.advance()  # (
                     depth = 1
+                    gfp_comma_count = 0
+                    gfp_is_variadic = False
+                    gfp_has_params = False
                     while depth > 0 and not self.at(TokenType.EOF):
-                        if self.match(TokenType.LPAREN): depth += 1
-                        elif self.match(TokenType.RPAREN): depth -= 1
-                        else: self.advance()
+                        if self.match(TokenType.LPAREN):
+                            depth += 1
+                        elif self.match(TokenType.RPAREN):
+                            depth -= 1
+                        elif depth == 1 and self.match(TokenType.ELLIPSIS):
+                            gfp_is_variadic = True
+                        elif depth == 1 and self.match(TokenType.COMMA):
+                            gfp_comma_count += 1
+                        else:
+                            tok = self.current()
+                            if depth == 1 and tok.type == TokenType.IDENTIFIER:
+                                gfp_has_params = True
+                            self.advance()
+                    gfp_param_count = (gfp_comma_count if gfp_is_variadic
+                                       else (gfp_comma_count + 1 if gfp_has_params else 0))
                     fptr_type = TypeSpec(base=type_spec.base,
                         pointer_depth=type_spec.pointer_depth + 1,
                         struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
                         is_unsigned=type_spec.is_unsigned,
                         is_extern=type_spec.is_extern, is_static=type_spec.is_static,
                         is_ptr_array=bool(fptr_arr_sizes),
-                        array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
+                        array_sizes=fptr_arr_sizes if fptr_arr_sizes else None,
+                        func_ptr_is_variadic=gfp_is_variadic,
+                        func_ptr_param_count=gfp_param_count if gfp_is_variadic else None)
                 else:
                     # Regular function pointer variable: int (*name) = init;
                     fptr_type = TypeSpec(base=type_spec.base,
