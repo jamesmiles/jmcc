@@ -864,6 +864,14 @@ char *inet_ntoa(struct in_addr in);
 int inet_aton(const char *cp, struct in_addr *inp);
 """,
         # netdb.h — use real system header
+        # values.h — use real system header
+    }
+
+    # Fallback stubs used only when the real system header cannot be found
+    # (e.g. on macOS where Linux include paths don't exist).
+    # These must NOT override real system headers (unlike BUILTIN_HEADERS which
+    # are intentional replacements for headers that break the JMCC parser).
+    FALLBACK_HEADERS = {
         "errno.h": """
 extern int errno;
 #define EWOULDBLOCK 35
@@ -880,6 +888,7 @@ struct ipc_perm {
     unsigned long __key;
 };
 #define IPC_CREAT 01000
+#define IPC_STAT 2
 """,
         "sys/shm.h": """
 #include <sys/ipc.h>
@@ -901,7 +910,6 @@ void *shmat(int shmid, const void *shmaddr, int shmflg);
 int shmdt(const void *shmaddr);
 int shmctl(int shmid, int cmd, struct shmid_ds *buf);
 """,
-        # values.h — use real system header
     }
 
     # System include search paths (appended after user-specified paths)
@@ -1326,6 +1334,10 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         inc_name = match.group(1)
         is_system = '<' in line.split('include')[1]
 
+        # Check builtin headers first (intentional parser-safe replacements)
+        if inc_name in self.BUILTIN_HEADERS:
+            return self.BUILTIN_HEADERS[inc_name]
+
         def _load_file(full):
             if full in self.included_files:
                 return ""
@@ -1355,9 +1367,9 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
             if os.path.exists(full):
                 return _load_file(full)
 
-        # Fall back to builtin stub headers (used when real system headers not found, e.g. macOS)
-        if inc_name in self.BUILTIN_HEADERS:
-            return self.BUILTIN_HEADERS[inc_name]
+        # Fall back to macOS-only stubs when real system header not found
+        if inc_name in self.FALLBACK_HEADERS:
+            return self.FALLBACK_HEADERS[inc_name]
 
         return ""
 
