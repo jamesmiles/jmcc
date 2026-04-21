@@ -1793,6 +1793,24 @@ class Arm64AppleCodeGen:
     def gen_local_array_init(self, decl: VarDecl):
         elem_type = self.element_type(decl.type_spec)
         elem_size = self.total_size(elem_type)
+        # Zero-initialize the entire array first if the init list may be shorter
+        # than the total element count (C requires implicit zero-fill for omitted elements).
+        total_bytes = self.total_size(decl.type_spec)
+        explicit_count = len(decl.init.items) if decl.init else 0
+        total_elem_count = self._array_dim_count(decl.type_spec)
+        if explicit_count < total_elem_count and total_bytes <= 512:
+            # Emit zero-fill using xzr stores (8 bytes at a time, then 4/1 for remainder)
+            base_offset = self.locals[decl.name]
+            filled = 0
+            while filled + 8 <= total_bytes:
+                self.emit(f"    stur xzr, [x29, #{-(base_offset - filled)}]")
+                filled += 8
+            while filled + 4 <= total_bytes:
+                self.emit(f"    stur wzr, [x29, #{-(base_offset - filled)}]")
+                filled += 4
+            while filled < total_bytes:
+                self.emit(f"    sturb wzr, [x29, #{-(base_offset - filled)}]")
+                filled += 1
         for index, item in enumerate(decl.init.items):
             value = item.value
             if value is None:
@@ -3039,8 +3057,10 @@ class Arm64AppleCodeGen:
             self.gen_lvalue_addr(expr.operand)
         elif expr.op == "*":
             # Dereferencing a function pointer is a no-op in C (gives function designator)
-            if (operand_type is not None and operand_type.func_ptr_native_depth > 0 and
-                    operand_type.pointer_depth == operand_type.func_ptr_native_depth):
+            if (operand_type is not None and (
+                    (operand_type.func_ptr_native_depth > 0 and
+                     operand_type.pointer_depth == operand_type.func_ptr_native_depth)
+                    or operand_type.is_func_ptr)):
                 return
             if operand_type is not None and operand_type.base == "char" and operand_type.pointer_depth == 1:
                 self.emit("    ldrb w0, [x0]" if operand_type.is_unsigned else "    ldrsb w0, [x0]")
@@ -3626,10 +3646,13 @@ class Arm64AppleCodeGen:
         if direct_name is None:
             # (*fp)(args) is equivalent to fp(args) in C: strip no-op dereferences of
             # function pointers (pointer_depth==1, no further dereference needed).
+            # Also strip * wrapping a FuncCall result — calling a func that returns a
+            # function pointer and immediately calling it: (*(*p)(...))(...)
             callee_expr = expr.name
             while (isinstance(callee_expr, UnaryOp) and callee_expr.op == "*"):
                 inner_type = self.get_expr_type(callee_expr.operand)
-                if inner_type is not None and inner_type.pointer_depth == 1:
+                if (inner_type is not None and (inner_type.pointer_depth == 1 or inner_type.is_func_ptr)
+                        or isinstance(callee_expr.operand, FuncCall)):
                     callee_expr = callee_expr.operand
                 else:
                     break
