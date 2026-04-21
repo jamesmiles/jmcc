@@ -79,6 +79,7 @@ class Arm64AppleCodeGen:
         self.continue_labels: List[str] = []
         self.float_literals: Dict[tuple, str] = {}  # (bits, size) -> label
         self.vla_ptr_locals: set = set()  # locals whose slot holds a VLA base pointer
+        self.pending_compound_lits: list = []  # (label, type_spec, init, line, col) deferred global compound literals
 
     def error(self, msg, line=0, col=0):
         raise CodeGenError(msg, line=line, col=col)
@@ -282,7 +283,8 @@ class Arm64AppleCodeGen:
     def is_wide_scalar(self, type_spec) -> bool:
         return (type_spec is not None and not type_spec.is_pointer() and
                 not self.is_array_type(type_spec) and type_spec.size_bytes(self.target) > 4
-                and not self.is_int128(type_spec))
+                and not self.is_int128(type_spec)
+                and type_spec.base not in self._FP_BASES)
 
     def _is_struct_by_reg_value(self, expr) -> bool:
         """Returns True if gen_expr(expr) puts struct bytes in x0[/x1] (not an address).
@@ -498,6 +500,10 @@ class Arm64AppleCodeGen:
         for label, decl in self.static_local_decls.items():
             self.emit_global_decl(label, decl.type_spec, decl.init, decl.line, decl.col, exported=False)
 
+        # Emit deferred compound literals (from global &(type){init} initializers)
+        for lbl, ts, init, line, col in self.pending_compound_lits:
+            self.emit_global_decl(lbl, ts, init, line, col, exported=False)
+
         if self.string_literals:
             self.emit("")
             self.emit("    .data")
@@ -554,7 +560,17 @@ class Arm64AppleCodeGen:
             return
 
         if isinstance(init, IntLiteral):
+            import struct as _struct
             size = type_spec.size_bytes(self.target)
+            # If the target type is float/double, convert integer value to float bits
+            if type_spec is not None and type_spec.base in ("float", "double") and not type_spec.is_pointer():
+                if type_spec.base == "float":
+                    bits = _struct.unpack('<I', _struct.pack('<f', float(init.value)))[0]
+                    self.emit(f"    .long {bits}")
+                else:
+                    bits = _struct.unpack('<Q', _struct.pack('<d', float(init.value)))[0]
+                    self.emit(f"    .quad {bits}")
+                return
             if size <= 1:
                 self.emit(f"    .byte {init.value & 0xff}")
             elif size <= 2:
@@ -669,35 +685,50 @@ class Arm64AppleCodeGen:
             return
 
         current_offset = 0
-        members = [m for m in struct_def.members if m.name != ""]
+        # Include ALL members (including anonymous union/struct with name=="")
+        all_members = struct_def.members
 
-        # Build a map from field name -> init value, handling both designated and
-        # positional initializers. Designated: item.designator = "fieldname".
-        # Positional: assign in member declaration order.
-        designator_map: dict = {}
+        # Build index-based init_values list (handles anon unions positionally)
+        init_values = [None] * len(all_members)
+        # Named-members list for designator lookup (named members only, in order)
+        named_member_indices = {m.name: j for j, m in enumerate(all_members) if m.name}
         positional_idx = 0
         for item in value.items:
             if item.designator is not None:
-                designator_map[item.designator] = item.value
-                # After a designator, positional continues from the NEXT member
-                for j, m in enumerate(members):
-                    if m.name == item.designator:
-                        positional_idx = j + 1
-                        break
+                j = named_member_indices.get(item.designator)
+                if j is not None:
+                    init_values[j] = item.value
+                    positional_idx = j + 1
             else:
-                while positional_idx < len(members) and members[positional_idx].name in designator_map:
+                # Skip positions already filled by designated initializers
+                while positional_idx < len(all_members) and init_values[positional_idx] is not None:
                     positional_idx += 1
-                if positional_idx < len(members):
-                    designator_map[members[positional_idx].name] = item.value
+                if positional_idx < len(all_members):
+                    init_values[positional_idx] = item.value
                     positional_idx += 1
 
-        for i, member in enumerate(members):
-            member_off = struct_def.member_offset(member.name) or 0
+        layout, _ = struct_def._layout_members(self.target)
+        for i, member in enumerate(all_members):
+            member_off = layout[i][0] if i < len(layout) else current_offset
             if member_off > current_offset:
                 self.emit(f"    .zero {member_off - current_offset}")
                 current_offset = member_off
             member_type = member.type_spec
-            member_value = designator_map.get(member.name)
+            member_value = init_values[i]
+            # Anonymous union/struct: emit as nested struct init
+            if member.name == "" and member_type.is_struct() and not member_type.is_pointer() and member_type.struct_def is not None:
+                size = member_type.struct_def.size_bytes(self.target)
+                if member_value is None:
+                    self.emit(f"    .zero {size}")
+                elif isinstance(member_value, InitList):
+                    self.emit_global_struct_init(member_type, member_value, line, col)
+                else:
+                    # Scalar value initializes first member of the anon union/struct
+                    from jmcc.ast_nodes import InitItem as _InitItem, InitList as _InitList
+                    dummy = _InitList(items=[_InitItem(value=member_value)], line=line, col=col)
+                    self.emit_global_struct_init(member_type, dummy, line, col)
+                current_offset += size
+                continue
             if self.is_array_type(member_type):
                 size = self.total_size(member_type)
                 if member_value is None:
@@ -736,7 +767,16 @@ class Arm64AppleCodeGen:
             elif isinstance(member_value, (IntLiteral, CharLiteral)):
                 size = member_type.size_bytes(self.target)
                 intval = member_value.value if isinstance(member_value, IntLiteral) else ord(member_value.value)
-                if size <= 1:
+                # Convert to float/double bits if member is float/double type
+                import struct as _struct
+                if member_type.base in ("float", "double") and not member_type.is_pointer():
+                    if member_type.base == "float":
+                        bits = _struct.unpack('<I', _struct.pack('<f', float(intval)))[0]
+                        self.emit(f"    .long {bits}")
+                    else:
+                        bits = _struct.unpack('<Q', _struct.pack('<d', float(intval)))[0]
+                        self.emit(f"    .quad {bits}")
+                elif size <= 1:
                     self.emit(f"    .byte {intval & 0xff}")
                 elif size <= 2:
                     self.emit(f"    .short {intval & 0xffff}")
@@ -827,6 +867,14 @@ class Arm64AppleCodeGen:
         if isinstance(value, Identifier) and value.name in self.functions:
             self.emit(f"    .quad {self.mangle(value.name)}")
             return
+        # Compound literal: &(type){ init } — emit struct/array data as a synthetic global
+        if isinstance(value, UnaryOp) and value.op == "&" and isinstance(value.operand, CastExpr) and isinstance(value.operand.operand, InitList):
+            lit_type = value.operand.target_type
+            lit_init = value.operand.operand
+            lbl = self.new_label("__clit")
+            self.pending_compound_lits.append((lbl, lit_type, lit_init, line, col))
+            self.emit(f"    .quad {lbl}")
+            return
         addr = self._global_addr_str(value)
         if addr is not None:
             self.emit(f"    .quad {addr}")
@@ -838,6 +886,16 @@ class Arm64AppleCodeGen:
             return
         if isinstance(value, (IntLiteral, CharLiteral)):
             intval = value.value if isinstance(value, IntLiteral) else ord(value.value)
+            # If target type is float/double, convert integer value to float bits
+            import struct as _struct
+            if type_spec is not None and type_spec.base in ("float", "double") and not type_spec.is_pointer():
+                if type_spec.base == "float":
+                    bits = _struct.unpack('<I', _struct.pack('<f', float(intval)))[0]
+                    self.emit(f"    .long {bits}")
+                else:
+                    bits = _struct.unpack('<Q', _struct.pack('<d', float(intval)))[0]
+                    self.emit(f"    .quad {bits}")
+                return
             size = type_spec.size_bytes(self.target)
             if size <= 1:
                 self.emit(f"    .byte {intval & 0xff}")
@@ -1669,6 +1727,14 @@ class Arm64AppleCodeGen:
                     self.emit(f"    strb w0, [x9, #{offset + i}]")
                 continue
             self.gen_expr(value)
+            # If storing into float/double but value was an integer, convert
+            if self.is_fp_type(elem_type):
+                val_type = self.get_expr_type(value)
+                if val_type is not None and not self.is_fp_type(val_type):
+                    if val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Recompute x9 after gen_expr since gen_expr may clobber x9 (e.g. float literals, globals)
             neg_off = self.locals[decl.name] - offset
             self.emit(f"    sub x9, x29, #{neg_off}")
@@ -1706,6 +1772,14 @@ class Arm64AppleCodeGen:
                 self.gen_struct_init_at_addr(member_type, item.value, x29_neg_offset - member_off)
                 continue
             self.gen_expr(item.value)
+            # If storing into float/double but value was an integer, convert
+            if self.is_fp_type(member_type):
+                val_type = self.get_expr_type(item.value)
+                if val_type is not None and not self.is_fp_type(val_type):
+                    if val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Compute address: x29 - x29_neg_offset + member_off
             final_neg = x29_neg_offset - member_off
             self.emit(f"    sub x9, x29, #{final_neg}")
@@ -1738,6 +1812,14 @@ class Arm64AppleCodeGen:
             member_off = struct_def.member_offset(member.name) or 0
             member_type = member.type_spec
             self.gen_expr(item.value)
+            # If storing into float/double but value was an integer, convert
+            if self.is_fp_type(member_type):
+                val_type = self.get_expr_type(item.value)
+                if val_type is not None and not self.is_fp_type(val_type):
+                    if val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Recompute x9 after gen_expr since gen_expr may clobber x9 (e.g. float literals, globals)
             neg_off = self.locals[decl.name] - member_off
             self.emit(f"    sub x9, x29, #{neg_off}")
