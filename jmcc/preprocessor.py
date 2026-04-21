@@ -373,11 +373,11 @@ float fmodf(float, float);
 #define HUGE_VALF (1.0f/0.0f)
 #define INFINITY  (1.0f/0.0f)
 #define NAN       (0.0f/0.0f)
-#define FP_NAN       1
-#define FP_INFINITE  2
-#define FP_ZERO      3
+#define FP_NAN       0
+#define FP_INFINITE  1
+#define FP_ZERO      2
+#define FP_SUBNORMAL 3
 #define FP_NORMAL    4
-#define FP_SUBNORMAL 5
 int isinf(double);
 int isinff(float);
 int isnan(double);
@@ -1418,12 +1418,23 @@ extern void *__stderrp;
 #define stderr __stderrp
 """
             # For arm64 Apple, fpclassify uses __fpclassifyd / __fpclassifyf
+            # and FP_* constants use macOS values (different from Linux glibc)
             if inc_name == "math.h" and self._is_arm64_apple:
                 content += """
 int __fpclassifyd(double);
 int __fpclassifyf(float);
 #undef fpclassify
 #define fpclassify(x) __fpclassifyd(x)
+#undef FP_NAN
+#undef FP_INFINITE
+#undef FP_ZERO
+#undef FP_SUBNORMAL
+#undef FP_NORMAL
+#define FP_NAN       1
+#define FP_INFINITE  2
+#define FP_ZERO      3
+#define FP_SUBNORMAL 5
+#define FP_NORMAL    4
 """
             # For arm64 Apple, _SC_* constants use macOS values (different from Linux)
             if inc_name == "unistd.h" and self._is_arm64_apple:
