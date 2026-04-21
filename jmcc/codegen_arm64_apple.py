@@ -189,6 +189,10 @@ class Arm64AppleCodeGen:
                     size *= dim.value
                 elif isinstance(dim, SizeofExpr):
                     size *= self.sizeof_value(dim)
+                else:
+                    val = self._global_const_int(dim)
+                    if val is not None:
+                        size *= val
         return max(1, size)
 
     def clone_type(self, type_spec, pointer_depth=None, array_sizes=...):
@@ -455,15 +459,20 @@ class Arm64AppleCodeGen:
             self.emit_global_value(type_spec, init, line, col)
             return
 
-        self.error(
-            "arm64-apple-darwin backend does not yet support this global initializer",
-            line,
-            col,
-        )
+        self.emit_global_value(type_spec, init, line, col)
 
     def emit_global_array_init(self, type_spec, init: InitList, line: int, col: int):
         elem_type = self.element_type(type_spec)
-        count = type_spec.array_sizes[0].value if type_spec.array_sizes and isinstance(type_spec.array_sizes[0], IntLiteral) else len(init.items)
+        if type_spec.array_sizes and type_spec.array_sizes[0] is not None:
+            dim = type_spec.array_sizes[0]
+            if isinstance(dim, IntLiteral):
+                count = dim.value
+            else:
+                count = self._global_const_int(dim)
+                if count is None:
+                    count = len(init.items)
+        else:
+            count = len(init.items)
         for index in range(count):
             item = init.items[index].value if index < len(init.items) else None
             self.emit_global_value(elem_type, item, line, col)
@@ -508,7 +517,11 @@ class Arm64AppleCodeGen:
                     if sym is not None:
                         self.emit(f"    .quad {sym}")
                     else:
-                        self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
+                        intval = self._global_const_int(member_value)
+                        if intval is not None:
+                            self.emit(f"    .quad {intval}")
+                        else:
+                            self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
                 current_offset += ptr_size
             elif isinstance(member_value, (IntLiteral, CharLiteral)):
                 size = member_type.size_bytes(self.target)
@@ -877,6 +890,21 @@ class Arm64AppleCodeGen:
         if isinstance(value, UnaryOp) and value.op == "-":
             inner = self._global_const_int(value.operand)
             return -inner if inner is not None else None
+        if isinstance(value, BinaryOp):
+            l = self._global_const_int(value.left)
+            r = self._global_const_int(value.right)
+            if l is not None and r is not None:
+                op = value.op
+                if op == "+": return l + r
+                if op == "-": return l - r
+                if op == "*": return l * r
+                if op == "/" and r != 0: return l // r
+                if op == "%" and r != 0: return l % r
+                if op == "<<": return l << r
+                if op == ">>": return l >> r
+                if op == "&": return l & r
+                if op == "|": return l | r
+                if op == "^": return l ^ r
         return None
 
     def _global_addr_str(self, value) -> Optional[str]:
@@ -892,15 +920,37 @@ class Arm64AppleCodeGen:
                     return self.mangle(name)
                 if name in self.static_locals:
                     return self.static_locals[name]
-            elif isinstance(operand, ArrayAccess) and isinstance(operand.array, Identifier):
-                arr_name = operand.array.name
+            elif isinstance(operand, ArrayAccess):
+                arr = operand.array
                 idx = self._global_const_int(operand.index)
-                if idx is not None and arr_name in self.globals:
-                    arr_type = self.globals[arr_name].type_spec
-                    elem_sz = self.element_size(arr_type)
-                    off = idx * elem_sz
-                    mangled = self.mangle(arr_name)
-                    return mangled if off == 0 else f"{mangled}+{off}"
+                if idx is not None:
+                    if isinstance(arr, Identifier) and arr.name in self.globals:
+                        arr_type = self.globals[arr.name].type_spec
+                        elem_sz = self.element_size(arr_type)
+                        off = idx * elem_sz
+                        mangled = self.mangle(arr.name)
+                        return mangled if off == 0 else f"{mangled}+{off}"
+                    elif isinstance(arr, MemberAccess) and isinstance(arr.obj, Identifier) and arr.obj.name in self.globals:
+                        # &global.member[idx]
+                        base_decl = self.globals[arr.obj.name]
+                        struct_def = base_decl.type_spec.struct_def
+                        if struct_def is not None:
+                            member_off = struct_def.member_offset(arr.member) or 0
+                            member_ts = struct_def.member_type(arr.member)
+                            elem_sz = self.element_size(member_ts) if member_ts is not None else 1
+                            total_off = member_off + idx * elem_sz
+                            mangled = self.mangle(arr.obj.name)
+                            return mangled if total_off == 0 else f"{mangled}+{total_off}"
+        # Bare array decay: table[0] -> &table[0] (pointer to element)
+        if isinstance(value, ArrayAccess) and isinstance(value.array, Identifier):
+            arr_name = value.array.name
+            idx = self._global_const_int(value.index)
+            if idx is not None and arr_name in self.globals:
+                arr_type = self.globals[arr_name].type_spec
+                elem_sz = self.element_size(arr_type)
+                off = idx * elem_sz
+                mangled = self.mangle(arr_name)
+                return mangled if off == 0 else f"{mangled}+{off}"
         if isinstance(value, Identifier):
             if value.name in self.functions:
                 return self.mangle(value.name)
@@ -1120,6 +1170,14 @@ class Arm64AppleCodeGen:
         if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and isinstance(decl.init, InitList):
             self.gen_local_struct_init(decl)
             return
+        # Compound literal: (Type){init} — treat as struct/array init
+        if (decl.type_spec is not None and isinstance(decl.init, CastExpr)
+                and isinstance(decl.init.operand, InitList)):
+            unwrapped = VarDecl(
+                name=decl.name, type_spec=decl.type_spec,
+                init=decl.init.operand, line=decl.line, col=decl.col,
+            )
+            return self.gen_var_decl(unwrapped)
         if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and decl.init is not None:
             self.gen_expr(decl.init)
             struct_size = decl.type_spec.struct_def.size_bytes(self.target)
@@ -1192,6 +1250,18 @@ class Arm64AppleCodeGen:
                 # Array of structs: init each struct element using x29-relative addressing
                 x29_neg_off = self.locals[decl.name] - offset
                 self.gen_struct_init_at_addr(elem_type, value, x29_neg_off)
+                continue
+            if self.is_array_type(elem_type) and isinstance(value, InitList):
+                # 2D array: recursively init sub-array
+                sub_decl = VarDecl(
+                    name=decl.name, type_spec=elem_type,
+                    init=value, line=decl.line, col=decl.col,
+                )
+                # Temporarily shift locals so sub-array starts at correct offset
+                orig_offset = self.locals[decl.name]
+                self.locals[decl.name] = orig_offset - offset
+                self.gen_local_array_init(sub_decl)
+                self.locals[decl.name] = orig_offset
                 continue
             self.gen_expr(value)
             if self.is_fp_type(elem_type):
@@ -1827,6 +1897,12 @@ class Arm64AppleCodeGen:
         wide = self.is_wide_scalar(left_type) or self.is_wide_scalar(right_type) or self.is_wide_scalar(result_type)
         is_unsigned = (left_type is not None and left_type.is_unsigned) or (right_type is not None and right_type.is_unsigned)
 
+        # Sign-extend narrow operands when mixing 32-bit and 64-bit scalars
+        if wide and not right_ptr and right_type is not None and not self.is_wide_scalar(right_type) and not right_type.is_pointer() and not right_type.is_unsigned:
+            self.emit("    sxtw x0, w0")
+        if wide and not left_ptr and left_type is not None and not self.is_wide_scalar(left_type) and not left_type.is_pointer() and not left_type.is_unsigned:
+            self.emit("    sxtw x1, w1")
+
         if expr.op == "+" and left_ptr and not right_ptr:
             scale = self.element_size(left_type)
             self.emit("    sxtw x0, w0")
@@ -1979,6 +2055,8 @@ class Arm64AppleCodeGen:
             elif expr.op == "!":
                 self.emit("    fcmp d0, #0.0")
                 self.emit("    cset w0, eq")
+            elif expr.op == "&":
+                self.gen_lvalue_addr(expr.operand)
             else:
                 self.error(f"unary operator '{expr.op}' is not supported for floating-point on arm64-apple-darwin", expr.line, expr.col)
             return
@@ -2295,6 +2373,37 @@ class Arm64AppleCodeGen:
                 from jmcc.ast_nodes import IntLiteral as _IL, FloatLiteral as _FL, CharLiteral as _CL, StringLiteral as _SL
                 if isinstance(arg, (_IL, _FL, _CL, _SL)):
                     self.emit("    mov w0, #1")
+                else:
+                    self.emit("    mov w0, #0")
+                return
+
+            if fn in ("__builtin_add_overflow", "__builtin_sub_overflow", "__builtin_mul_overflow"):
+                # __builtin_add_overflow(a, b, &result) -> sets *result=a+b, returns 1 if overflow
+                if len(expr.args) >= 3:
+                    self.gen_expr(expr.args[0])
+                    self.push_x0()
+                    self.gen_expr(expr.args[1])
+                    self.pop_reg("x1")
+                    # x1=a, x0=b
+                    if fn == "__builtin_add_overflow":
+                        self.emit("    adds w2, w1, w0")
+                    elif fn == "__builtin_sub_overflow":
+                        self.emit("    subs w2, w1, w0")
+                    else:
+                        self.emit("    smull x2, w1, w0")
+                        self.emit("    sxtw x3, w2")
+                        self.emit("    cmp x2, x3")
+                        self.emit("    cset w0, ne")
+                        # store result
+                        self.gen_expr(expr.args[2])
+                        self.emit("    str w2, [x0]")
+                        return
+                    self.emit("    cset w0, vs")
+                    # store result via pointer arg
+                    self.push_x0()  # save overflow flag
+                    self.gen_expr(expr.args[2])
+                    self.emit("    str w2, [x0]")
+                    self.pop_reg("x0")  # restore overflow flag
                 else:
                     self.emit("    mov w0, #0")
                 return

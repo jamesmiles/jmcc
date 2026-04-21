@@ -292,10 +292,17 @@ int strncmp(const char *s1, const char *s2, size_t n);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 size_t strlen(const char *s);
+char *strcpy(char *dest, const char *src);
+char *strncpy(char *dest, const char *src, size_t n);
+char *strcat(char *dest, const char *src);
+char *strncat(char *dest, const char *src, size_t n);
+char *strstr(const char *haystack, const char *needle);
+char *strdup(const char *s);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 int memcmp(const void *s1, const void *s2, size_t n);
+void *memchr(const void *s, int c, size_t n);
 """,
         "ctype.h": "",
         "assert.h": """
@@ -1399,6 +1406,24 @@ typedef __builtin_va_list __gnuc_va_list;
 #define va_end(ap) __builtin_va_end(ap)
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
 #define va_copy(dest, src) __builtin_va_copy(dest, src)
+"""
+            # For arm64 Apple, stdio uses __stdoutp / __stdinp / __stderrp
+            if inc_name == "stdio.h" and self._is_arm64_apple:
+                content += """
+extern void *__stdoutp;
+extern void *__stdinp;
+extern void *__stderrp;
+#define stdout __stdoutp
+#define stdin  __stdinp
+#define stderr __stderrp
+"""
+            # For arm64 Apple, fpclassify uses __fpclassifyd / __fpclassifyf
+            if inc_name == "math.h" and self._is_arm64_apple:
+                content += """
+int __fpclassifyd(double);
+int __fpclassifyf(float);
+#undef fpclassify
+#define fpclassify(x) __fpclassifyd(x)
 """
             return content
 
