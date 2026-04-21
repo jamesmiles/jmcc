@@ -94,6 +94,9 @@ class Arm64AppleCodeGen:
         return f"L{prefix}{self.label_count}"
 
     def mangle(self, name: str) -> str:
+        # On macOS arm64, stdin/stdout/stderr are exposed as __stdinp/__stdoutp/__stderrp
+        _MACOS_STDIO = {"stdin": "__stdinp", "stdout": "__stdoutp", "stderr": "__stderrp"}
+        name = _MACOS_STDIO.get(name, name)
         return f"{self.target.layout.global_symbol_prefix}{name}"
 
     def user_label(self, name: str) -> str:
@@ -322,7 +325,16 @@ class Arm64AppleCodeGen:
         if type_spec.array_sizes[0] is not None:
             return
         if isinstance(init, InitList):
-            type_spec.array_sizes[0] = IntLiteral(value=len(init.items))
+            # Compute max index accounting for designator_index (e.g. {5, [2]=2, 3} -> size 4)
+            max_idx = -1
+            cur_idx = 0
+            for item in init.items:
+                if item.designator_index is not None:
+                    cur_idx = item.designator_index
+                if cur_idx > max_idx:
+                    max_idx = cur_idx
+                cur_idx += 1
+            type_spec.array_sizes[0] = IntLiteral(value=max_idx + 1)
         elif isinstance(init, StringLiteral) and type_spec.base == "char":
             type_spec.array_sizes[0] = IntLiteral(value=len(init.value) + 1)
 
@@ -626,8 +638,17 @@ class Arm64AppleCodeGen:
                 self.emit_global_array_init(elem_type, dummy, line, col)
             return
 
+        # Build index-to-value map respecting designator_index (e.g. {5, [2]=2, 3} -> {0:5, 2:2, 3:3})
+        init_map: dict = {}
+        cur_idx = 0
+        for item in init.items:
+            if item.designator_index is not None:
+                cur_idx = item.designator_index
+            init_map[cur_idx] = item.value
+            cur_idx += 1
+
         for index in range(count):
-            item = init.items[index].value if index < len(init.items) else None
+            item = init_map.get(index)
             self.emit_global_value(elem_type, item, line, col)
 
     def emit_global_struct_init(self, type_spec, value: 'InitList', line: int, col: int):
@@ -649,13 +670,34 @@ class Arm64AppleCodeGen:
 
         current_offset = 0
         members = [m for m in struct_def.members if m.name != ""]
+
+        # Build a map from field name -> init value, handling both designated and
+        # positional initializers. Designated: item.designator = "fieldname".
+        # Positional: assign in member declaration order.
+        designator_map: dict = {}
+        positional_idx = 0
+        for item in value.items:
+            if item.designator is not None:
+                designator_map[item.designator] = item.value
+                # After a designator, positional continues from the NEXT member
+                for j, m in enumerate(members):
+                    if m.name == item.designator:
+                        positional_idx = j + 1
+                        break
+            else:
+                while positional_idx < len(members) and members[positional_idx].name in designator_map:
+                    positional_idx += 1
+                if positional_idx < len(members):
+                    designator_map[members[positional_idx].name] = item.value
+                    positional_idx += 1
+
         for i, member in enumerate(members):
             member_off = struct_def.member_offset(member.name) or 0
             if member_off > current_offset:
                 self.emit(f"    .zero {member_off - current_offset}")
                 current_offset = member_off
             member_type = member.type_spec
-            member_value = value.items[i].value if i < len(value.items) else None
+            member_value = designator_map.get(member.name)
             if self.is_array_type(member_type):
                 size = self.total_size(member_type)
                 if member_value is None:
@@ -2004,9 +2046,25 @@ class Arm64AppleCodeGen:
                 self.pop_reg("x1")
 
             if op == "+":
-                self.emit("    add x0, x1, x0" if wide else "    add w0, w1, w0")
+                if target_type is not None and target_type.is_pointer():
+                    scale = self.element_size(target_type)
+                    self.emit("    sxtw x0, w0")
+                    if scale != 1:
+                        self.emit(f"    mov x2, #{scale}")
+                        self.emit("    mul x0, x0, x2")
+                    self.emit("    add x0, x1, x0")
+                else:
+                    self.emit("    add x0, x1, x0" if wide else "    add w0, w1, w0")
             elif op == "-":
-                self.emit("    sub x0, x1, x0" if wide else "    sub w0, w1, w0")
+                if target_type is not None and target_type.is_pointer():
+                    scale = self.element_size(target_type)
+                    self.emit("    sxtw x0, w0")
+                    if scale != 1:
+                        self.emit(f"    mov x2, #{scale}")
+                        self.emit("    mul x0, x0, x2")
+                    self.emit("    sub x0, x1, x0")
+                else:
+                    self.emit("    sub x0, x1, x0" if wide else "    sub w0, w1, w0")
             elif op == "*":
                 self.emit("    mul x0, x1, x0" if wide else "    mul w0, w1, w0")
             elif op == "/":
@@ -3286,6 +3344,7 @@ class Arm64AppleCodeGen:
                 self.gen_expr(expr.args[0])
                 return
 
+            if fn in ("__builtin_add_overflow", "__builtin_sub_overflow", "__builtin_mul_overflow"):
                 # __builtin_add_overflow(a, b, &result) -> sets *result=a+b, returns 1 if overflow
                 if len(expr.args) >= 3:
                     self.gen_expr(expr.args[0])
@@ -3302,7 +3361,7 @@ class Arm64AppleCodeGen:
                         self.emit("    subs x2, x1, x0" if wide else "    subs w2, w1, w0")
                     else:
                         if wide:
-                            # 64-bit mul overflow: use umulh/smulh trick
+                            # 64-bit mul overflow: use smulh trick
                             self.emit("    mul x2, x1, x0")
                             self.emit("    smulh x3, x1, x0")
                             self.emit("    asr x4, x2, #63")

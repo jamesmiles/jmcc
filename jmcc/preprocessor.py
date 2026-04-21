@@ -245,6 +245,7 @@ int pclose(FILE *stream);
 #ifndef _JMCC_STDLIB_H
 #define _JMCC_STDLIB_H
 #include <stddef.h>
+#include <wchar.h>
 #ifndef _JMCC_BSD_TYPES
 #define _JMCC_BSD_TYPES
 typedef unsigned int uint;
@@ -1068,6 +1069,7 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         self.macros["__STDC__"] = Macro("__STDC__", body="1")
         self.macros["__STDC_VERSION__"] = Macro("__STDC_VERSION__", body="201112L")
         self.macros["__STDC_HOSTED__"] = Macro("__STDC_HOSTED__", body="1")
+        self.macros["__STDC_ISO_10646__"] = Macro("__STDC_ISO_10646__", body="200009L")
         self.macros["__JMCC__"] = Macro("__JMCC__", body="1")
         if self._is_arm64_apple:
             self.macros["__aarch64__"] = Macro("__aarch64__", body="1")
@@ -1533,6 +1535,8 @@ int __fpclassifyf(float);
                 content = content.replace("#define _SC_NPROCESSORS_ONLN 84", "#define _SC_NPROCESSORS_ONLN 58")
                 content = content.replace("#define _SC_PHYS_PAGES 85", "#define _SC_PHYS_PAGES 200")
                 content = content.replace("#define _SC_AVPHYS_PAGES 86", "#undef _SC_AVPHYS_PAGES")
+                # pread64/pwrite64 don't exist on macOS; alias to pread/pwrite
+                content += "\n#define pread64 pread\n#define pwrite64 pwrite\n"
             return content
 
         def _load_file(full):
