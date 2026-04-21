@@ -1798,19 +1798,48 @@ class Arm64AppleCodeGen:
         total_bytes = self.total_size(decl.type_spec)
         explicit_count = len(decl.init.items) if decl.init else 0
         total_elem_count = self._array_dim_count(decl.type_spec)
-        if explicit_count < total_elem_count and total_bytes <= 512:
-            # Emit zero-fill using xzr stores (8 bytes at a time, then 4/1 for remainder)
+        if explicit_count < total_elem_count:
+            # C requires implicit zero-fill for omitted elements.
             base_offset = self.locals[decl.name]
-            filled = 0
-            while filled + 8 <= total_bytes:
-                self.emit(f"    stur xzr, [x29, #{-(base_offset - filled)}]")
-                filled += 8
-            while filled + 4 <= total_bytes:
-                self.emit(f"    stur wzr, [x29, #{-(base_offset - filled)}]")
-                filled += 4
-            while filled < total_bytes:
-                self.emit(f"    sturb wzr, [x29, #{-(base_offset - filled)}]")
-                filled += 1
+            if total_bytes <= 512:
+                # Small arrays: unrolled inline stores (8/4/1 bytes at a time)
+                filled = 0
+                while filled + 8 <= total_bytes:
+                    self.emit(f"    stur xzr, [x29, #{-(base_offset - filled)}]")
+                    filled += 8
+                while filled + 4 <= total_bytes:
+                    self.emit(f"    stur wzr, [x29, #{-(base_offset - filled)}]")
+                    filled += 4
+                while filled < total_bytes:
+                    self.emit(f"    sturb wzr, [x29, #{-(base_offset - filled)}]")
+                    filled += 1
+            else:
+                # Large arrays: use a loop to zero (stp xzr, xzr = 16 bytes/iter)
+                lbl_loop = self.new_label("zero_arr_loop")
+                lbl_end  = self.new_label("zero_arr_end")
+                self.emit(f"    sub x9, x29, #{base_offset}")
+                self.emit(f"    mov x10, #{total_bytes}")
+                self.emit(f"{lbl_loop}:")
+                self.emit(f"    cbz x10, {lbl_end}")
+                # Use stp when 16+ bytes remain, str when 8+, strb otherwise
+                self.emit(f"    cmp x10, #16")
+                lbl_lt16 = self.new_label("zero_lt16")
+                self.emit(f"    b.lt {lbl_lt16}")
+                self.emit(f"    stp xzr, xzr, [x9], #16")
+                self.emit(f"    sub x10, x10, #16")
+                self.emit(f"    b {lbl_loop}")
+                self.emit(f"{lbl_lt16}:")
+                self.emit(f"    cmp x10, #8")
+                lbl_lt8 = self.new_label("zero_lt8")
+                self.emit(f"    b.lt {lbl_lt8}")
+                self.emit(f"    str xzr, [x9], #8")
+                self.emit(f"    sub x10, x10, #8")
+                self.emit(f"    b {lbl_loop}")
+                self.emit(f"{lbl_lt8}:")
+                self.emit(f"    strb wzr, [x9], #1")
+                self.emit(f"    sub x10, x10, #1")
+                self.emit(f"    b {lbl_loop}")
+                self.emit(f"{lbl_end}:")
         for index, item in enumerate(decl.init.items):
             value = item.value
             if value is None:
@@ -2939,9 +2968,19 @@ class Arm64AppleCodeGen:
                         self.pop_d0("d0")   # restore old value as result
                 elif expr.prefix:
                     op = "add" if expr.op == "++" else "sub"
+                    is_byte = self.is_byte_type(type_spec)
+                    is_short = type_spec is not None and type_spec.base == "short" and not type_spec.is_pointer()
                     if is_pointer:
                         self.emit(f"    {op} x0, x0, #{delta}")
                         self.store_var(name, src_reg="x0", line=expr.line, col=expr.col)
+                    elif is_byte:
+                        self.emit(f"    {op} w0, w0, #1")
+                        self.emit("    and w0, w0, #0xFF")
+                        self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
+                    elif is_short:
+                        self.emit(f"    {op} w0, w0, #1")
+                        self.emit("    and w0, w0, #0xFFFF")
+                        self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
                     else:
                         self.emit(f"    {op} w0, w0, #1")
                         self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
@@ -2957,58 +2996,59 @@ class Arm64AppleCodeGen:
                         self.store_var(name, src_reg="w1", line=expr.line, col=expr.col)
                 return
             # Non-Identifier target: MemberAccess, ArrayAccess, pointer deref
+            # Compute address ONCE to avoid double evaluation of side effects (e.g. *s++)
             target_type = self.get_expr_type(expr.operand)
             is_pointer = self.is_pointer_type(target_type)
             delta = self.element_size(target_type) if is_pointer else 1
             wide = is_pointer or self.is_wide_scalar(target_type)
-            self.gen_expr(expr.operand)
+            is_byte = self.is_byte_type(target_type)
+            is_short = target_type is not None and target_type.base == "short" and not target_type.is_pointer()
             op = "add" if expr.op == "++" else "sub"
+            self.gen_lvalue_addr(expr.operand)  # x0 = address (side effects evaluated once)
+            self.emit("    mov x9, x0")          # x9 = saved address
             if expr.prefix:
-                if wide:
-                    self.emit(f"    {op} x0, x0, #{delta}")
-                else:
-                    self.emit(f"    {op} w0, w0, #1")
-                if self.is_byte_type(target_type):
-                    self.emit("    and w0, w0, #0xFF")
-                elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
-                    self.emit("    and w0, w0, #0xFFFF")
-                self.push_x0()
-                self.gen_lvalue_addr(expr.operand)
-                self.pop_reg("x1")
                 if is_pointer or wide:
-                    self.emit("    str x1, [x0]")
-                    self.emit("    mov x0, x1")
-                elif self.is_byte_type(target_type):
-                    self.emit("    strb w1, [x0]")
-                    self.emit("    mov w0, w1")
-                elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
-                    self.emit("    strh w1, [x0]")
-                    self.emit("    mov w0, w1")
+                    self.emit("    ldr x0, [x9]")
+                    self.emit(f"    {op} x0, x0, #{delta}")
+                    self.emit("    str x0, [x9]")
+                elif is_byte:
+                    self.emit("    ldrb w0, [x9]")
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.emit("    and w0, w0, #0xFF")
+                    self.emit("    strb w0, [x9]")
+                elif is_short:
+                    self.emit("    ldrh w0, [x9]")
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.emit("    and w0, w0, #0xFFFF")
+                    self.emit("    strh w0, [x9]")
                 else:
-                    self.emit("    str w1, [x0]")
-                    self.emit("    mov w0, w1")
+                    self.emit("    ldr w0, [x9]")
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.emit("    str w0, [x9]")
             else:
-                # Post: save original, compute new, store, return original
-                self.push_x0()
-                self.push_x0()
-                self.gen_lvalue_addr(expr.operand)
-                # x0 = addr, stack: [orig_val, orig_val]
-                self.emit("    mov x9, x0")  # x9 = addr
-                self.pop_reg("x1")           # x1 = new value to compute
-                if wide:
-                    self.emit(f"    {op} x1, x1, #{delta}")
-                    self.emit("    str x1, [x9]")
-                elif self.is_byte_type(target_type):
-                    self.emit(f"    {op} w1, w1, #1")
-                    self.emit("    and w1, w1, #0xFF")
-                    self.emit("    strb w1, [x9]")
-                elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
-                    self.emit(f"    {op} w1, w1, #1")
-                    self.emit("    and w1, w1, #0xFFFF")
-                    self.emit("    strh w1, [x9]")
+                # Post: load original, save it, compute new value, store, return original
+                if is_pointer or wide:
+                    self.emit("    ldr x0, [x9]")
+                    self.push_x0()
+                    self.emit(f"    {op} x0, x0, #{delta}")
+                    self.emit("    str x0, [x9]")
+                elif is_byte:
+                    self.emit("    ldrb w0, [x9]")
+                    self.push_x0()
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.emit("    and w0, w0, #0xFF")
+                    self.emit("    strb w0, [x9]")
+                elif is_short:
+                    self.emit("    ldrh w0, [x9]")
+                    self.push_x0()
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.emit("    and w0, w0, #0xFFFF")
+                    self.emit("    strh w0, [x9]")
                 else:
-                    self.emit(f"    {op} w1, w1, #1")
-                    self.emit("    str w1, [x9]")
+                    self.emit("    ldr w0, [x9]")
+                    self.push_x0()
+                    self.emit(f"    {op} w0, w0, #1")
+                    self.emit("    str w0, [x9]")
                 self.pop_reg("x0")  # return original value
             return
 
