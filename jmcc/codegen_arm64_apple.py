@@ -76,6 +76,7 @@ class Arm64AppleCodeGen:
         self.break_labels: List[str] = []
         self.continue_labels: List[str] = []
         self.float_literals: Dict[tuple, str] = {}  # (bits, size) -> label
+        self.vla_ptr_locals: set = set()  # locals whose slot holds a VLA base pointer
 
     def error(self, msg, line=0, col=0):
         raise CodeGenError(msg, line=line, col=col)
@@ -135,6 +136,8 @@ class Arm64AppleCodeGen:
 
     def slot_size(self, type_spec) -> int:
         if type_spec is not None and self.is_array_type(type_spec):
+            if self._has_vla_dim(type_spec):
+                return 8  # slot holds a pointer to dynamically allocated array
             return (self.total_size(type_spec) + 7) & ~7
         if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
             return (type_spec.struct_def.size_bytes(self.target) + 7) & ~7
@@ -201,6 +204,44 @@ class Arm64AppleCodeGen:
                     if val is not None:
                         size *= val
         return max(1, size)
+
+    def _has_vla_dim(self, type_spec) -> bool:
+        """Return True if type_spec contains any runtime (VLA) array dimension."""
+        if not self.is_array_type(type_spec):
+            return False
+        for dim in (type_spec.array_sizes or []):
+            if not isinstance(dim, (IntLiteral, SizeofExpr)):
+                if self._global_const_int(dim) is None:
+                    return True
+        return False
+
+    def _emit_runtime_size(self, type_spec):
+        """Emit code that places the byte-size of type_spec into x0.
+        Handles VLA dimensions; may clobber x1. Uses push/pop stack."""
+        if not self.is_array_type(type_spec):
+            self.emit(f"    mov x0, #{self.total_size(type_spec)}")
+            return
+        base_size = type_spec.size_bytes(self.target)
+        static_factor = 1
+        runtime_dims = []
+        for dim in (type_spec.array_sizes or []):
+            if isinstance(dim, IntLiteral):
+                static_factor *= dim.value
+            elif isinstance(dim, SizeofExpr):
+                static_factor *= self.sizeof_value(dim)
+            else:
+                v = self._global_const_int(dim)
+                if v is not None:
+                    static_factor *= v
+                else:
+                    runtime_dims.append(dim)
+        self.emit(f"    mov x0, #{base_size * static_factor}")
+        for dim in runtime_dims:
+            self.push_x0()
+            self.gen_expr(dim)
+            self.emit("    sxtw x0, w0")
+            self.pop_reg("x1")
+            self.emit("    mul x0, x1, x0")
 
     def clone_type(self, type_spec, pointer_depth=None, array_sizes=..., is_ptr_array=...):
         if type_spec is None:
@@ -333,6 +374,9 @@ class Arm64AppleCodeGen:
                 return self.clone_type(operand_type, pointer_depth=operand_type.pointer_depth + 1)
             if expr.op == "*" and operand_type is not None:
                 new_pd = max(operand_type.pointer_depth - 1, 0)
+                # T(*)[n]: dereferencing pointer-to-array gives T[n], keep array_sizes
+                if operand_type.pointer_depth > 0 and not operand_type.is_ptr_array and operand_type.array_sizes:
+                    return self.clone_type(operand_type, pointer_depth=new_pd)
                 return self.clone_type(operand_type, pointer_depth=new_pd, array_sizes=None)
             if expr.op in {"-", "~", "++", "--"} and operand_type is not None:
                 return operand_type
@@ -503,7 +547,23 @@ class Arm64AppleCodeGen:
 
         self.emit_global_value(type_spec, init, line, col)
 
+    def _array_dim_count(self, type_spec) -> int:
+        """Return total number of scalar elements in an array type."""
+        if not self.is_array_type(type_spec):
+            return 1
+        dims = type_spec.array_sizes or []
+        count = 1
+        for d in dims:
+            if isinstance(d, IntLiteral):
+                count *= d.value
+            else:
+                v = self._global_const_int(d)
+                if v is not None:
+                    count *= v
+        return count
+
     def emit_global_array_init(self, type_spec, init: InitList, line: int, col: int):
+        """Emit global array data, supporting both braced and flat initializers."""
         elem_type = self.element_type(type_spec)
         if type_spec.array_sizes and type_spec.array_sizes[0] is not None:
             dim = type_spec.array_sizes[0]
@@ -515,12 +575,47 @@ class Arm64AppleCodeGen:
                     count = len(init.items)
         else:
             count = len(init.items)
+
+        # Detect flat init: 2D+ array but items are scalars, not sub-InitLists.
+        # String literals are row-level initializers for char sub-arrays — exclude them.
+        is_nested_array = self.is_array_type(elem_type)
+        has_flat_items = (is_nested_array and init.items
+                          and not isinstance(init.items[0].value, (InitList, StringLiteral)))
+
+        if has_flat_items:
+            # Flat initializer: consume items sequentially across all sub-arrays
+            flat_items = [item.value for item in init.items]
+            flat_idx = 0
+            for _ in range(count):
+                sub_count = self._array_dim_count(elem_type)
+                sub_items = flat_items[flat_idx:flat_idx + sub_count]
+                flat_idx += sub_count
+                from jmcc.ast_nodes import InitItem
+                dummy = InitList(items=[InitItem(value=v) for v in sub_items], line=line, col=col)
+                self.emit_global_array_init(elem_type, dummy, line, col)
+            return
+
         for index in range(count):
             item = init.items[index].value if index < len(init.items) else None
             self.emit_global_value(elem_type, item, line, col)
 
     def emit_global_struct_init(self, type_spec, value: 'InitList', line: int, col: int):
         struct_def = type_spec.struct_def
+        total = struct_def.size_bytes(self.target)
+
+        # For unions: emit only the first (or only initialized) member, then zero-pad to union size.
+        if struct_def.is_union:
+            first_val = value.items[0].value if value.items else None
+            first_member = next((m for m in struct_def.members if m.name != ""), None)
+            if first_member is not None and first_val is not None:
+                self.emit_global_value(first_member.type_spec, first_val, line, col)
+                emitted = self.total_size(first_member.type_spec)
+            else:
+                emitted = 0
+            if total > emitted:
+                self.emit(f"    .zero {total - emitted}")
+            return
+
         current_offset = 0
         members = [m for m in struct_def.members if m.name != ""]
         for i, member in enumerate(members):
@@ -602,8 +697,8 @@ class Arm64AppleCodeGen:
                     # Union initializer — use only the first element
                     if member_value.items:
                         nested_val = member_value.items[0].value
-                        from jmcc.ast import InitListItem
-                        dummy_list = InitList(items=[InitListItem(value=nested_val)], line=line, col=col)
+                        from jmcc.ast_nodes import InitItem
+                        dummy_list = InitList(items=[InitItem(value=nested_val)], line=line, col=col)
                         # emit the first field's worth of bytes
                         nested_intval = self._global_const_int(nested_val)
                         nested_sym = self._global_addr_str(nested_val)
@@ -710,6 +805,8 @@ class Arm64AppleCodeGen:
         self.stack_size += self.slot_size(type_spec)
         self.locals[name] = self.stack_size
         self.local_types[name] = type_spec
+        if type_spec is not None and self.is_array_type(type_spec) and self._has_vla_dim(type_spec):
+            self.vla_ptr_locals.add(name)
 
     def collect_locals_stmt(self, stmt: Stmt):
         if isinstance(stmt, Block):
@@ -761,6 +858,7 @@ class Arm64AppleCodeGen:
         self.locals = {}
         self.local_types = {}
         self.static_locals = {}
+        self.vla_ptr_locals = set()
         self.stack_size = 0
         for param in func.params:
             self.alloc_slot(param.name, param.type_spec)
@@ -771,7 +869,10 @@ class Arm64AppleCodeGen:
         type_spec = self.get_var_type(name)
         if name in self.locals:
             if type_spec is not None and (type_spec.is_array() or type_spec.is_ptr_array):
-                self.emit(f"    sub x0, x29, #{self.locals[name]}")
+                if name in self.vla_ptr_locals:
+                    self.emit_local_load("ldur", "x0", self.locals[name])
+                else:
+                    self.emit(f"    sub x0, x29, #{self.locals[name]}")
             elif type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
                 self.emit(f"    sub x0, x29, #{self.locals[name]}")
             elif self.is_fp_type(type_spec):
@@ -1293,6 +1394,15 @@ class Arm64AppleCodeGen:
                 self.emit("    bl _memcpy")
             return
         if decl.type_spec is not None and decl.init is None:
+            if decl.name in self.vla_ptr_locals:
+                # VLA array: compute size at runtime and allocate on stack
+                self._emit_runtime_size(decl.type_spec)
+                self.emit("    add x0, x0, #15")
+                self.emit("    bic x0, x0, #15")
+                self.emit("    sub sp, sp, x0")
+                self.emit("    mov x0, sp")
+                self.emit_local_store("stur", "x0", self.locals[decl.name])
+                return
             if decl.type_spec.is_array() or (decl.type_spec.is_struct() and not decl.type_spec.is_pointer()):
                 return
         if decl.init is None:
@@ -2224,7 +2334,10 @@ class Arm64AppleCodeGen:
     def gen_lvalue_addr(self, expr: Expr):
         if isinstance(expr, Identifier):
             if expr.name in self.locals:
-                self.emit(f"    sub x0, x29, #{self.locals[expr.name]}")
+                if expr.name in self.vla_ptr_locals:
+                    self.emit_local_load("ldur", "x0", self.locals[expr.name])
+                else:
+                    self.emit(f"    sub x0, x29, #{self.locals[expr.name]}")
                 return
             if expr.name in self.static_locals:
                 self.emit_symbol_addr(self.static_locals[expr.name])
@@ -2314,11 +2427,21 @@ class Arm64AppleCodeGen:
         self.pop_reg("x1")
 
         elem_type = self.element_type(array_type)
-        elem_size = self.total_size(elem_type)
 
-        if elem_size != 1:
-            self.emit(f"    mov x2, #{elem_size}")
-            self.emit("    mul x0, x0, x2")
+        if self._has_vla_dim(elem_type):
+            # VLA element: compute stride at runtime.
+            # x0=index, x1=base. Save both, compute size into x0, then multiply.
+            self.emit("    str x0, [sp, #-16]!")  # push index
+            self.emit("    str x1, [sp, #-16]!")  # push base
+            self._emit_runtime_size(elem_type)     # x0 = stride (may use stack/x1)
+            self.pop_reg("x1")                     # restore base
+            self.pop_reg("x2")                     # restore index
+            self.emit("    mul x0, x2, x0")        # x0 = index * stride
+        else:
+            elem_size = self.total_size(elem_type)
+            if elem_size != 1:
+                self.emit(f"    mov x2, #{elem_size}")
+                self.emit("    mul x0, x0, x2")
         self.emit("    add x0, x1, x0")
 
     def gen_array_access(self, expr: ArrayAccess):
@@ -2382,7 +2505,7 @@ class Arm64AppleCodeGen:
         member_type = self.get_expr_type(expr)
         if member_type is not None and member_type.is_struct() and not member_type.is_pointer():
             return
-        if member_type is not None and self.is_array_type(member_type):
+        if member_type is not None and (member_type.is_array() or member_type.is_ptr_array):
             return
         if self.is_fp_type(member_type):
             if member_type.base == "float":
