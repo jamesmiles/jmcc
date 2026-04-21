@@ -254,6 +254,8 @@ class Arm64AppleCodeGen:
             struct_def=type_spec.struct_def,
             enum_def=type_spec.enum_def,
             is_ptr_array=type_spec.is_ptr_array if is_ptr_array is ... else is_ptr_array,
+            is_func_ptr=type_spec.is_func_ptr,
+            func_ptr_native_depth=type_spec.func_ptr_native_depth,
         )
 
     def emit_symbol_addr(self, symbol: str, reg: str = "x0"):
@@ -1430,7 +1432,6 @@ class Arm64AppleCodeGen:
         self.store_var(decl.name, line=decl.line, col=decl.col)
 
     def gen_local_array_init(self, decl: VarDecl):
-        self.emit(f"    sub x9, x29, #{self.locals[decl.name]}")
         elem_type = self.element_type(decl.type_spec)
         elem_size = self.total_size(elem_type)
         for index, item in enumerate(decl.init.items):
@@ -1458,26 +1459,31 @@ class Arm64AppleCodeGen:
             if self.is_array_type(elem_type) and isinstance(value, StringLiteral) and elem_type.base == "char":
                 # char sub-array initialized from string literal — copy bytes
                 str_bytes = [ord(c) for c in value.value] + [0]
+                # Recompute x9 here since gen_expr is not called, but be explicit about base
+                self.emit(f"    sub x9, x29, #{self.locals[decl.name]}")
                 for i in range(self.total_size(elem_type)):
                     b = str_bytes[i] if i < len(str_bytes) else 0
                     self.emit(f"    movz w0, #{b}")
                     self.emit(f"    strb w0, [x9, #{offset + i}]")
                 continue
             self.gen_expr(value)
+            # Recompute x9 after gen_expr since gen_expr may clobber x9 (e.g. float literals, globals)
+            neg_off = self.locals[decl.name] - offset
+            self.emit(f"    sub x9, x29, #{neg_off}")
             if self.is_fp_type(elem_type):
                 if elem_type is not None and elem_type.base == "float":
                     self.emit("    fcvt s0, d0")
-                    self.emit(f"    str s0, [x9, #{offset}]")
+                    self.emit("    str s0, [x9]")
                 else:
-                    self.emit(f"    str d0, [x9, #{offset}]")
+                    self.emit("    str d0, [x9]")
             elif elem_type is not None and self.is_pointer_type(elem_type):
-                self.emit(f"    str x0, [x9, #{offset}]")
+                self.emit("    str x0, [x9]")
             elif self.is_byte_type(elem_type):
-                self.emit(f"    strb w0, [x9, #{offset}]")
+                self.emit("    strb w0, [x9]")
             elif elem_type is not None and elem_type.base == "short" and not elem_type.is_pointer():
-                self.emit(f"    strh w0, [x9, #{offset}]")
+                self.emit("    strh w0, [x9]")
             else:
-                self.emit(f"    str w0, [x9, #{offset}]")
+                self.emit("    str w0, [x9]")
 
     def gen_struct_init_at_addr(self, type_spec, init: 'InitList', x29_neg_offset: int):
         """Write struct init list items to [x29 - x29_neg_offset + member_off] for each member.
@@ -1520,7 +1526,6 @@ class Arm64AppleCodeGen:
         struct_def = decl.type_spec.struct_def
         if struct_def is None:
             return
-        self.emit(f"    sub x9, x29, #{self.locals[decl.name]}")
         members = [m for m in struct_def.members if m.name != ""]
         for i, item in enumerate(decl.init.items):
             if i >= len(members):
@@ -1531,20 +1536,23 @@ class Arm64AppleCodeGen:
             member_off = struct_def.member_offset(member.name) or 0
             member_type = member.type_spec
             self.gen_expr(item.value)
+            # Recompute x9 after gen_expr since gen_expr may clobber x9 (e.g. float literals, globals)
+            neg_off = self.locals[decl.name] - member_off
+            self.emit(f"    sub x9, x29, #{neg_off}")
             if self.is_fp_type(member_type):
                 if member_type.base == "float":
                     self.emit("    fcvt s0, d0")
-                    self.emit(f"    str s0, [x9, #{member_off}]")
+                    self.emit("    str s0, [x9]")
                 else:
-                    self.emit(f"    str d0, [x9, #{member_off}]")
+                    self.emit("    str d0, [x9]")
             elif self.is_pointer_type(member_type) or self.is_wide_scalar(member_type):
-                self.emit(f"    str x0, [x9, #{member_off}]")
+                self.emit("    str x0, [x9]")
             elif member_type.size_bytes(self.target) <= 1:
-                self.emit(f"    strb w0, [x9, #{member_off}]")
+                self.emit("    strb w0, [x9]")
             elif member_type.size_bytes(self.target) <= 2:
-                self.emit(f"    strh w0, [x9, #{member_off}]")
+                self.emit("    strh w0, [x9]")
             else:
-                self.emit(f"    str w0, [x9, #{member_off}]")
+                self.emit("    str w0, [x9]")
 
     def gen_if(self, stmt: IfStmt):
         else_label = self.new_label("else")
@@ -2305,6 +2313,10 @@ class Arm64AppleCodeGen:
         elif expr.op == "&":
             self.gen_lvalue_addr(expr.operand)
         elif expr.op == "*":
+            # Dereferencing a function pointer is a no-op in C (gives function designator)
+            if (operand_type is not None and operand_type.func_ptr_native_depth > 0 and
+                    operand_type.pointer_depth == operand_type.func_ptr_native_depth):
+                return
             if operand_type is not None and operand_type.base == "char" and operand_type.pointer_depth == 1:
                 self.emit("    ldrb w0, [x0]" if operand_type.is_unsigned else "    ldrsb w0, [x0]")
             elif operand_type is not None and operand_type.base == "short" and operand_type.pointer_depth == 1:
