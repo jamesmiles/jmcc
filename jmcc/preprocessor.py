@@ -373,11 +373,11 @@ float fmodf(float, float);
 #define HUGE_VALF (1.0f/0.0f)
 #define INFINITY  (1.0f/0.0f)
 #define NAN       (0.0f/0.0f)
-#define FP_NAN       0
-#define FP_INFINITE  1
-#define FP_ZERO      2
-#define FP_SUBNORMAL 3
+#define FP_NAN       1
+#define FP_INFINITE  2
+#define FP_ZERO      3
 #define FP_NORMAL    4
+#define FP_SUBNORMAL 5
 int isinf(double);
 int isinff(float);
 int isnan(double);

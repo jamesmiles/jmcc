@@ -147,6 +147,12 @@ class Arm64AppleCodeGen:
             return self.globals[name].type_spec
         return None
 
+    def is_byte_type(self, type_spec) -> bool:
+        """Return True for char and _Bool types (1-byte scalar, non-pointer)."""
+        return (type_spec is not None and
+                type_spec.base in ("char", "_Bool") and
+                not type_spec.is_pointer())
+
     def is_pointer_type(self, type_spec) -> bool:
         return type_spec is not None and type_spec.is_pointer()
 
@@ -407,13 +413,20 @@ class Arm64AppleCodeGen:
 
         if self.float_literals:
             self.emit("")
-            self.emit("    .section __TEXT,__literal8,8byte_literals")
-            for (bits, size), label in self.float_literals.items():
-                self.emit(f"    .p2align {3 if size == 8 else 2}")
-                self.label(label)
-                if size == 8:
+            # Separate 4-byte and 8-byte float literals into their proper sections
+            float4 = [(k, v) for k, v in self.float_literals.items() if k[1] == 4]
+            float8 = [(k, v) for k, v in self.float_literals.items() if k[1] == 8]
+            if float8:
+                self.emit("    .section __TEXT,__literal8,8byte_literals")
+                for (bits, size), label in float8:
+                    self.emit("    .p2align 3")
+                    self.label(label)
                     self.emit(f"    .quad {bits}")
-                else:
+            if float4:
+                self.emit("    .section __TEXT,__literal4,4byte_literals")
+                for (bits, size), label in float4:
+                    self.emit("    .p2align 2")
+                    self.label(label)
                     self.emit(f"    .long {bits}")
 
         return "\n".join(self.output) + "\n"
@@ -755,8 +768,8 @@ class Arm64AppleCodeGen:
                     self.emit_local_load("ldur", "d0", self.locals[name])
             elif self.is_pointer_type(type_spec):
                 self.emit_local_load("ldur", "x0", self.locals[name])
-            elif type_spec is not None and type_spec.base == "char":
-                self.emit_local_load("ldurb" if type_spec.is_unsigned else "ldursb", "w0", self.locals[name])
+            elif self.is_byte_type(type_spec):
+                self.emit_local_load("ldurb" if (type_spec.is_unsigned or type_spec.base == "_Bool") else "ldursb", "w0", self.locals[name])
             elif type_spec is not None and type_spec.base == "short":
                 self.emit_local_load("ldurh" if type_spec.is_unsigned else "ldursh", "w0", self.locals[name])
             elif self.is_wide_scalar(type_spec):
@@ -781,7 +794,7 @@ class Arm64AppleCodeGen:
                 self.emit("    ldrh w0, [x9]" if type_spec.is_unsigned else "    ldrsh w0, [x9]")
             elif self.is_wide_scalar(type_spec):
                 self.emit("    ldr x0, [x9]")
-            elif type_spec is not None and type_spec.base == "char":
+            elif self.is_byte_type(type_spec):
                 self.emit("    ldrb w0, [x9]" if type_spec.is_unsigned else "    ldrsb w0, [x9]")
             else:
                 self.emit("    ldr w0, [x9]")
@@ -809,7 +822,7 @@ class Arm64AppleCodeGen:
                 self.emit("    ldrh w0, [x9]" if type_spec.is_unsigned else "    ldrsh w0, [x9]")
             elif self.is_wide_scalar(type_spec):
                 self.emit("    ldr x0, [x9]")
-            elif type_spec is not None and type_spec.base == "char":
+            elif self.is_byte_type(type_spec):
                 self.emit("    ldrb w0, [x9]" if type_spec.is_unsigned else "    ldrsb w0, [x9]")
             else:
                 self.emit("    ldr w0, [x9]")
@@ -836,10 +849,15 @@ class Arm64AppleCodeGen:
         if is_fp and type_spec is not None and type_spec.base == "float":
             self.emit("    fcvt s0, d0")
             src_reg = "s0"
+        if type_spec is not None and type_spec.base == "_Bool" and not is_fp:
+            # _Bool stores 0 or 1 — normalize the value before storing
+            self.emit("    cmp w0, #0")
+            self.emit("    cset w0, ne")
+            src_reg = "w0"
         if name in self.locals:
             if is_fp:
                 self.emit_local_store("stur", src_reg, self.locals[name])
-            elif type_spec is not None and type_spec.base == "char" and not type_spec.is_pointer():
+            elif self.is_byte_type(type_spec):
                 self.emit_local_store("sturb", src_reg, self.locals[name])
             elif type_spec is not None and type_spec.base == "short" and not type_spec.is_pointer():
                 self.emit_local_store("sturh", src_reg, self.locals[name])
@@ -851,7 +869,7 @@ class Arm64AppleCodeGen:
             self.emit_symbol_addr(label, "x9")
             if is_fp:
                 self.emit(f"    str {src_reg}, [x9]")
-            elif type_spec is not None and type_spec.base == "char" and not type_spec.is_pointer():
+            elif self.is_byte_type(type_spec):
                 self.emit(f"    strb {src_reg}, [x9]")
             elif type_spec is not None and type_spec.base == "short" and not type_spec.is_pointer():
                 self.emit(f"    strh {src_reg}, [x9]")
@@ -869,7 +887,7 @@ class Arm64AppleCodeGen:
                 self.emit_symbol_addr(mangled, "x9")
             if is_fp:
                 self.emit(f"    str {src_reg}, [x9]")
-            elif type_spec is not None and type_spec.base == "char" and not type_spec.is_pointer():
+            elif self.is_byte_type(type_spec):
                 self.emit(f"    strb {src_reg}, [x9]")
             elif type_spec is not None and type_spec.base == "short" and not type_spec.is_pointer():
                 self.emit(f"    strh {src_reg}, [x9]")
@@ -1267,8 +1285,16 @@ class Arm64AppleCodeGen:
             self.emit("    mov w0, #0")
         else:
             self.gen_expr(decl.init)
+            # If target is FP but value is integer, convert now
+            if decl.type_spec is not None and self.is_fp_type(decl.type_spec):
+                val_type = self.get_expr_type(decl.init)
+                if not self.is_fp_type(val_type):
+                    if val_type is not None and val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Sign-extend narrow expressions into wide (i64) local variables
-            if decl.type_spec is not None and self.is_wide_scalar(decl.type_spec) and not decl.type_spec.is_unsigned:
+            elif decl.type_spec is not None and self.is_wide_scalar(decl.type_spec) and not decl.type_spec.is_unsigned:
                 expr_type = self.get_expr_type(decl.init)
                 if expr_type is None or not (self.is_wide_scalar(expr_type) or expr_type.is_pointer()):
                     expr_size = expr_type.size_bytes(self.target) if expr_type is not None else 4
@@ -1314,7 +1340,7 @@ class Arm64AppleCodeGen:
                     self.emit(f"    str d0, [x9, #{offset}]")
             elif elem_type is not None and self.is_pointer_type(elem_type):
                 self.emit(f"    str x0, [x9, #{offset}]")
-            elif elem_type is not None and elem_type.base == "char" and not elem_type.is_pointer():
+            elif self.is_byte_type(elem_type):
                 self.emit(f"    strb w0, [x9, #{offset}]")
             elif elem_type is not None and elem_type.base == "short" and not elem_type.is_pointer():
                 self.emit(f"    strh w0, [x9, #{offset}]")
@@ -1591,7 +1617,7 @@ class Arm64AppleCodeGen:
             wide = self.is_wide_scalar(target_type)
             op = expr.op[:-1]
             is_short = target_type is not None and target_type.base == "short" and not target_type.is_pointer()
-            is_char = target_type is not None and target_type.base == "char" and not target_type.is_pointer()
+            is_char = self.is_byte_type(target_type)
 
             if self.is_fp_type(target_type):
                 # FP compound assignment — load current, compute, store
@@ -1602,7 +1628,11 @@ class Arm64AppleCodeGen:
                 self.push_d0()
                 self.gen_expr(expr.value)
                 if not self.is_fp_type(self.get_expr_type(expr.value)):
-                    self.emit("    scvtf d0, x0" if self.is_wide_scalar(self.get_expr_type(expr.value)) else "    scvtf d0, w0")
+                    val_type = self.get_expr_type(expr.value)
+                    if val_type is not None and val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
                 self.pop_d0("d1")
                 if op == "+":
                     self.emit("    fadd d0, d1, d0")
@@ -1739,6 +1769,13 @@ class Arm64AppleCodeGen:
                     self.emit(f"    mov x2, #{struct_size}")
                     self.emit("    bl _memcpy")
                 return
+            if self.is_fp_type(target_type):
+                val_type = self.get_expr_type(expr.value)
+                if not self.is_fp_type(val_type):
+                    if val_type is not None and val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             self.store_var(expr.target.name, line=expr.line, col=expr.col)
             return
 
@@ -1833,6 +1870,13 @@ class Arm64AppleCodeGen:
                     self.emit("    bl _memcpy")
                 return
             if self.is_fp_type(target_type):
+                val_type = self.get_expr_type(expr.value)
+                if not self.is_fp_type(val_type):
+                    # Convert integer to double before storing
+                    if val_type is not None and val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
                 self.push_d0()
                 self.gen_lvalue_addr(expr.target)
                 self.pop_d0("d1")
@@ -1849,7 +1893,7 @@ class Arm64AppleCodeGen:
                 if target_type is not None and target_type.is_pointer():
                     self.emit("    str x1, [x0]")
                     self.emit("    mov x0, x1")
-                elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                elif self.is_byte_type(target_type):
                     self.emit("    strb w1, [x0]")
                     self.emit("    and w0, w1, #0xff")
                 elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
@@ -1904,11 +1948,17 @@ class Arm64AppleCodeGen:
         if is_fp_op:
             self.gen_expr(expr.left)
             if not self.is_fp_type(left_type):
-                self.emit("    scvtf d0, x0" if self.is_wide_scalar(left_type) else "    scvtf d0, w0")
+                if left_type is not None and left_type.is_unsigned:
+                    self.emit("    ucvtf d0, x0" if self.is_wide_scalar(left_type) else "    ucvtf d0, w0")
+                else:
+                    self.emit("    scvtf d0, x0" if self.is_wide_scalar(left_type) else "    scvtf d0, w0")
             self.push_d0()
             self.gen_expr(expr.right)
             if not self.is_fp_type(right_type):
-                self.emit("    scvtf d0, x0" if self.is_wide_scalar(right_type) else "    scvtf d0, w0")
+                if right_type is not None and right_type.is_unsigned:
+                    self.emit("    ucvtf d0, x0" if self.is_wide_scalar(right_type) else "    ucvtf d0, w0")
+                else:
+                    self.emit("    scvtf d0, x0" if self.is_wide_scalar(right_type) else "    scvtf d0, w0")
             self.pop_d0("d1")
             fp_cond = {
                 "==": "eq", "!=": "ne",
@@ -2045,7 +2095,7 @@ class Arm64AppleCodeGen:
                     self.emit(f"    {op} x0, x0, #{delta}")
                 else:
                     self.emit(f"    {op} w0, w0, #1")
-                if target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                if self.is_byte_type(target_type):
                     self.emit("    and w0, w0, #0xFF")
                 elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
                     self.emit("    and w0, w0, #0xFFFF")
@@ -2055,7 +2105,7 @@ class Arm64AppleCodeGen:
                 if is_pointer or wide:
                     self.emit("    str x1, [x0]")
                     self.emit("    mov x0, x1")
-                elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                elif self.is_byte_type(target_type):
                     self.emit("    strb w1, [x0]")
                     self.emit("    mov w0, w1")
                 elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
@@ -2075,7 +2125,7 @@ class Arm64AppleCodeGen:
                 if wide:
                     self.emit(f"    {op} x1, x1, #{delta}")
                     self.emit("    str x1, [x9]")
-                elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                elif self.is_byte_type(target_type):
                     self.emit(f"    {op} w1, w1, #1")
                     self.emit("    and w1, w1, #0xFF")
                     self.emit("    strb w1, [x9]")
@@ -2249,7 +2299,7 @@ class Arm64AppleCodeGen:
             return  # result is an array subtype; address stays in x0
         if result_type is not None and result_type.is_struct() and not result_type.is_pointer():
             return  # struct element: keep address in x0
-        if result_type is not None and result_type.base == "char" and not result_type.is_pointer():
+        if self.is_byte_type(result_type):
             self.emit("    ldrb w0, [x0]" if result_type.is_unsigned else "    ldrsb w0, [x0]")
         elif result_type is not None and result_type.base == "short" and not result_type.is_pointer():
             self.emit("    ldrh w0, [x0]" if result_type.is_unsigned else "    ldrsh w0, [x0]")
@@ -2311,8 +2361,8 @@ class Arm64AppleCodeGen:
                 self.emit("    fcvt d0, s0")
             else:
                 self.emit("    ldr d0, [x0]")
-        elif member_type is not None and member_type.base == "char" and not member_type.is_pointer():
-            self.emit("    ldrb w0, [x0]" if member_type.is_unsigned else "    ldrsb w0, [x0]")
+        elif self.is_byte_type(member_type):
+            self.emit("    ldrb w0, [x0]" if (member_type.is_unsigned or member_type.base == "_Bool") else "    ldrsb w0, [x0]")
         elif member_type is not None and member_type.base == "short" and not member_type.is_pointer():
             self.emit("    ldrh w0, [x0]" if member_type.is_unsigned else "    ldrsh w0, [x0]")
         elif self.is_wide_scalar(member_type):
@@ -2431,7 +2481,10 @@ class Arm64AppleCodeGen:
             else:
                 # int → fp
                 if self.is_wide_scalar(source) or self.is_pointer_type(source):
-                    self.emit("    scvtf d0, x0")
+                    if source is not None and source.is_unsigned:
+                        self.emit("    ucvtf d0, x0")
+                    else:
+                        self.emit("    scvtf d0, x0")
                 elif source is not None and source.is_unsigned:
                     self.emit("    ucvtf d0, w0")
                 else:
@@ -2534,25 +2587,36 @@ class Arm64AppleCodeGen:
                     self.push_x0()
                     self.gen_expr(expr.args[1])
                     self.pop_reg("x1")
-                    # x1=a, x0=b
+                    # x1=a, x0=b; detect 64-bit operands
+                    arg0_type = self.get_expr_type(expr.args[0])
+                    arg1_type = self.get_expr_type(expr.args[1])
+                    wide = self.is_wide_scalar(arg0_type) or self.is_wide_scalar(arg1_type)
                     if fn == "__builtin_add_overflow":
-                        self.emit("    adds w2, w1, w0")
+                        self.emit("    adds x2, x1, x0" if wide else "    adds w2, w1, w0")
                     elif fn == "__builtin_sub_overflow":
-                        self.emit("    subs w2, w1, w0")
+                        self.emit("    subs x2, x1, x0" if wide else "    subs w2, w1, w0")
                     else:
-                        self.emit("    smull x2, w1, w0")
-                        self.emit("    sxtw x3, w2")
-                        self.emit("    cmp x2, x3")
-                        self.emit("    cset w0, ne")
+                        if wide:
+                            # 64-bit mul overflow: use umulh/smulh trick
+                            self.emit("    mul x2, x1, x0")
+                            self.emit("    smulh x3, x1, x0")
+                            self.emit("    asr x4, x2, #63")
+                            self.emit("    cmp x3, x4")
+                            self.emit("    cset w0, ne")
+                        else:
+                            self.emit("    smull x2, w1, w0")
+                            self.emit("    sxtw x3, w2")
+                            self.emit("    cmp x2, x3")
+                            self.emit("    cset w0, ne")
                         # store result
                         self.gen_expr(expr.args[2])
-                        self.emit("    str w2, [x0]")
+                        self.emit("    str x2, [x0]" if wide else "    str w2, [x0]")
                         return
                     self.emit("    cset w0, vs")
                     # store result via pointer arg
                     self.push_x0()  # save overflow flag
                     self.gen_expr(expr.args[2])
-                    self.emit("    str w2, [x0]")
+                    self.emit("    str x2, [x0]" if wide else "    str w2, [x0]")
                     self.pop_reg("x0")  # restore overflow flag
                 else:
                     self.emit("    mov w0, #0")
@@ -2586,7 +2650,7 @@ class Arm64AppleCodeGen:
             self.gen_expr(arg)
             if self.is_fp_type(a_type):
                 self.push_d0()
-            elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()):
+            elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer() and not self.is_array_type(a_type)):
                 struct_size = a_type.struct_def.size_bytes(self.target)
                 if self._is_struct_by_reg_value(arg):
                     # gen_expr already put bytes in x0[/x1]
@@ -2643,6 +2707,7 @@ class Arm64AppleCodeGen:
                     reg_assigns.append(('fp', fp_idx))
                     fp_idx += 1
                 elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()
+                      and not self.is_array_type(a_type)
                       and a_type.struct_def.size_bytes(self.target) > 8):
                     # 9-16 byte struct occupies 2 x-registers
                     reg_assigns.append(('struct2', int_idx))
