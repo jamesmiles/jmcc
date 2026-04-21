@@ -153,16 +153,54 @@ def _native_execute_hosted(binary_path, stdin_data=None):
         return {"stdout": "", "stderr": "TIMEOUT", "returncode": -1}
 
 
-def compile_with_reference(source_path, compiler, output_path, std="c11"):
-    """Compile a C file with a reference compiler inside Docker."""
-    src_name = os.path.basename(source_path)
-    out_name = os.path.basename(output_path)
+def _resolve_include_paths(source_path, metadata):
+    test_dir = os.path.dirname(os.path.abspath(source_path))
+    include_paths = [test_dir]
+    for path in metadata.get("include_paths", []):
+        include_paths.append(os.path.join(test_dir, path) if not os.path.isabs(path) else path)
+    for entry in os.listdir(test_dir):
+        subdir = os.path.join(test_dir, entry)
+        if os.path.isdir(subdir) and entry != "helpers":
+            include_paths.append(subdir)
+    return include_paths
 
-    result = docker_exec([
-        compiler, f"-std={std}", "-pedantic", "-Wall", "-Werror",
-        "-o", f"/work/output/{out_name}",
-        f"/work/tests/{src_name}"
-    ])
+
+def _resolve_multi_file_paths(source_path, metadata):
+    source_dir = os.path.dirname(os.path.abspath(source_path))
+    return [os.path.join(source_dir, helper_file) for helper_file in metadata.get("multi_file", [])]
+
+
+def compile_with_reference(source_path, compiler, output_path, metadata=None, std="c11"):
+    """Compile a C file with a reference compiler."""
+    metadata = metadata or {}
+    include_paths = _resolve_include_paths(source_path, metadata)
+    extra_sources = _resolve_multi_file_paths(source_path, metadata)
+    cmd = [compiler, f"-std={std}", "-pedantic", "-Wall", "-Werror"]
+    for define in metadata.get("defines", []):
+        cmd.append(f"-D{define}")
+    for include_path in include_paths:
+        cmd.extend(["-I", include_path])
+    cmd.extend([source_path, *extra_sources, "-o", output_path])
+
+    if _use_native():
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+        )
+    else:
+        out_name = os.path.basename(output_path)
+        source_names = [f"/work/tests/{os.path.basename(source_path)}"] + [
+            f"/work/tests/{os.path.basename(extra_source)}" for extra_source in extra_sources
+        ]
+        docker_cmd = [compiler, f"-std={std}", "-pedantic", "-Wall", "-Werror"]
+        for define in metadata.get("defines", []):
+            docker_cmd.append(f"-D{define}")
+        for include_path in include_paths:
+            docker_cmd.extend(["-I", f"/work/tests/{os.path.relpath(include_path, PROJECT_DIR / 'tests')}"])
+        docker_cmd.extend([*source_names, "-o", f"/work/output/{out_name}"])
+        result = docker_exec(docker_cmd)
 
     return {
         "success": result.returncode == 0,
@@ -385,17 +423,7 @@ def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
     if compiler == "jmcc":
         asm_path = str(output_dir / f"{test_name}.s")
         bin_path = str(output_dir / f"{test_name}")
-
-        # Resolve include paths relative to test file directory
-        test_dir = os.path.dirname(os.path.abspath(source_path))
-        inc_paths = []
-        for p in metadata.get("include_paths", []):
-            inc_paths.append(os.path.join(test_dir, p) if not os.path.isabs(p) else p)
-        # Auto-add subdirectories of the test file's directory
-        for entry in os.listdir(test_dir):
-            subdir = os.path.join(test_dir, entry)
-            if os.path.isdir(subdir) and entry != "helpers":
-                inc_paths.append(subdir)
+        inc_paths = _resolve_include_paths(source_path, metadata)
 
         # Compile with JMCC
         comp = compile_with_jmcc(source_path, asm_path, defines=metadata.get("defines"),
@@ -415,13 +443,17 @@ def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
 
         # Compile multi-file helpers
         extra_asm_paths = []
-        source_dir = str(Path(source_path).parent)
-        for helper_file in metadata.get("multi_file", []):
-            helper_path = os.path.join(source_dir, helper_file)
-            helper_asm = str(output_dir / f"{Path(helper_file).stem}.s")
-            hcomp = compile_with_jmcc(helper_path, helper_asm, target=target)
+        for helper_path in _resolve_multi_file_paths(source_path, metadata):
+            helper_asm = str(output_dir / f"{Path(helper_path).stem}.s")
+            hcomp = compile_with_jmcc(
+                helper_path,
+                helper_asm,
+                defines=metadata.get("defines"),
+                include_paths=inc_paths if inc_paths else None,
+                target=target,
+            )
             if not hcomp["success"]:
-                result["details"] = f"JMCC compilation failed (helper {helper_file}):\n{hcomp['stderr']}"
+                result["details"] = f"JMCC compilation failed (helper {os.path.basename(helper_path)}):\n{hcomp['stderr']}"
                 return result
             extra_asm_paths.append(helper_asm)
 
@@ -471,7 +503,7 @@ def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
         bin_path = str(output_dir / f"{test_name}_{compiler}")
 
         # For negative tests, check that reference compiler also rejects
-        comp = compile_with_reference(source_path, compiler, bin_path)
+        comp = compile_with_reference(source_path, compiler, bin_path, metadata=metadata)
 
         if metadata["expect_compile_fail"]:
             result["passed"] = not comp["success"]

@@ -182,6 +182,7 @@ APPLE_PHASE1_TESTS = (
     "positive/phase5/036_system_header_constants.c",
     "positive/phase5/037_system_struct_stat.c",
     "positive/phase5/038_system_timeval.c",
+    "positive/phase5/039_angle_bracket_include.c",
     "positive/phase5/041_include_unistd.c",
     "positive/phase5/042_include_fcntl.c",
     "positive/phase5/043_include_sys_stat.c",
