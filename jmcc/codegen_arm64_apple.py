@@ -484,7 +484,11 @@ class Arm64AppleCodeGen:
                     intval = member_value.value if isinstance(member_value, IntLiteral) else ord(member_value.value)
                     self.emit(f"    .quad {intval}")
                 else:
-                    self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
+                    sym = self._global_addr_str(member_value)
+                    if sym is not None:
+                        self.emit(f"    .quad {sym}")
+                    else:
+                        self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
                 current_offset += ptr_size
             elif isinstance(member_value, (IntLiteral, CharLiteral)):
                 size = member_type.size_bytes(self.target)
@@ -506,7 +510,46 @@ class Arm64AppleCodeGen:
                 self.emit_global_struct_init(member_type, member_value, line, col)
                 current_offset += member_type.struct_def.size_bytes(self.target)
             else:
-                self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
+                size = member_type.size_bytes(self.target)
+                # Try constant integer expression (e.g. -1, cast expressions)
+                intval = self._global_const_int(member_value)
+                if intval is not None:
+                    if size <= 1:
+                        self.emit(f"    .byte {intval & 0xff}")
+                    elif size <= 2:
+                        self.emit(f"    .short {intval & 0xffff}")
+                    elif size <= 4:
+                        self.emit(f"    .long {intval & 0xffffffff}")
+                    else:
+                        self.emit(f"    .quad {intval}")
+                    current_offset += size
+                elif isinstance(member_value, InitList):
+                    # Union initializer — use only the first element
+                    if member_value.items:
+                        nested_val = member_value.items[0].value
+                        from jmcc.ast import InitListItem
+                        dummy_list = InitList(items=[InitListItem(value=nested_val)], line=line, col=col)
+                        # emit the first field's worth of bytes
+                        nested_intval = self._global_const_int(nested_val)
+                        nested_sym = self._global_addr_str(nested_val)
+                        if nested_sym is not None:
+                            self.emit(f"    .quad {nested_sym}")
+                        elif nested_intval is not None:
+                            if size <= 1:
+                                self.emit(f"    .byte {nested_intval & 0xff}")
+                            elif size <= 2:
+                                self.emit(f"    .short {nested_intval & 0xffff}")
+                            elif size <= 4:
+                                self.emit(f"    .long {nested_intval & 0xffffffff}")
+                            else:
+                                self.emit(f"    .quad {nested_intval}")
+                        else:
+                            self.emit(f"    .zero {size}")
+                    else:
+                        self.emit(f"    .zero {size}")
+                    current_offset += size
+                else:
+                    self.error("arm64-apple-darwin backend does not yet support this struct global initializer", line, col)
         total = struct_def.size_bytes(self.target)
         if total > current_offset:
             self.emit(f"    .zero {total - current_offset}")
@@ -541,6 +584,10 @@ class Arm64AppleCodeGen:
         if isinstance(value, Identifier) and value.name in self.functions:
             self.emit(f"    .quad {self.mangle(value.name)}")
             return
+        addr = self._global_addr_str(value)
+        if addr is not None:
+            self.emit(f"    .quad {addr}")
+            return
         if isinstance(value, LabelAddrExpr):
             fname = value.func_name or (self.current_func.name if self.current_func else "")
             lbl = self.user_label_for(fname, value.label)
@@ -566,6 +613,19 @@ class Arm64AppleCodeGen:
             else:
                 bits = struct.unpack('<Q', struct.pack('<d', value.value))[0]
                 self.emit(f"    .quad {bits}")
+            return
+        # Try constant integer expression (e.g. -1, (type)expr)
+        intval = self._global_const_int(value)
+        if intval is not None and type_spec is not None:
+            size = type_spec.size_bytes(self.target)
+            if size <= 1:
+                self.emit(f"    .byte {intval & 0xff}")
+            elif size <= 2:
+                self.emit(f"    .short {intval & 0xffff}")
+            elif size <= 4:
+                self.emit(f"    .long {intval & 0xffffffff}")
+            else:
+                self.emit(f"    .quad {intval}")
             return
         self.error("arm64-apple-darwin backend does not yet support this global initializer value", line, col)
 
@@ -641,20 +701,20 @@ class Arm64AppleCodeGen:
                 self.emit(f"    sub x0, x29, #{self.locals[name]}")
             elif self.is_fp_type(type_spec):
                 if type_spec.base == "float":
-                    self.emit(f"    ldur s0, [x29, #-{self.locals[name]}]")
+                    self.emit_local_load("ldur", "s0", self.locals[name])
                     self.emit("    fcvt d0, s0")
                 else:
-                    self.emit(f"    ldur d0, [x29, #-{self.locals[name]}]")
+                    self.emit_local_load("ldur", "d0", self.locals[name])
             elif self.is_pointer_type(type_spec):
-                self.emit(f"    ldur x0, [x29, #-{self.locals[name]}]")
+                self.emit_local_load("ldur", "x0", self.locals[name])
             elif type_spec is not None and type_spec.base == "char":
-                self.emit(f"    ldurb w0, [x29, #-{self.locals[name]}]" if type_spec.is_unsigned else f"    ldursb w0, [x29, #-{self.locals[name]}]")
+                self.emit_local_load("ldurb" if type_spec.is_unsigned else "ldursb", "w0", self.locals[name])
             elif type_spec is not None and type_spec.base == "short":
-                self.emit(f"    ldurh w0, [x29, #-{self.locals[name]}]" if type_spec.is_unsigned else f"    ldursh w0, [x29, #-{self.locals[name]}]")
+                self.emit_local_load("ldurh" if type_spec.is_unsigned else "ldursh", "w0", self.locals[name])
             elif self.is_wide_scalar(type_spec):
-                self.emit(f"    ldur x0, [x29, #-{self.locals[name]}]")
+                self.emit_local_load("ldur", "x0", self.locals[name])
             else:
-                self.emit(f"    ldur w0, [x29, #-{self.locals[name]}]")
+                self.emit_local_load("ldur", "w0", self.locals[name])
             return
         if name in self.static_locals:
             label = self.static_locals[name]
@@ -720,13 +780,13 @@ class Arm64AppleCodeGen:
             src_reg = "s0"
         if name in self.locals:
             if is_fp:
-                self.emit(f"    stur {src_reg}, [x29, #-{self.locals[name]}]")
+                self.emit_local_store("stur", src_reg, self.locals[name])
             elif type_spec is not None and type_spec.base == "char" and not type_spec.is_pointer():
-                self.emit(f"    sturb {src_reg}, [x29, #-{self.locals[name]}]")
+                self.emit_local_store("sturb", src_reg, self.locals[name])
             elif type_spec is not None and type_spec.base == "short" and not type_spec.is_pointer():
-                self.emit(f"    sturh {src_reg}, [x29, #-{self.locals[name]}]")
+                self.emit_local_store("sturh", src_reg, self.locals[name])
             else:
-                self.emit(f"    stur {src_reg}, [x29, #-{self.locals[name]}]")
+                self.emit_local_store("stur", src_reg, self.locals[name])
             return
         if name in self.static_locals:
             label = self.static_locals[name]
@@ -766,7 +826,71 @@ class Arm64AppleCodeGen:
     def pop_d0(self, reg: str = "d1"):
         self.emit(f"    ldr {reg}, [sp], #16")
 
+    def emit_local_load(self, instr: str, reg: str, offset: int):
+        """Emit load from [x29, #-offset], using x9 as scratch for offsets > 255."""
+        if offset <= 255:
+            self.emit(f"    {instr} {reg}, [x29, #-{offset}]")
+        else:
+            self.emit(f"    sub x9, x29, #{offset}")
+            scaled = instr.replace("ldur", "ldr")
+            self.emit(f"    {scaled} {reg}, [x9]")
+
+    def emit_local_store(self, instr: str, reg: str, offset: int):
+        """Emit store to [x29, #-offset], using x9 as scratch for offsets > 255."""
+        if offset <= 255:
+            self.emit(f"    {instr} {reg}, [x29, #-{offset}]")
+        else:
+            self.emit(f"    sub x9, x29, #{offset}")
+            scaled = instr.replace("stur", "str")
+            self.emit(f"    {scaled} {reg}, [x9]")
+
     _FP_BASES = frozenset({"float", "double", "long double"})
+
+    def _global_const_int(self, value) -> Optional[int]:
+        """Try to evaluate value as a compile-time constant integer. Returns None if not possible."""
+        if isinstance(value, IntLiteral):
+            return value.value
+        if isinstance(value, CharLiteral):
+            return ord(value.value)
+        if isinstance(value, CastExpr):
+            return self._global_const_int(value.operand)
+        if isinstance(value, UnaryOp) and value.op == "-":
+            inner = self._global_const_int(value.operand)
+            return -inner if inner is not None else None
+        return None
+
+    def _global_addr_str(self, value) -> Optional[str]:
+        """Try to resolve value to a static address string (e.g. '_sym' or '_sym+8').
+        Returns None if not a static address expression."""
+        while isinstance(value, CastExpr):
+            value = value.operand
+        if isinstance(value, UnaryOp) and value.op == "&":
+            operand = value.operand
+            if isinstance(operand, Identifier):
+                name = operand.name
+                if name in self.globals:
+                    return self.mangle(name)
+                if name in self.static_locals:
+                    return self.static_locals[name]
+            elif isinstance(operand, ArrayAccess) and isinstance(operand.array, Identifier):
+                arr_name = operand.array.name
+                idx = self._global_const_int(operand.index)
+                if idx is not None and arr_name in self.globals:
+                    arr_type = self.globals[arr_name].type_spec
+                    elem_sz = self.element_size(arr_type)
+                    off = idx * elem_sz
+                    mangled = self.mangle(arr_name)
+                    return mangled if off == 0 else f"{mangled}+{off}"
+        if isinstance(value, Identifier):
+            if value.name in self.functions:
+                return self.mangle(value.name)
+            if value.name in self.globals:
+                return self.mangle(value.name)
+            if value.name in self.static_locals:
+                return self.static_locals[value.name]
+        if isinstance(value, InitList) and value.items:
+            return self._global_addr_str(value.items[0].value)
+        return None
 
     def is_fp_type(self, ts) -> bool:
         return ts is not None and ts.base in self._FP_BASES and not ts.is_pointer() and not self.is_array_type(ts)
@@ -1470,6 +1594,7 @@ class Arm64AppleCodeGen:
         right_ptr = right_type is not None and right_type.is_pointer()
         result_type = self.get_expr_type(expr)
         wide = self.is_wide_scalar(left_type) or self.is_wide_scalar(right_type) or self.is_wide_scalar(result_type)
+        is_unsigned = (left_type is not None and left_type.is_unsigned) or (right_type is not None and right_type.is_unsigned)
 
         if expr.op == "+" and left_ptr and not right_ptr:
             scale = self.element_size(left_type)
@@ -1499,13 +1624,15 @@ class Arm64AppleCodeGen:
         elif expr.op == "*":
             self.emit("    mul x0, x1, x0" if wide else "    mul w0, w1, w0")
         elif expr.op == "/":
-            self.emit("    sdiv x0, x1, x0" if wide else "    sdiv w0, w1, w0")
+            div = "udiv" if is_unsigned else "sdiv"
+            self.emit(f"    {div} x0, x1, x0" if wide else f"    {div} w0, w1, w0")
         elif expr.op == "%":
+            div = "udiv" if is_unsigned else "sdiv"
             if wide:
-                self.emit("    sdiv x2, x1, x0")
+                self.emit(f"    {div} x2, x1, x0")
                 self.emit("    msub x0, x2, x0, x1")
             else:
-                self.emit("    sdiv w2, w1, w0")
+                self.emit(f"    {div} w2, w1, w0")
                 self.emit("    msub w0, w2, w0, w1")
         elif expr.op == "&":
             self.emit("    and x0, x1, x0" if wide else "    and w0, w1, w0")
@@ -1516,52 +1643,99 @@ class Arm64AppleCodeGen:
         elif expr.op == "<<":
             self.emit("    lslv x0, x1, x0" if wide else "    lslv w0, w1, w0")
         elif expr.op == ">>":
-            self.emit("    asrv x0, x1, x0" if wide else "    asrv w0, w1, w0")
+            shr = "lsrv" if is_unsigned else "asrv"
+            self.emit(f"    {shr} x0, x1, x0" if wide else f"    {shr} w0, w1, w0")
         elif expr.op in {"==", "!=", "<", "<=", ">", ">="}:
             self.emit("    cmp x1, x0" if (left_ptr or right_ptr or wide) else "    cmp w1, w0")
-            cond = {
-                "==": "eq",
-                "!=": "ne",
-                "<": "lt",
-                "<=": "le",
-                ">": "gt",
-                ">=": "ge",
-            }[expr.op]
+            if is_unsigned or left_ptr or right_ptr:
+                cond = {"==": "eq", "!=": "ne", "<": "lo", "<=": "ls", ">": "hi", ">=": "hs"}[expr.op]
+            else:
+                cond = {"==": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}[expr.op]
             self.emit(f"    cset w0, {cond}")
         else:
             self.error(f"binary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
     def gen_unary_op(self, expr: UnaryOp):
         if expr.op in {"++", "--"}:
-            if not isinstance(expr.operand, Identifier):
-                self.error(f"unary operator '{expr.op}' currently requires an identifier operand on arm64-apple-darwin", expr.line, expr.col)
-
-            name = expr.operand.name
-            type_spec = self.get_var_type(name)
-            is_pointer = self.is_pointer_type(type_spec)
-            delta = self.element_size(type_spec) if is_pointer else 1
-            self.load_var(name, expr.line, expr.col)
-
+            if isinstance(expr.operand, Identifier):
+                name = expr.operand.name
+                type_spec = self.get_var_type(name)
+                is_pointer = self.is_pointer_type(type_spec)
+                delta = self.element_size(type_spec) if is_pointer else 1
+                self.load_var(name, expr.line, expr.col)
+                if expr.prefix:
+                    op = "add" if expr.op == "++" else "sub"
+                    if is_pointer:
+                        self.emit(f"    {op} x0, x0, #{delta}")
+                        self.store_var(name, src_reg="x0", line=expr.line, col=expr.col)
+                    else:
+                        self.emit(f"    {op} w0, w0, #1")
+                        self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
+                else:
+                    op = "add" if expr.op == "++" else "sub"
+                    if is_pointer:
+                        self.emit("    mov x1, x0")
+                        self.emit(f"    {op} x1, x1, #{delta}")
+                        self.store_var(name, src_reg="x1", line=expr.line, col=expr.col)
+                    else:
+                        self.emit("    mov w1, w0")
+                        self.emit(f"    {op} w1, w1, #1")
+                        self.store_var(name, src_reg="w1", line=expr.line, col=expr.col)
+                return
+            # Non-Identifier target: MemberAccess, ArrayAccess, pointer deref
+            target_type = self.get_expr_type(expr.operand)
+            is_pointer = self.is_pointer_type(target_type)
+            delta = self.element_size(target_type) if is_pointer else 1
+            wide = is_pointer or self.is_wide_scalar(target_type)
+            self.gen_expr(expr.operand)
+            op = "add" if expr.op == "++" else "sub"
             if expr.prefix:
-                if is_pointer:
-                    op = "add" if expr.op == "++" else "sub"
+                if wide:
                     self.emit(f"    {op} x0, x0, #{delta}")
-                    self.store_var(name, src_reg="x0", line=expr.line, col=expr.col)
                 else:
-                    op = "add" if expr.op == "++" else "sub"
                     self.emit(f"    {op} w0, w0, #1")
-                    self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
-            else:
-                if is_pointer:
-                    self.emit("    mov x1, x0")
-                    op = "add" if expr.op == "++" else "sub"
-                    self.emit(f"    {op} x1, x1, #{delta}")
-                    self.store_var(name, src_reg="x1", line=expr.line, col=expr.col)
+                if target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                    self.emit("    and w0, w0, #0xFF")
+                elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
+                    self.emit("    and w0, w0, #0xFFFF")
+                self.push_x0()
+                self.gen_lvalue_addr(expr.operand)
+                self.pop_reg("x1")
+                if is_pointer or wide:
+                    self.emit("    str x1, [x0]")
+                    self.emit("    mov x0, x1")
+                elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
+                    self.emit("    strb w1, [x0]")
+                    self.emit("    mov w0, w1")
+                elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
+                    self.emit("    strh w1, [x0]")
+                    self.emit("    mov w0, w1")
                 else:
-                    self.emit("    mov w1, w0")
-                    op = "add" if expr.op == "++" else "sub"
+                    self.emit("    str w1, [x0]")
+                    self.emit("    mov w0, w1")
+            else:
+                # Post: save original, compute new, store, return original
+                self.push_x0()
+                self.push_x0()
+                self.gen_lvalue_addr(expr.operand)
+                # x0 = addr, stack: [orig_val, orig_val]
+                self.emit("    mov x9, x0")  # x9 = addr
+                self.pop_reg("x1")           # x1 = new value to compute
+                if wide:
+                    self.emit(f"    {op} x1, x1, #{delta}")
+                    self.emit("    str x1, [x9]")
+                elif target_type is not None and target_type.base == "char" and not target_type.is_pointer():
                     self.emit(f"    {op} w1, w1, #1")
-                    self.store_var(name, src_reg="w1", line=expr.line, col=expr.col)
+                    self.emit("    and w1, w1, #0xFF")
+                    self.emit("    strb w1, [x9]")
+                elif target_type is not None and target_type.base == "short" and not target_type.is_pointer():
+                    self.emit(f"    {op} w1, w1, #1")
+                    self.emit("    and w1, w1, #0xFFFF")
+                    self.emit("    strh w1, [x9]")
+                else:
+                    self.emit(f"    {op} w1, w1, #1")
+                    self.emit("    str w1, [x9]")
+                self.pop_reg("x0")  # return original value
             return
 
         self.gen_expr(expr.operand)
