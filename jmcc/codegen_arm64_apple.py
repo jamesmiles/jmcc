@@ -2995,12 +2995,16 @@ class Arm64AppleCodeGen:
                         self.emit(f"    {op} w0, w0, #1")
                         self.emit("    and w0, w0, #0xFFFF")
                         self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
+                    elif self.is_wide_scalar(type_spec):
+                        self.emit(f"    {op} x0, x0, #1")
+                        self.store_var(name, src_reg="x0", line=expr.line, col=expr.col)
                     else:
                         self.emit(f"    {op} w0, w0, #1")
                         self.store_var(name, src_reg="w0", line=expr.line, col=expr.col)
                 else:
                     op = "add" if expr.op == "++" else "sub"
-                    if is_pointer:
+                    is_wide = self.is_wide_scalar(type_spec)
+                    if is_pointer or is_wide:
                         self.emit("    mov x1, x0")
                         self.emit(f"    {op} x1, x1, #{delta}")
                         self.store_var(name, src_reg="x1", line=expr.line, col=expr.col)
