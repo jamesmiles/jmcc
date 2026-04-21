@@ -735,6 +735,8 @@ struct sockaddr_in6 {
 };
 extern struct in6_addr in6addr_any;
 extern struct in6_addr in6addr_loopback;
+static struct in6_addr in6addr_any = {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
+static struct in6_addr in6addr_loopback = {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1}};
 #define IPV6_V6ONLY 26
 unsigned short htons(unsigned short hostshort);
 unsigned short ntohs(unsigned short netshort);
@@ -872,6 +874,49 @@ int inet_aton(const char *cp, struct in_addr *inp);
     # These must NOT override real system headers (unlike BUILTIN_HEADERS which
     # are intentional replacements for headers that break the JMCC parser).
     FALLBACK_HEADERS = {
+        "stdint.h": """
+#ifndef _JMCC_STDINT_H
+#define _JMCC_STDINT_H
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef short int16_t;
+typedef unsigned short uint16_t;
+typedef int int32_t;
+typedef unsigned int uint32_t;
+typedef long int64_t;
+typedef unsigned long uint64_t;
+typedef long intptr_t;
+typedef unsigned long uintptr_t;
+typedef long intmax_t;
+typedef unsigned long uintmax_t;
+#define INT8_MIN (-128)
+#define INT8_MAX 127
+#define UINT8_MAX 255
+#define INT16_MIN (-32768)
+#define INT16_MAX 32767
+#define UINT16_MAX 65535
+#define INT32_MIN (-2147483648)
+#define INT32_MAX 2147483647
+#define UINT32_MAX 4294967295U
+#define INT64_MIN (-9223372036854775807LL - 1)
+#define INT64_MAX 9223372036854775807LL
+#define UINT64_MAX 18446744073709551615ULL
+#define INTPTR_MAX INT64_MAX
+#define INTPTR_MIN INT64_MIN
+#define UINTPTR_MAX UINT64_MAX
+#define SIZE_MAX UINT64_MAX
+#define PTRDIFF_MAX INT64_MAX
+#define PTRDIFF_MIN INT64_MIN
+#define INT8_C(x)  ((int8_t)(x))
+#define INT16_C(x) ((int16_t)(x))
+#define INT32_C(x) ((int32_t)(x))
+#define INT64_C(x) ((int64_t)(x ## LL))
+#define UINT8_C(x)  ((uint8_t)(x))
+#define UINT16_C(x) ((uint16_t)(x))
+#define UINT32_C(x) ((uint32_t)(x ## U))
+#define UINT64_C(x) ((uint64_t)(x ## ULL))
+#endif
+""",
         "errno.h": """
 extern int errno;
 #define EWOULDBLOCK 35
@@ -918,8 +963,10 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         "/usr/include",
     ]
 
-    def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
+    def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None, target: str = None):
         self.filename = filename
+        self.target = target or ""
+        self._is_arm64_apple = "arm64" in self.target or "aarch64" in self.target
         self.include_paths = (include_paths or []) + [
             p for p in self.SYSTEM_INCLUDE_PATHS if os.path.isdir(p)
         ]
@@ -936,9 +983,14 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         self.macros["__STDC_VERSION__"] = Macro("__STDC_VERSION__", body="201112L")
         self.macros["__STDC_HOSTED__"] = Macro("__STDC_HOSTED__", body="1")
         self.macros["__JMCC__"] = Macro("__JMCC__", body="1")
-        self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
-        self.macros["__linux__"] = Macro("__linux__", body="1")
-        self.macros["__unix__"] = Macro("__unix__", body="1")
+        if self._is_arm64_apple:
+            self.macros["__aarch64__"] = Macro("__aarch64__", body="1")
+            self.macros["__arm64__"] = Macro("__arm64__", body="1")
+            self.macros["__APPLE__"] = Macro("__APPLE__", body="1")
+        else:
+            self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
+            self.macros["__linux__"] = Macro("__linux__", body="1")
+            self.macros["__unix__"] = Macro("__unix__", body="1")
         self.macros["NULL"] = Macro("NULL", body="((void*)0)")
         self.macros["EOF"] = Macro("EOF", body="(-1)")
         self.macros["__LP64__"] = Macro("__LP64__", body="1")
@@ -993,9 +1045,9 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         self.macros["__ATOMIC_ACQ_REL"] = Macro("__ATOMIC_ACQ_REL", body="4")
         self.macros["__ATOMIC_SEQ_CST"] = Macro("__ATOMIC_SEQ_CST", body="5")
         # GCC atomic builtins — single-threaded: reduce to plain load/store
-        self.macros["__atomic_store_n"] = Macro("__atomic_store_n", body="(*((__typeof__(*(__atomic_store_n_ptr)))(__atomic_store_n_ptr)) = (__atomic_store_n_val))",
+        self.macros["__atomic_store_n"] = Macro("__atomic_store_n", body="(*(__atomic_store_n_ptr) = (__atomic_store_n_val))",
                                                   is_func=True, params=["__atomic_store_n_ptr", "__atomic_store_n_val", "__atomic_store_n_ord"], is_variadic=False)
-        self.macros["__atomic_load_n"] = Macro("__atomic_load_n", body="(*((__typeof__(*(__atomic_load_n_ptr)))(__atomic_load_n_ptr)))",
+        self.macros["__atomic_load_n"] = Macro("__atomic_load_n", body="(*(__atomic_load_n_ptr))",
                                                 is_func=True, params=["__atomic_load_n_ptr", "__atomic_load_n_ord"], is_variadic=False)
         self.macros["__VERSION__"] = Macro("__VERSION__", body='"jmcc 0.1"')
 
@@ -1336,7 +1388,19 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
 
         # Check builtin headers first (intentional parser-safe replacements)
         if inc_name in self.BUILTIN_HEADERS:
-            return self.BUILTIN_HEADERS[inc_name]
+            content = self.BUILTIN_HEADERS[inc_name]
+            # For arm64 Apple, override stdarg.h with pointer-based va_list
+            if inc_name == "stdarg.h" and self._is_arm64_apple:
+                content = """
+typedef char* __builtin_va_list;
+typedef __builtin_va_list va_list;
+typedef __builtin_va_list __gnuc_va_list;
+#define va_start(ap, param) __builtin_va_start(ap, param)
+#define va_end(ap) __builtin_va_end(ap)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_copy(dest, src) __builtin_va_copy(dest, src)
+"""
+            return content
 
         def _load_file(full):
             if full in self.included_files:

@@ -39,7 +39,7 @@ def compile_file(source_path: str, output_path: str, defines: list = None,
             if abs_p not in inc_paths:
                 inc_paths.append(abs_p)
         include_paths = inc_paths
-        pp = Preprocessor(filename=source_path, include_paths=include_paths)
+        pp = Preprocessor(filename=source_path, include_paths=include_paths, target=target)
         # Apply -D defines
         for d in (defines or []):
             if '=' in d:
