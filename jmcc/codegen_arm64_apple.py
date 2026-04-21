@@ -3739,6 +3739,18 @@ class Arm64AppleCodeGen:
                     else:
                         self.emit("    fcvtzs x0, d0")
                     a_type = param_type
+                elif (not param_is_fp and not arg_is_fp
+                        and self.is_wide_scalar(param_type) and not param_type.is_unsigned
+                        and not self.is_wide_scalar(a_type) and not a_type.is_pointer()
+                        and not a_type.is_unsigned):
+                    # signed int/short/char → long/long long: sign-extend to 64 bits
+                    expr_size = a_type.size_bytes(self.target)
+                    if expr_size <= 1:
+                        self.emit("    sxtb w0, w0")
+                    elif expr_size <= 2:
+                        self.emit("    sxth w0, w0")
+                    self.emit("    sxtw x0, w0")
+                    a_type = param_type
             if self.is_int128(a_type):
                 self.push_i128()
             elif self.is_fp_type(a_type):
