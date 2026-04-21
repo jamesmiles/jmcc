@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 from .ast_nodes import (
     ArrayAccess,
+    AlignofExpr,
     Assignment,
     BinaryOp,
     Block,
@@ -220,6 +221,8 @@ class Arm64AppleCodeGen:
 
     def get_expr_type(self, expr: Expr):
         if isinstance(expr, Identifier):
+            if expr.name in ("__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"):
+                return TypeSpec(base="char", pointer_depth=1)
             var_type = self.get_var_type(expr.name)
             if var_type is not None:
                 return var_type
@@ -274,6 +277,8 @@ class Arm64AppleCodeGen:
                     return right_type
             return left_type or right_type or TypeSpec(base="int")
         if isinstance(expr, SizeofExpr):
+            return TypeSpec(base="int")
+        if isinstance(expr, AlignofExpr):
             return TypeSpec(base="int")
         return TypeSpec(base="int")
 
@@ -354,8 +359,17 @@ class Arm64AppleCodeGen:
             self.emit(f'    .asciz "{self.escape_string(init.value)}"')
             return
 
+        if isinstance(init, StringLiteral) and type_spec is not None and type_spec.is_pointer():
+            label = self.string_label(init.value)
+            self.emit(f"    .quad {label}")
+            return
+
         if isinstance(init, InitList) and type_spec is not None and self.is_array_type(type_spec):
             self.emit_global_array_init(type_spec, init, line, col)
+            return
+
+        if isinstance(init, InitList) and type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
+            self.emit_global_value(type_spec, init, line, col)
             return
 
         self.error(
@@ -445,6 +459,11 @@ class Arm64AppleCodeGen:
                 self.collect_locals_stmt(child)
         elif isinstance(stmt, VarDecl):
             self.infer_unsized_array(stmt.type_spec, stmt.init)
+            if stmt.type_spec is not None and stmt.type_spec.is_extern and self.current_func is not None:
+                if stmt.name not in self.globals:
+                    self.globals[stmt.name] = GlobalVarDecl(type_spec=stmt.type_spec, name=stmt.name, init=None)
+                self.local_types[stmt.name] = stmt.type_spec
+                return
             if stmt.type_spec is not None and stmt.type_spec.is_static:
                 self.static_locals[stmt.name] = self.static_local_label(stmt.name)
                 self.static_local_decls[self.static_locals[stmt.name]] = stmt
@@ -675,6 +694,10 @@ class Arm64AppleCodeGen:
         self.emit(f"    b {self.return_label}")
 
     def gen_var_decl(self, decl: VarDecl):
+        if decl.type_spec is not None and decl.type_spec.is_extern and self.current_func is not None:
+            if decl.name not in self.globals:
+                self.globals[decl.name] = GlobalVarDecl(type_spec=decl.type_spec, name=decl.name, init=None)
+            return
         if decl.type_spec is not None and decl.type_spec.is_static:
             return
         if decl.type_spec is not None and self.is_array_type(decl.type_spec) and isinstance(decl.init, InitList):
@@ -846,7 +869,10 @@ class Arm64AppleCodeGen:
         elif isinstance(expr, FloatLiteral):
             self.error("floating-point expressions are not yet supported on arm64-apple-darwin", expr.line, expr.col)
         elif isinstance(expr, Identifier):
-            self.load_var(expr.name, expr.line, expr.col)
+            if expr.name in ("__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"):
+                self.gen_string_literal(StringLiteral(value=self.current_func.name if self.current_func else ""))
+            else:
+                self.load_var(expr.name, expr.line, expr.col)
         elif isinstance(expr, CastExpr):
             self.gen_cast(expr)
         elif isinstance(expr, CommaExpr):
@@ -855,6 +881,8 @@ class Arm64AppleCodeGen:
             self.gen_string_literal(expr)
         elif isinstance(expr, SizeofExpr):
             self.gen_sizeof(expr)
+        elif isinstance(expr, AlignofExpr):
+            self.gen_alignof(expr)
         elif isinstance(expr, ArrayAccess):
             self.gen_array_access(expr)
         elif isinstance(expr, Assignment):
@@ -1230,6 +1258,23 @@ class Arm64AppleCodeGen:
 
     def gen_sizeof(self, expr: SizeofExpr):
         self.emit_int_constant(self.sizeof_value(expr), "w0")
+
+    def alignof_value(self, expr: AlignofExpr) -> int:
+        if expr.is_type:
+            type_spec = expr.operand
+        else:
+            type_spec = self.get_expr_type(expr.operand)
+        if type_spec is None:
+            self.error("arm64-apple-darwin could not resolve alignof operand type", expr.line, expr.col)
+        if type_spec.is_struct() and not type_spec.is_pointer():
+            return type_spec.struct_def.alignment(self.target)
+        size = type_spec.size_bytes(self.target)
+        if size <= 0:
+            return 1
+        return min(size, self.target.layout.max_scalar_align)
+
+    def gen_alignof(self, expr: AlignofExpr):
+        self.emit_int_constant(self.alignof_value(expr), "w0")
 
     def gen_cast(self, expr: CastExpr):
         self.gen_expr(expr.operand)

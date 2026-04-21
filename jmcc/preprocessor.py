@@ -287,6 +287,15 @@ void *bsearch(const void *, const void *, size_t, size_t, int (*)(const void *, 
 """,
         "string.h": """
 #include <stddef.h>
+int strcmp(const char *s1, const char *s2);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
+size_t strlen(const char *s);
+void *memcpy(void *dest, const void *src, size_t n);
+void *memmove(void *dest, const void *src, size_t n);
+void *memset(void *s, int c, size_t n);
+int memcmp(const void *s1, const void *s2, size_t n);
 """,
         "ctype.h": "",
         "assert.h": """
@@ -855,7 +864,43 @@ char *inet_ntoa(struct in_addr in);
 int inet_aton(const char *cp, struct in_addr *inp);
 """,
         # netdb.h — use real system header
-        # sys/ipc.h, sys/shm.h, errno.h — use real system headers
+        "errno.h": """
+extern int errno;
+#define EWOULDBLOCK 35
+""",
+        "sys/ipc.h": """
+typedef int key_t;
+struct ipc_perm {
+    unsigned int cuid;
+    unsigned int cgid;
+    unsigned int uid;
+    unsigned int gid;
+    unsigned short mode;
+    unsigned short __seq;
+    unsigned long __key;
+};
+#define IPC_CREAT 01000
+""",
+        "sys/shm.h": """
+#include <sys/ipc.h>
+typedef unsigned long size_t;
+typedef long time_t;
+typedef long pid_t;
+struct shmid_ds {
+    struct ipc_perm shm_perm;
+    size_t shm_segsz;
+    pid_t shm_lpid;
+    pid_t shm_cpid;
+    unsigned short shm_nattch;
+    time_t shm_atime;
+    time_t shm_dtime;
+    time_t shm_ctime;
+};
+int shmget(key_t key, size_t size, int shmflg);
+void *shmat(int shmid, const void *shmaddr, int shmflg);
+int shmdt(const void *shmaddr);
+int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+""",
         # values.h — use real system header
     }
 
