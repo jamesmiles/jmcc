@@ -1326,10 +1326,6 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
         inc_name = match.group(1)
         is_system = '<' in line.split('include')[1]
 
-        # Check builtin headers first
-        if inc_name in self.BUILTIN_HEADERS:
-            return self.BUILTIN_HEADERS[inc_name]
-
         def _load_file(full):
             if full in self.included_files:
                 return ""
@@ -1358,6 +1354,10 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
             full = os.path.join(path, inc_name)
             if os.path.exists(full):
                 return _load_file(full)
+
+        # Fall back to builtin stub headers (used when real system headers not found, e.g. macOS)
+        if inc_name in self.BUILTIN_HEADERS:
+            return self.BUILTIN_HEADERS[inc_name]
 
         return ""
 
