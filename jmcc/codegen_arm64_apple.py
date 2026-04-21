@@ -1372,6 +1372,19 @@ class Arm64AppleCodeGen:
                 if op == "&": return l & r
                 if op == "|": return l | r
                 if op == "^": return l ^ r
+                if op == "&&": return int(bool(l) and bool(r))
+                if op == "||": return int(bool(l) or bool(r))
+                if op == "==": return int(l == r)
+                if op == "!=": return int(l != r)
+                if op == "<": return int(l < r)
+                if op == ">": return int(l > r)
+                if op == "<=": return int(l <= r)
+                if op == ">=": return int(l >= r)
+        if isinstance(value, TernaryOp):
+            cond = self._global_const_int(value.condition)
+            if cond is not None:
+                branch = value.true_expr if cond else value.false_expr
+                return self._global_const_int(branch)
         if isinstance(value, SizeofExpr):
             if value.is_type:
                 ts = value.operand
