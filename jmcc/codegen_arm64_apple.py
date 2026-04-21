@@ -66,6 +66,8 @@ class Arm64AppleCodeGen:
         self.local_types: Dict[str, object] = {}
         self.static_locals: Dict[str, str] = {}
         self.static_local_decls: Dict[str, VarDecl] = {}
+        self.all_static_locals: Dict[str, str] = {}  # persists across functions: name -> label
+        self.all_static_local_types: Dict[str, object] = {}  # persists across functions: name -> TypeSpec
         self.globals: Dict[str, GlobalVarDecl] = {}
         self.functions: Dict[str, FuncDecl] = {}
         self.string_literals: Dict[str, str] = {}
@@ -150,6 +152,8 @@ class Arm64AppleCodeGen:
             return self.local_types[name]
         if name in self.globals:
             return self.globals[name].type_spec
+        if name in self.all_static_local_types:
+            return self.all_static_local_types[name]
         return None
 
     def is_byte_type(self, type_spec) -> bool:
@@ -849,6 +853,8 @@ class Arm64AppleCodeGen:
             if stmt.type_spec is not None and stmt.type_spec.is_static:
                 self.static_locals[stmt.name] = self.static_local_label(stmt.name)
                 self.static_local_decls[self.static_locals[stmt.name]] = stmt
+                self.all_static_locals[stmt.name] = self.static_locals[stmt.name]
+                self.all_static_local_types[stmt.name] = stmt.type_spec
                 self.local_types[stmt.name] = stmt.type_spec
             else:
                 self.alloc_slot(stmt.name, stmt.type_spec)
@@ -1143,6 +1149,21 @@ class Arm64AppleCodeGen:
 
     _FP_BASES = frozenset({"float", "double", "long double"})
 
+    def _sizeof_ts(self, ts) -> Optional[int]:
+        """Return sizeof(ts) accounting for array dimensions."""
+        if ts is None:
+            return None
+        base = ts.size_bytes(self.target)
+        if ts.array_sizes:
+            total = base
+            for sz_expr in ts.array_sizes:
+                n = self._global_const_int(sz_expr)
+                if n is None:
+                    return None
+                total *= n
+            return total
+        return base
+
     def _global_const_int(self, value) -> Optional[int]:
         """Try to evaluate value as a compile-time constant integer. Returns None if not possible."""
         if isinstance(value, IntLiteral):
@@ -1169,6 +1190,23 @@ class Arm64AppleCodeGen:
                 if op == "&": return l & r
                 if op == "|": return l | r
                 if op == "^": return l ^ r
+        if isinstance(value, SizeofExpr):
+            if value.is_type:
+                ts = value.operand
+                if isinstance(ts, TypeSpec):
+                    return self._sizeof_ts(ts)
+            else:
+                operand = value.operand
+                ts = self.get_expr_type(operand)
+                if ts is not None:
+                    return self._sizeof_ts(ts)
+        if isinstance(value, AlignofExpr):
+            if value.is_type:
+                ts = value.operand
+                if isinstance(ts, TypeSpec):
+                    if ts.is_struct() and ts.struct_def is not None:
+                        return ts.struct_def.alignment(self.target)
+                    return min(ts.size_bytes(self.target), self.target.layout.max_scalar_align)
         return None
 
     def _global_addr_str(self, value) -> Optional[str]:
@@ -1222,6 +1260,8 @@ class Arm64AppleCodeGen:
                 return self.mangle(value.name)
             if value.name in self.static_locals:
                 return self.static_locals[value.name]
+            if value.name in self.all_static_locals:
+                return self.all_static_locals[value.name]
         if isinstance(value, InitList) and value.items:
             return self._global_addr_str(value.items[0].value)
         return None
@@ -2753,6 +2793,13 @@ class Arm64AppleCodeGen:
                 return
             elif operand_type is not None and self.is_wide_scalar(self.element_type(operand_type)):
                 self.emit("    ldr x0, [x0]")
+            elif operand_type is not None and self.is_fp_type(self.element_type(operand_type)):
+                elem = self.element_type(operand_type)
+                if elem.base == "float":
+                    self.emit("    ldr s0, [x0]")
+                    self.emit("    fcvt d0, s0")
+                else:
+                    self.emit("    ldr d0, [x0]")
             else:
                 self.emit("    ldr w0, [x0]")
         else:
@@ -2897,6 +2944,12 @@ class Arm64AppleCodeGen:
             self.emit("    ldr x0, [x0]")
         elif result_type is not None and result_type.is_pointer():
             self.emit("    ldr x0, [x0]")
+        elif self.is_fp_type(result_type):
+            if result_type.base == "float":
+                self.emit("    ldr s0, [x0]")
+                self.emit("    fcvt d0, s0")
+            else:
+                self.emit("    ldr d0, [x0]")
         else:
             self.emit("    ldr w0, [x0]")
 
@@ -3199,7 +3252,40 @@ class Arm64AppleCodeGen:
                     self.emit("    mov w0, #0")
                 return
 
-            if fn in ("__builtin_add_overflow", "__builtin_sub_overflow", "__builtin_mul_overflow"):
+            if fn in ("__builtin_popcount", "__builtin_popcountl", "__builtin_popcountll"):
+                self.gen_expr(expr.args[0])
+                if fn == "__builtin_popcount":
+                    self.emit("    fmov s0, w0")
+                else:
+                    self.emit("    fmov d0, x0")
+                self.emit("    cnt v0.8b, v0.8b")
+                self.emit("    addv b0, v0.8b")
+                self.emit("    umov w0, v0.b[0]")
+                return
+
+            if fn in ("__builtin_clz", "__builtin_clzl", "__builtin_clzll"):
+                self.gen_expr(expr.args[0])
+                if fn == "__builtin_clz":
+                    self.emit("    clz w0, w0")
+                else:
+                    self.emit("    clz x0, x0")
+                return
+
+            if fn in ("__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll"):
+                self.gen_expr(expr.args[0])
+                if fn == "__builtin_ctz":
+                    self.emit("    rbit w0, w0")
+                    self.emit("    clz w0, w0")
+                else:
+                    self.emit("    rbit x0, x0")
+                    self.emit("    clz x0, x0")
+                return
+
+            if fn in ("__builtin_expect", "__builtin_expect_with_probability"):
+                # __builtin_expect(expr, expected_val) - just evaluate the expr
+                self.gen_expr(expr.args[0])
+                return
+
                 # __builtin_add_overflow(a, b, &result) -> sets *result=a+b, returns 1 if overflow
                 if len(expr.args) >= 3:
                     self.gen_expr(expr.args[0])

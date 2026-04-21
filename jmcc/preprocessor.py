@@ -283,6 +283,11 @@ int rand(void);
 void srand(unsigned int);
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 void *bsearch(const void *, const void *, size_t, size_t, int (*)(const void *, const void *));
+size_t mbstowcs(wchar_t *dest, const char *src, size_t n);
+size_t wcstombs(char *dest, const wchar_t *src, size_t n);
+int mbtowc(wchar_t *pwc, const char *s, size_t n);
+int wctomb(char *s, wchar_t wc);
+size_t mblen(const char *s, size_t n);
 #endif
 """,
         "string.h": """
@@ -298,15 +303,85 @@ char *strcat(char *dest, const char *src);
 char *strncat(char *dest, const char *src, size_t n);
 char *strstr(const char *haystack, const char *needle);
 char *strdup(const char *s);
+char *strndup(const char *s, size_t n);
+char *strtok(char *s, const char *delim);
+char *strtok_r(char *s, const char *delim, char **saveptr);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
 int memcmp(const void *s1, const void *s2, size_t n);
 void *memchr(const void *s, int c, size_t n);
 """,
-        "ctype.h": "",
+        "ctype.h": """
+#ifndef _JMCC_CTYPE_H
+#define _JMCC_CTYPE_H
+int isalpha(int c);
+int isdigit(int c);
+int isalnum(int c);
+int isspace(int c);
+int isupper(int c);
+int islower(int c);
+int isprint(int c);
+int ispunct(int c);
+int iscntrl(int c);
+int isgraph(int c);
+int isxdigit(int c);
+int isblank(int c);
+int toupper(int c);
+int tolower(int c);
+#endif
+""",
         "assert.h": """
 #define assert(x) ((void)0)
+""",
+        "locale.h": """
+#ifndef _JMCC_LOCALE_H
+#define _JMCC_LOCALE_H
+#define LC_ALL      0
+#define LC_COLLATE  1
+#define LC_CTYPE    2
+#define LC_MONETARY 3
+#define LC_NUMERIC  4
+#define LC_TIME     5
+#define LC_MESSAGES 6
+struct lconv {
+    char *decimal_point;
+    char *thousands_sep;
+    char *grouping;
+    char *int_curr_symbol;
+    char *currency_symbol;
+    char *mon_decimal_point;
+    char *mon_thousands_sep;
+    char *mon_grouping;
+    char *positive_sign;
+    char *negative_sign;
+    char int_frac_digits;
+    char frac_digits;
+    char p_cs_precedes;
+    char p_sep_by_space;
+    char n_cs_precedes;
+    char n_sep_by_space;
+    char p_sign_posn;
+    char n_sign_posn;
+};
+char *setlocale(int category, const char *locale);
+struct lconv *localeconv(void);
+#endif
+""",
+        "search.h": """
+#ifndef _JMCC_SEARCH_H
+#define _JMCC_SEARCH_H
+#include <stddef.h>
+void *lfind(const void *key, const void *base, size_t *nmemb, size_t size, int (*compar)(const void *, const void *));
+void *lsearch(const void *key, void *base, size_t *nmemb, size_t size, int (*compar)(const void *, const void *));
+void *tfind(const void *key, void * const *rootp, int (*compar)(const void *, const void *));
+void *tsearch(const void *key, void **rootp, int (*compar)(const void *, const void *));
+void twalk(const void *root, void (*action)(const void *, int, int));
+void tdestroy(void *root, void (*free_node)(void *nodep));
+void *hsearch(void *item, int action);
+int hcreate(size_t nel);
+void hdestroy(void);
+#endif
 """,
         "math.h": """
 double sin(double);
@@ -939,7 +1014,9 @@ struct ipc_perm {
     unsigned short __seq;
     unsigned long __key;
 };
+#define IPC_PRIVATE ((key_t)0)
 #define IPC_CREAT 01000
+#define IPC_RMID 0
 #define IPC_STAT 2
 """,
         "sys/shm.h": """
@@ -968,6 +1045,8 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
     SYSTEM_INCLUDE_PATHS = [
         "/usr/include/x86_64-linux-gnu",
         "/usr/include",
+        "/opt/homebrew/include",   # macOS arm64 (Homebrew)
+        "/usr/local/include",      # macOS arm64 (MacPorts / manual installs)
     ]
 
     def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None, target: str = None):
