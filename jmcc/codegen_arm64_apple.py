@@ -1206,10 +1206,11 @@ class Arm64AppleCodeGen:
             self.emit("    fcvt s0, d0")
             src_reg = "s0"
         if type_spec is not None and type_spec.base == "_Bool" and not is_fp:
-            # _Bool stores 0 or 1 — normalize the value before storing
-            self.emit("    cmp w0, #0")
-            self.emit("    cset w0, ne")
-            src_reg = "w0"
+            # _Bool stores 0 or 1 — normalize the value before storing.
+            # Use src_reg (e.g. w1, w2) not hardcoded w0 so that the right
+            # incoming register is normalised when storing non-first parameters.
+            self.emit(f"    cmp {src_reg}, #0")
+            self.emit(f"    cset {src_reg}, ne")
         if name in self.locals:
             if is_fp:
                 self.emit_local_store("stur", src_reg, self.locals[name])
