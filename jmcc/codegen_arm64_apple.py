@@ -150,12 +150,20 @@ class Arm64AppleCodeGen:
         return type_spec is not None and type_spec.is_pointer()
 
     def is_array_type(self, type_spec) -> bool:
-        return type_spec is not None and (type_spec.is_array() or type_spec.is_ptr_array)
+        if type_spec is None:
+            return False
+        # is_array() requires pointer_depth==0; is_ptr_array covers pointer-arrays declared with []
+        # Also handle cloned types that lost is_ptr_array but still have array_sizes + pointer_depth>0
+        return (type_spec.is_array() or type_spec.is_ptr_array or
+                (type_spec.pointer_depth > 0 and type_spec.array_sizes is not None and len(type_spec.array_sizes) > 0))
 
     def element_size(self, type_spec) -> int:
         if type_spec is None:
             return 4
-        if type_spec.is_array():
+        if self.is_array_type(type_spec):
+            elem = self.element_type(type_spec)
+            if elem is not None:
+                return max(1, self.total_size(elem))
             return max(1, type_spec.size_bytes(self.target))
         if type_spec.is_pointer():
             if type_spec.pointer_depth > 1:
@@ -256,9 +264,12 @@ class Arm64AppleCodeGen:
                 return TypeSpec(base="void", pointer_depth=1)
             return None
         if isinstance(expr, IntLiteral):
+            suffix_up = (expr.suffix or "").upper()
+            is_u = "U" in suffix_up
             if self.literal_is_wide(expr):
-                return TypeSpec(base="long long")
-            return TypeSpec(base="int")
+                ts = TypeSpec(base="long long", is_unsigned=is_u)
+                return ts
+            return TypeSpec(base="int", is_unsigned=is_u)
         if isinstance(expr, FloatLiteral):
             return TypeSpec(base="float" if expr.is_single else "double")
         if isinstance(expr, StringLiteral):
@@ -904,6 +915,12 @@ class Arm64AppleCodeGen:
         if self.is_fp_expr(expr):
             self.emit("    fcmp d0, #0.0")
             self.emit("    cset w0, ne")
+            return
+        expr_type = self.get_expr_type(expr)
+        if self.is_pointer_type(expr_type) or self.is_wide_scalar(expr_type):
+            # Normalize 64-bit value to 0/1 so callers' cbz/cbnz on w0 work
+            self.emit("    cmp x0, #0")
+            self.emit("    cset w0, ne")
 
     def float_literal_label(self, bits: int, size: int) -> str:
         key = (bits, size)
@@ -1053,6 +1070,21 @@ class Arm64AppleCodeGen:
         if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and isinstance(decl.init, InitList):
             self.gen_local_struct_init(decl)
             return
+        if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and decl.init is not None:
+            # struct var = expr: gen_expr returns source address in x0; copy via memcpy
+            self.gen_expr(decl.init)
+            struct_size = decl.type_spec.struct_def.size_bytes(self.target)
+            self.push_x0()
+            if decl.name in self.locals:
+                self.emit(f"    sub x0, x29, #{self.locals[decl.name]}")
+            elif decl.name in self.static_locals:
+                self.emit_symbol_addr(self.static_locals[decl.name], "x0")
+            elif decl.name in self.globals:
+                self.emit_symbol_addr(self.mangle(decl.name), "x0")
+            self.pop_reg("x1")
+            self.emit(f"    mov x2, #{struct_size}")
+            self.emit("    bl _memcpy")
+            return
         if decl.type_spec is not None and decl.init is None:
             if decl.type_spec.is_array() or (decl.type_spec.is_struct() and not decl.type_spec.is_pointer()):
                 return
@@ -1080,8 +1112,13 @@ class Arm64AppleCodeGen:
             value = item.value
             if value is None:
                 continue
-            self.gen_expr(value)
             offset = index * elem_size
+            if elem_type is not None and elem_type.is_struct() and not elem_type.is_pointer() and isinstance(value, InitList):
+                # Array of structs: init each struct element using x29-relative addressing
+                x29_neg_off = self.locals[decl.name] - offset
+                self.gen_struct_init_at_addr(elem_type, value, x29_neg_off)
+                continue
+            self.gen_expr(value)
             if self.is_fp_type(elem_type):
                 if elem_type is not None and elem_type.base == "float":
                     self.emit("    fcvt s0, d0")
@@ -1096,6 +1133,43 @@ class Arm64AppleCodeGen:
                 self.emit(f"    strh w0, [x9, #{offset}]")
             else:
                 self.emit(f"    str w0, [x9, #{offset}]")
+
+    def gen_struct_init_at_addr(self, type_spec, init: 'InitList', x29_neg_offset: int):
+        """Write struct init list items to [x29 - x29_neg_offset + member_off] for each member.
+        Uses x29-relative stores so gen_expr clobbering scratch regs is safe."""
+        struct_def = type_spec.struct_def
+        if struct_def is None:
+            return
+        members = [m for m in struct_def.members if m.name != ""]
+        for i, item in enumerate(init.items):
+            if i >= len(members):
+                break
+            if item.value is None:
+                continue
+            member = members[i]
+            member_off = struct_def.member_offset(member.name) or 0
+            member_type = member.type_spec
+            if member_type is not None and member_type.is_struct() and not member_type.is_pointer() and isinstance(item.value, InitList):
+                self.gen_struct_init_at_addr(member_type, item.value, x29_neg_offset - member_off)
+                continue
+            self.gen_expr(item.value)
+            # Compute address: x29 - x29_neg_offset + member_off
+            final_neg = x29_neg_offset - member_off
+            self.emit(f"    sub x9, x29, #{final_neg}")
+            if self.is_fp_type(member_type):
+                if member_type.base == "float":
+                    self.emit("    fcvt s0, d0")
+                    self.emit("    str s0, [x9]")
+                else:
+                    self.emit("    str d0, [x9]")
+            elif self.is_pointer_type(member_type) or self.is_wide_scalar(member_type):
+                self.emit("    str x0, [x9]")
+            elif member_type is not None and member_type.size_bytes(self.target) <= 1:
+                self.emit("    strb w0, [x9]")
+            elif member_type is not None and member_type.size_bytes(self.target) <= 2:
+                self.emit("    strh w0, [x9]")
+            else:
+                self.emit("    str w0, [x9]")
 
     def gen_local_struct_init(self, decl: VarDecl):
         struct_def = decl.type_spec.struct_def
@@ -1435,6 +1509,15 @@ class Arm64AppleCodeGen:
 
         self.gen_expr(expr.value)
         if isinstance(expr.target, Identifier):
+            target_type = self.get_var_type(expr.target.name)
+            if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
+                struct_size = target_type.struct_def.size_bytes(self.target)
+                self.push_x0()
+                self.gen_lvalue_addr(expr.target)
+                self.pop_reg("x1")
+                self.emit(f"    mov x2, #{struct_size}")
+                self.emit("    bl _memcpy")
+                return
             self.store_var(expr.target.name, line=expr.line, col=expr.col)
             return
 
@@ -1490,6 +1573,14 @@ class Arm64AppleCodeGen:
 
         if isinstance(expr.target, (UnaryOp, ArrayAccess, MemberAccess)):
             target_type = self.get_expr_type(expr.target)
+            if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
+                struct_size = target_type.struct_def.size_bytes(self.target)
+                self.push_x0()
+                self.gen_lvalue_addr(expr.target)
+                self.pop_reg("x1")
+                self.emit(f"    mov x2, #{struct_size}")
+                self.emit("    bl _memcpy")
+                return
             if self.is_fp_type(target_type):
                 self.push_d0()
                 self.gen_lvalue_addr(expr.target)
@@ -1514,6 +1605,9 @@ class Arm64AppleCodeGen:
                     self.emit("    strh w1, [x0]")
                     self.emit("    and w0, w1, #0xffff")
                 elif self.is_wide_scalar(target_type):
+                    src_type = self.get_expr_type(expr.value)
+                    if src_type is None or (not self.is_wide_scalar(src_type) and not self.is_pointer_type(src_type) and not src_type.is_unsigned):
+                        self.emit("    sxtw x1, w1")
                     self.emit("    str x1, [x0]")
                     self.emit("    mov x0, x1")
                 else:
@@ -1590,8 +1684,8 @@ class Arm64AppleCodeGen:
         self.gen_expr(expr.right)
         self.pop_reg("x1")
 
-        left_ptr = left_type is not None and left_type.is_pointer()
-        right_ptr = right_type is not None and right_type.is_pointer()
+        left_ptr = left_type is not None and (left_type.is_pointer() or self.is_array_type(left_type))
+        right_ptr = right_type is not None and (right_type.is_pointer() or self.is_array_type(right_type))
         result_type = self.get_expr_type(expr)
         wide = self.is_wide_scalar(left_type) or self.is_wide_scalar(right_type) or self.is_wide_scalar(result_type)
         is_unsigned = (left_type is not None and left_type.is_unsigned) or (right_type is not None and right_type.is_unsigned)
@@ -1755,7 +1849,8 @@ class Arm64AppleCodeGen:
         if expr.op == "-":
             self.emit("    neg x0, x0" if wide else "    neg w0, w0")
         elif expr.op == "!":
-            self.emit("    cmp x0, #0" if wide else "    cmp w0, #0")
+            is_64bit = wide or self.is_pointer_type(operand_type)
+            self.emit("    cmp x0, #0" if is_64bit else "    cmp w0, #0")
             self.emit("    cset w0, eq")
         elif expr.op == "~":
             self.emit("    mvn x0, x0" if wide else "    mvn w0, w0")
@@ -1844,6 +1939,8 @@ class Arm64AppleCodeGen:
     def gen_array_access(self, expr: ArrayAccess):
         self.gen_array_addr(expr)
         result_type = self.get_expr_type(expr)
+        if self.is_array_type(result_type):
+            return  # result is an array subtype (e.g., row of 2D array); address stays in x0
         if result_type is not None and result_type.base == "char" and not result_type.is_pointer():
             self.emit("    ldrb w0, [x0]" if result_type.is_unsigned else "    ldrsb w0, [x0]")
         elif result_type is not None and result_type.base == "short" and not result_type.is_pointer():
