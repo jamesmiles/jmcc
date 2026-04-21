@@ -141,6 +141,8 @@ class Arm64AppleCodeGen:
             return (self.total_size(type_spec) + 7) & ~7
         if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
             return (type_spec.struct_def.size_bytes(self.target) + 7) & ~7
+        if type_spec is not None and self.is_int128(type_spec):
+            return 16
         return 8
 
     def get_var_type(self, name: str):
@@ -267,8 +269,13 @@ class Arm64AppleCodeGen:
         self.emit(f"    adrp {reg}, {symbol}@GOTPAGE")
         self.emit(f"    ldr {reg}, [{reg}, {symbol}@GOTPAGEOFF]")
 
+    def is_int128(self, type_spec) -> bool:
+        return type_spec is not None and type_spec.base == "__int128" and not type_spec.is_pointer()
+
     def is_wide_scalar(self, type_spec) -> bool:
-        return type_spec is not None and not type_spec.is_pointer() and not self.is_array_type(type_spec) and type_spec.size_bytes(self.target) > 4
+        return (type_spec is not None and not type_spec.is_pointer() and
+                not self.is_array_type(type_spec) and type_spec.size_bytes(self.target) > 4
+                and not self.is_int128(type_spec))
 
     def _is_struct_by_reg_value(self, expr) -> bool:
         """Returns True if gen_expr(expr) puts struct bytes in x0[/x1] (not an address).
@@ -393,6 +400,11 @@ class Arm64AppleCodeGen:
                     return left_type
                 if right_type is not None and right_type.is_pointer():
                     return right_type
+            # Propagate __int128 type
+            if self.is_int128(left_type):
+                return left_type
+            if self.is_int128(right_type):
+                return right_type
             if self.is_fp_type(left_type):
                 return left_type
             if self.is_fp_type(right_type):
@@ -417,7 +429,14 @@ class Arm64AppleCodeGen:
             return expr.target_type
         if isinstance(expr, FuncCall):
             if isinstance(expr.name, Identifier):
-                func_decl = self.functions.get(expr.name.name)
+                fn = expr.name.name
+                if fn in ("__builtin_bswap64",):
+                    return TypeSpec(base="long long", is_unsigned=True)
+                if fn in ("__builtin_bswap32",):
+                    return TypeSpec(base="int", is_unsigned=True)
+                if fn in ("__builtin_bswap16",):
+                    return TypeSpec(base="short", is_unsigned=True)
+                func_decl = self.functions.get(fn)
                 if func_decl is not None and func_decl.return_type is not None:
                     return func_decl.return_type
             return TypeSpec(base="int")
@@ -526,8 +545,14 @@ class Arm64AppleCodeGen:
                 self.emit(f"    .short {init.value & 0xffff}")
             elif size <= 4:
                 self.emit(f"    .long {init.value & 0xffffffff}")
+            elif size <= 8:
+                self.emit(f"    .quad {init.value & 0xffffffffffffffff}")
             else:
-                self.emit(f"    .quad {init.value}")
+                # __int128: emit lo quad, then hi quad
+                lo = init.value & 0xffffffffffffffff
+                hi = (init.value >> 64) & 0xffffffffffffffff
+                self.emit(f"    .quad {lo}")
+                self.emit(f"    .quad {hi}")
             return
 
         if isinstance(init, StringLiteral) and type_spec is not None and type_spec.is_array() and type_spec.base == "char":
@@ -877,6 +902,8 @@ class Arm64AppleCodeGen:
                     self.emit(f"    sub x0, x29, #{self.locals[name]}")
             elif type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
                 self.emit(f"    sub x0, x29, #{self.locals[name]}")
+            elif self.is_int128(type_spec):
+                self.emit_local_ldp("x0", "x1", self.locals[name])
             elif self.is_fp_type(type_spec):
                 if type_spec.base == "float":
                     self.emit_local_load("ldur", "s0", self.locals[name])
@@ -899,6 +926,8 @@ class Arm64AppleCodeGen:
             self.emit_symbol_addr(label, "x9")
             if type_spec is not None and (type_spec.is_array() or type_spec.is_ptr_array) or (type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer()):
                 self.emit("    mov x0, x9")
+            elif self.is_int128(type_spec):
+                self.emit("    ldp x0, x1, [x9]")
             elif self.is_fp_type(type_spec):
                 if type_spec.base == "float":
                     self.emit("    ldr s0, [x9]")
@@ -927,6 +956,8 @@ class Arm64AppleCodeGen:
                 self.emit_symbol_addr(mangled, "x9")
             if type_spec is not None and (type_spec.is_array() or type_spec.is_ptr_array) or (type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer()):
                 self.emit("    mov x0, x9")
+            elif self.is_int128(type_spec):
+                self.emit("    ldp x0, x1, [x9]")
             elif self.is_fp_type(type_spec):
                 if type_spec.base == "float":
                     self.emit("    ldr s0, [x9]")
@@ -956,6 +987,27 @@ class Arm64AppleCodeGen:
     def store_var(self, name: str, src_reg=None, line=0, col=0):
         type_spec = self.get_var_type(name)
         is_fp = self.is_fp_type(type_spec)
+        # __int128: store x0 (lo) and x1 (hi) via stp
+        if self.is_int128(type_spec):
+            if name in self.locals:
+                self.emit_local_stp("x0", "x1", self.locals[name])
+                return
+            if name in self.static_locals:
+                self.emit_symbol_addr(self.static_locals[name], "x9")
+                self.emit("    stp x0, x1, [x9]")
+                return
+            if name in self.globals:
+                mangled = self.mangle(name)
+                g = self.globals[name]
+                if g.type_spec is not None and g.type_spec.is_extern:
+                    self.emit(f"    adrp x9, {mangled}@GOTPAGE")
+                    self.emit(f"    ldr x9, [x9, {mangled}@GOTPAGEOFF]")
+                else:
+                    self.emit_symbol_addr(mangled, "x9")
+                self.emit("    stp x0, x1, [x9]")
+                return
+            self.error(f"undefined variable '{name}'", line, col)
+            return
         if src_reg is None:
             if is_fp:
                 src_reg = "s0" if type_spec is not None and type_spec.base == "float" else "d0"
@@ -1024,6 +1076,52 @@ class Arm64AppleCodeGen:
 
     def pop_d0(self, reg: str = "d1"):
         self.emit(f"    ldr {reg}, [sp], #16")
+
+    def push_i128(self):
+        """Push x0 (lo) / x1 (hi) as a 128-bit value onto the stack."""
+        self.emit("    stp x0, x1, [sp, #-16]!")
+
+    def pop_i128(self, lo: str = "x2", hi: str = "x3"):
+        """Pop a 128-bit value from the stack into lo/hi registers."""
+        self.emit(f"    ldp {lo}, {hi}, [sp], #16")
+
+    def emit_local_ldp(self, lo: str, hi: str, offset: int):
+        """Load a 128-bit local at [x29, -offset] into lo/hi regs.  offset must be 8-aligned."""
+        if offset <= 512:
+            self.emit(f"    ldp {lo}, {hi}, [x29, #-{offset}]")
+        else:
+            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit(f"    ldp {lo}, {hi}, [x9]")
+
+    def emit_local_stp(self, lo: str, hi: str, offset: int):
+        """Store a 128-bit local from lo/hi regs into [x29, -offset].  offset must be 8-aligned."""
+        if offset <= 512:
+            self.emit(f"    stp {lo}, {hi}, [x29, #-{offset}]")
+        else:
+            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit(f"    stp {lo}, {hi}, [x9]")
+
+    def widen_to_i128(self, type_spec):
+        """Widen the value in x0 (or w0) to 128-bit (x0=lo, x1=hi) based on type_spec."""
+        if type_spec is None:
+            self.emit("    mov x1, xzr")
+            return
+        if type_spec.is_pointer() or type_spec.is_unsigned:
+            sb = type_spec.size_bytes(self.target) if not type_spec.is_pointer() else 8
+            if sb <= 4:
+                self.emit("    uxtw x0, w0")
+            # for 64-bit unsigned: x0 already contains the value
+            self.emit("    mov x1, xzr")
+        else:
+            sb = type_spec.size_bytes(self.target)
+            if sb == 1:
+                self.emit("    sxtb x0, w0")
+            elif sb == 2:
+                self.emit("    sxth x0, w0")
+            elif sb <= 4:
+                self.emit("    sxtw x0, w0")
+            # for 64-bit: x0 already contains the value
+            self.emit("    asr x1, x0, #63")
 
     def emit_local_load(self, instr: str, reg: str, offset: int):
         """Emit load from [x29, #-offset], using x9 as scratch for offsets > 255."""
@@ -1142,6 +1240,12 @@ class Arm64AppleCodeGen:
             self.emit("    cset w0, ne")
             return
         expr_type = self.get_expr_type(expr)
+        if self.is_int128(expr_type):
+            # __int128 truthy: lo|hi != 0
+            self.emit("    orr x0, x0, x1")
+            self.emit("    cmp x0, #0")
+            self.emit("    cset w0, ne")
+            return
         if self.is_pointer_type(expr_type) or self.is_wide_scalar(expr_type):
             # Normalize 64-bit value to 0/1 so callers' cbz/cbnz on w0 work
             self.emit("    cmp x0, #0")
@@ -1192,6 +1296,10 @@ class Arm64AppleCodeGen:
             if self.is_fp_type(param.type_spec):
                 self.store_var(param.name, src_reg=f"d{fp_idx}", line=func.line, col=func.col)
                 fp_idx += 1
+            elif self.is_int128(param.type_spec):
+                dest_offset = self.locals.get(param.name, 0)
+                self.emit_local_stp(f"x{int_idx}", f"x{int_idx + 1}", dest_offset)
+                int_idx += 2
             elif (param.type_spec is not None and param.type_spec.is_struct()
                   and not param.type_spec.is_pointer()):
                 struct_size = param.type_spec.struct_def.size_bytes(self.target)
@@ -1286,7 +1394,12 @@ class Arm64AppleCodeGen:
         else:
             self.gen_expr(stmt.value)
             ret_type = self.current_func.return_type if self.current_func else None
-            if ret_type is not None and ret_type.is_struct() and not ret_type.is_pointer():
+            if ret_type is not None and self.is_int128(ret_type):
+                # Value is already in x0/x1; widen if source is narrower
+                expr_type = self.get_expr_type(stmt.value)
+                if not self.is_int128(expr_type):
+                    self.widen_to_i128(expr_type)
+            elif ret_type is not None and ret_type.is_struct() and not ret_type.is_pointer():
                 # gen_expr put either an address (Identifier/MemberAccess) or bytes (FuncCall)
                 # in x0.  Load struct bytes into x0[/x1] unless already done.
                 if not self._is_struct_by_reg_value(stmt.value):
@@ -1409,6 +1522,8 @@ class Arm64AppleCodeGen:
                 return
         if decl.init is None:
             self.emit("    mov w0, #0")
+            if self.is_int128(decl.type_spec):
+                self.emit("    mov x1, xzr")
         else:
             self.gen_expr(decl.init)
             # If target is FP but value is integer, convert now
@@ -1419,6 +1534,11 @@ class Arm64AppleCodeGen:
                         self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
                     else:
                         self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
+            # Widen to __int128 if needed
+            elif self.is_int128(decl.type_spec):
+                val_type = self.get_expr_type(decl.init)
+                if not self.is_int128(val_type):
+                    self.widen_to_i128(val_type)
             # Sign-extend narrow expressions into wide (i64) local variables
             elif decl.type_spec is not None and self.is_wide_scalar(decl.type_spec) and not decl.type_spec.is_unsigned:
                 expr_type = self.get_expr_type(decl.init)
@@ -1759,6 +1879,38 @@ class Arm64AppleCodeGen:
             is_short = target_type is not None and target_type.base == "short" and not target_type.is_pointer()
             is_char = self.is_byte_type(target_type)
 
+            if self.is_int128(target_type):
+                # __int128 compound assignment: load current, push, gen rhs, pop, apply op
+                if isinstance(expr.target, Identifier):
+                    self.load_var(expr.target.name, expr.line, expr.col)
+                    self.push_i128()
+                    self.gen_expr(expr.value)
+                    rhs_type = self.get_expr_type(expr.value)
+                    if not self.is_int128(rhs_type):
+                        self.widen_to_i128(rhs_type)
+                    # Now x0/x1 = rhs; pop lhs into x2/x3
+                    self.pop_i128("x2", "x3")
+                    self._apply_i128_op(op, target_type)
+                    self.store_var(expr.target.name, line=expr.line, col=expr.col)
+                else:
+                    self.gen_expr(expr.target)
+                    self.push_i128()
+                    self.gen_expr(expr.value)
+                    rhs_type = self.get_expr_type(expr.value)
+                    if not self.is_int128(rhs_type):
+                        self.widen_to_i128(rhs_type)
+                    self.pop_i128("x2", "x3")
+                    self._apply_i128_op(op, target_type)
+                    # store result back via address
+                    self.push_i128()
+                    self.gen_lvalue_addr(expr.target)
+                    self.emit("    ldr x2, [sp], #16")
+                    self.emit("    ldr x3, [sp], #16")
+                    self.emit("    stp x2, x3, [x0]")
+                    self.emit("    mov x0, x2")
+                    self.emit("    mov x1, x3")
+                return
+
             if self.is_fp_type(target_type):
                 # FP compound assignment — load current, compute, store
                 if isinstance(expr.target, Identifier):
@@ -1908,6 +2060,12 @@ class Arm64AppleCodeGen:
                     self.pop_reg("x1")
                     self.emit(f"    mov x2, #{struct_size}")
                     self.emit("    bl _memcpy")
+                return
+            if self.is_int128(target_type):
+                val_type = self.get_expr_type(expr.value)
+                if not self.is_int128(val_type):
+                    self.widen_to_i128(val_type)
+                self.store_var(expr.target.name, line=expr.line, col=expr.col)
                 return
             if self.is_fp_type(target_type):
                 val_type = self.get_expr_type(expr.value)
@@ -2084,6 +2242,11 @@ class Arm64AppleCodeGen:
         left_type = self.get_expr_type(expr.left)
         right_type = self.get_expr_type(expr.right)
         is_fp_op = self.is_fp_type(left_type) or self.is_fp_type(right_type)
+        is_i128_op = self.is_int128(left_type) or self.is_int128(right_type)
+
+        if is_i128_op:
+            self._gen_i128_binary_op(expr, left_type, right_type)
+            return
 
         if is_fp_op:
             self.gen_expr(expr.left)
@@ -2203,11 +2366,257 @@ class Arm64AppleCodeGen:
         else:
             self.error(f"binary operator '{expr.op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
 
+    def _apply_i128_op(self, op: str, type_spec=None):
+        """Apply a binary op to x2/x3 (left) and x0/x1 (right), result in x0/x1."""
+        is_unsigned = type_spec is not None and type_spec.is_unsigned
+        if op == "+":
+            self.emit("    adds x0, x2, x0")
+            self.emit("    adc x1, x3, x1")
+        elif op == "-":
+            self.emit("    subs x0, x2, x0")
+            self.emit("    sbc x1, x3, x1")
+        elif op == "*":
+            # 128x128→128 inline multiply
+            self.emit("    mul x4, x2, x0")       # lo = lo_l * lo_r (low 64)
+            self.emit("    umulh x5, x2, x0")     # hi carry from lo*lo
+            self.emit("    mul x6, x3, x0")       # hi_l * lo_r (low 64 only)
+            self.emit("    mul x7, x2, x1")       # lo_l * hi_r (low 64 only)
+            self.emit("    add x1, x5, x6")
+            self.emit("    add x1, x1, x7")
+            self.emit("    mov x0, x4")
+        elif op == "&":
+            self.emit("    and x0, x2, x0")
+            self.emit("    and x1, x3, x1")
+        elif op == "|":
+            self.emit("    orr x0, x2, x0")
+            self.emit("    orr x1, x3, x1")
+        elif op == "^":
+            self.emit("    eor x0, x2, x0")
+            self.emit("    eor x1, x3, x1")
+        elif op in {"/", "%"}:
+            # left=x2/x3, right=x0/x1 → swap to call runtime helper
+            self.emit("    mov x4, x0")
+            self.emit("    mov x5, x1")
+            self.emit("    mov x0, x2")
+            self.emit("    mov x1, x3")
+            self.emit("    mov x2, x4")
+            self.emit("    mov x3, x5")
+            fn = ("___udivti3" if is_unsigned else "___divti3") if op == "/" else ("___umodti3" if is_unsigned else "___modti3")
+            self.emit(f"    bl {fn}")
+        elif op in {"<<", ">>"}:
+            # left=x2/x3, right=x0/x1; shift count in x0 (lo)
+            lo_label = self.new_label("i128_shift_small")
+            done_label = self.new_label("i128_shift_done")
+            noop_label = self.new_label("i128_shift_noop")
+            self.emit("    and x4, x0, #127")
+            self.emit(f"    cbz x4, {noop_label}")
+            self.emit("    cmp x4, #64")
+            if op == "<<":
+                self.emit(f"    b.lt {lo_label}")
+                self.emit("    sub x5, x4, #64")
+                self.emit("    lsl x1, x2, x5")
+                self.emit("    mov x0, xzr")
+                self.emit(f"    b {done_label}")
+                self.label(lo_label)
+                self.emit("    neg x5, x4")
+                self.emit("    lsl x1, x3, x4")
+                self.emit("    lsr x6, x2, x5")
+                self.emit("    orr x1, x1, x6")
+                self.emit("    lsl x0, x2, x4")
+            else:
+                self.emit(f"    b.lt {lo_label}")
+                self.emit("    sub x5, x4, #64")
+                if is_unsigned:
+                    self.emit("    lsr x0, x3, x5")
+                    self.emit("    mov x1, xzr")
+                else:
+                    self.emit("    asr x0, x3, x5")
+                    self.emit("    asr x1, x3, #63")
+                self.emit(f"    b {done_label}")
+                self.label(lo_label)
+                self.emit("    neg x5, x4")
+                self.emit("    lsr x0, x2, x4")
+                self.emit("    lsl x6, x3, x5")
+                self.emit("    orr x0, x0, x6")
+                if is_unsigned:
+                    self.emit("    lsr x1, x3, x4")
+                else:
+                    self.emit("    asr x1, x3, x4")
+            self.emit(f"    b {done_label}")
+            self.label(noop_label)
+            self.emit("    mov x0, x2")
+            self.emit("    mov x1, x3")
+            self.label(done_label)
+
+    def _gen_i128_binary_op(self, expr: BinaryOp, left_type, right_type):
+        """Generate code for a binary operation where at least one operand is __int128."""
+        is_unsigned = ((left_type is not None and left_type.is_unsigned) or
+                       (right_type is not None and right_type.is_unsigned))
+        op = expr.op
+        # Evaluate left, widen if needed, push
+        self.gen_expr(expr.left)
+        if not self.is_int128(left_type):
+            self.widen_to_i128(left_type)
+        self.push_i128()
+        # Evaluate right, widen if needed; right now in x0/x1
+        self.gen_expr(expr.right)
+        if not self.is_int128(right_type):
+            self.widen_to_i128(right_type)
+        # Pop left into x2/x3; right is already x0/x1
+        self.pop_i128("x2", "x3")
+
+        if op in {"==", "!=", "<", ">", "<=", ">="}:
+            # Comparison: left=x2/x3, right=x0/x1
+            if op == "==":
+                self.emit("    cmp x2, x0")
+                self.emit("    ccmp x3, x1, #0, eq")
+                self.emit("    cset w0, eq")
+            elif op == "!=":
+                self.emit("    cmp x2, x0")
+                self.emit("    ccmp x3, x1, #0, eq")
+                self.emit("    cset w0, ne")
+            elif op == "<":
+                if is_unsigned:
+                    self.emit("    cmp x2, x0")
+                    self.emit("    sbcs xzr, x3, x1")
+                    self.emit("    cset w0, lo")
+                else:
+                    self.emit("    cmp x2, x0")
+                    self.emit("    sbcs xzr, x3, x1")
+                    self.emit("    cset w0, lt")
+            elif op == ">":
+                if is_unsigned:
+                    self.emit("    cmp x0, x2")
+                    self.emit("    sbcs xzr, x1, x3")
+                    self.emit("    cset w0, lo")
+                else:
+                    self.emit("    cmp x0, x2")
+                    self.emit("    sbcs xzr, x1, x3")
+                    self.emit("    cset w0, lt")
+            elif op == "<=":
+                if is_unsigned:
+                    self.emit("    cmp x0, x2")
+                    self.emit("    sbcs xzr, x1, x3")
+                    self.emit("    cset w0, hs")
+                else:
+                    self.emit("    cmp x0, x2")
+                    self.emit("    sbcs xzr, x1, x3")
+                    self.emit("    cset w0, ge")
+            elif op == ">=":
+                if is_unsigned:
+                    self.emit("    cmp x2, x0")
+                    self.emit("    sbcs xzr, x3, x1")
+                    self.emit("    cset w0, hs")
+                else:
+                    self.emit("    cmp x2, x0")
+                    self.emit("    sbcs xzr, x3, x1")
+                    self.emit("    cset w0, ge")
+            return
+
+        if op in {"+", "-", "*", "&", "|", "^"}:
+            self._apply_i128_op(op)
+            return
+
+        if op in {"/", "%"}:
+            # Use runtime helpers: ___divti3, ___modti3, ___udivti3, ___umodti3
+            # ABI: first arg x0/x1, second arg x2/x3 -> but we have left=x2/x3, right=x0/x1
+            # Swap: right -> x2/x3, left -> x0/x1
+            self.emit("    mov x4, x0")   # right lo temp
+            self.emit("    mov x5, x1")   # right hi temp
+            self.emit("    mov x0, x2")   # left lo -> x0
+            self.emit("    mov x1, x3")   # left hi -> x1
+            self.emit("    mov x2, x4")   # right lo -> x2
+            self.emit("    mov x3, x5")   # right hi -> x3
+            if op == "/":
+                fn = "___udivti3" if is_unsigned else "___divti3"
+            else:
+                fn = "___umodti3" if is_unsigned else "___modti3"
+            self.emit(f"    bl {fn}")
+            # result in x0/x1
+            return
+
+        if op in {"<<", ">>"}:
+            # After pop_i128("x2","x3"): left lo=x2, left hi=x3, right lo=x0 (shift count)
+            # Save shift count in x4; use x5/x6 as temporaries
+            lo_label = self.new_label("i128_shift_small")
+            done_label = self.new_label("i128_shift_done")
+            noop_label = self.new_label("i128_shift_noop")
+            self.emit("    and x4, x0, #127")      # x4 = clamped shift count
+            self.emit(f"    cbz x4, {noop_label}")
+            self.emit("    cmp x4, #64")
+            if op == "<<":
+                self.emit(f"    b.lt {lo_label}")
+                # n >= 64: hi = lo << (n-64), lo = 0
+                self.emit("    sub x5, x4, #64")
+                self.emit("    lsl x1, x2, x5")
+                self.emit("    mov x0, xzr")
+                self.emit(f"    b {done_label}")
+                self.label(lo_label)
+                # 1 <= n < 64: lo <<= n, hi = (hi<<n)|(lo>>(64-n))
+                self.emit("    neg x5, x4")       # x5 = 64-n (via neg: -n mod 64 = 64-n)
+                self.emit("    lsl x1, x3, x4")
+                self.emit("    lsr x6, x2, x5")
+                self.emit("    orr x1, x1, x6")
+                self.emit("    lsl x0, x2, x4")
+                self.emit(f"    b {done_label}")
+            else:
+                self.emit(f"    b.lt {lo_label}")
+                # n >= 64
+                self.emit("    sub x5, x4, #64")
+                if is_unsigned:
+                    self.emit("    lsr x0, x3, x5")
+                    self.emit("    mov x1, xzr")
+                else:
+                    self.emit("    asr x0, x3, x5")
+                    self.emit("    asr x1, x3, #63")
+                self.emit(f"    b {done_label}")
+                self.label(lo_label)
+                # 1 <= n < 64
+                self.emit("    neg x5, x4")       # x5 = 64-n
+                self.emit("    lsr x0, x2, x4")   # lo >>= n (always logical)
+                self.emit("    lsl x6, x3, x5")
+                self.emit("    orr x0, x0, x6")
+                if is_unsigned:
+                    self.emit("    lsr x1, x3, x4")
+                else:
+                    self.emit("    asr x1, x3, x4")
+                self.emit(f"    b {done_label}")
+            self.label(noop_label)
+            self.emit("    mov x0, x2")
+            self.emit("    mov x1, x3")
+            self.label(done_label)
+            return
+
+        self.error(f"__int128 binary operator '{op}' is not yet supported on arm64-apple-darwin", expr.line, expr.col)
+
     def gen_unary_op(self, expr: UnaryOp):
         if expr.op in {"++", "--"}:
             if isinstance(expr.operand, Identifier):
                 name = expr.operand.name
                 type_spec = self.get_var_type(name)
+                if self.is_int128(type_spec):
+                    # __int128 increment/decrement
+                    self.load_var(name, expr.line, expr.col)
+                    if expr.prefix:
+                        if expr.op == "++":
+                            self.emit("    adds x0, x0, #1")
+                            self.emit("    adc x1, x1, xzr")
+                        else:
+                            self.emit("    subs x0, x0, #1")
+                            self.emit("    sbc x1, x1, xzr")
+                        self.store_var(name, line=expr.line, col=expr.col)
+                    else:
+                        # post: save original, compute new, store, return original
+                        self.push_i128()
+                        if expr.op == "++":
+                            self.emit("    adds x0, x0, #1")
+                            self.emit("    adc x1, x1, xzr")
+                        else:
+                            self.emit("    subs x0, x0, #1")
+                            self.emit("    sbc x1, x1, xzr")
+                        self.store_var(name, line=expr.line, col=expr.col)
+                        self.pop_i128("x0", "x1")
+                    return
                 is_pointer = self.is_pointer_type(type_spec)
                 delta = self.element_size(type_spec) if is_pointer else 1
                 self.load_var(name, expr.line, expr.col)
@@ -2289,6 +2698,23 @@ class Arm64AppleCodeGen:
         self.gen_expr(expr.operand)
         operand_type = self.get_expr_type(expr.operand)
         wide = self.is_wide_scalar(operand_type) or self.is_wide_scalar(self.get_expr_type(expr))
+
+        if self.is_int128(operand_type):
+            if expr.op == "-":
+                self.emit("    subs x0, xzr, x0")
+                self.emit("    sbc x1, xzr, x1")
+            elif expr.op == "!":
+                self.emit("    orr x0, x0, x1")
+                self.emit("    cmp x0, #0")
+                self.emit("    cset w0, eq")
+            elif expr.op == "~":
+                self.emit("    mvn x0, x0")
+                self.emit("    mvn x1, x1")
+            elif expr.op == "&":
+                self.gen_lvalue_addr(expr.operand)
+            else:
+                self.error(f"unary '{expr.op}' not supported for __int128 on arm64-apple-darwin", expr.line, expr.col)
+            return
 
         if self.is_fp_type(operand_type):
             if expr.op == "-":
@@ -2634,6 +3060,35 @@ class Arm64AppleCodeGen:
         source = self.get_expr_type(expr.operand)
         src_fp = self.is_fp_type(source)
         tgt_fp = self.is_fp_type(target)
+        # Cast to __int128: widen if source is not already __int128
+        if self.is_int128(target):
+            if not self.is_int128(source):
+                self.widen_to_i128(source)
+            return
+        # Cast from __int128: truncate to target (just use x0 lo, mask/sign if needed)
+        if self.is_int128(source):
+            if tgt_fp:
+                if target.is_unsigned:
+                    self.emit("    ucvtf d0, x0")
+                else:
+                    self.emit("    scvtf d0, x0")
+                return
+            # Truncate: target size from x0 (lo half)
+            sz = target.size_bytes(self.target)
+            if sz <= 1:
+                if target.is_unsigned:
+                    self.emit("    and w0, w0, #0xff")
+                else:
+                    self.emit("    sxtb w0, w0")
+            elif sz <= 2:
+                if target.is_unsigned:
+                    self.emit("    and w0, w0, #0xffff")
+                else:
+                    self.emit("    sxth w0, w0")
+            elif sz <= 4:
+                self.emit("    mov w0, w0")
+            # 8-byte: x0 already holds lo, no-op
+            return
         if tgt_fp:
             if src_fp:
                 if source.base == "float" and target.base != "float":
@@ -2808,11 +3263,24 @@ class Arm64AppleCodeGen:
         # For struct 9-16 bytes: push address + a sentinel so pop knows to use 2 regs.
         # FP args spill as d0.
         arg_types = []
-        for arg in expr.args:
-            arg_types.append(self.get_expr_type(arg))
-            a_type = arg_types[-1]
+        for i, arg in enumerate(expr.args):
+            a_type = self.get_expr_type(arg)
+            # Check if the declared param type requires __int128 widening
+            param_type = (func_decl.params[i].type_spec
+                          if func_decl is not None and i < len(func_decl.params)
+                          else None)
+            if param_type is not None and self.is_int128(param_type) and not self.is_int128(a_type):
+                # Widen non-__int128 arg to __int128 for this parameter
+                self.gen_expr(arg)
+                self.widen_to_i128(a_type)
+                self.push_i128()
+                arg_types.append(param_type)
+                continue
+            arg_types.append(a_type)
             self.gen_expr(arg)
-            if self.is_fp_type(a_type):
+            if self.is_int128(a_type):
+                self.push_i128()
+            elif self.is_fp_type(a_type):
                 self.push_d0()
             elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer() and not self.is_array_type(a_type)):
                 struct_size = a_type.struct_def.size_bytes(self.target)
@@ -2867,7 +3335,10 @@ class Arm64AppleCodeGen:
             fp_idx = 0
             reg_assigns = []
             for a_type in arg_types:
-                if self.is_fp_type(a_type):
+                if self.is_int128(a_type):
+                    reg_assigns.append(('i128', int_idx))
+                    int_idx += 2
+                elif self.is_fp_type(a_type):
                     reg_assigns.append(('fp', fp_idx))
                     fp_idx += 1
                 elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()
@@ -2883,6 +3354,8 @@ class Arm64AppleCodeGen:
                 kind, idx = reg_assigns[index]
                 if kind == 'fp':
                     self.pop_d0(f"d{idx}")
+                elif kind == 'i128':
+                    self.pop_i128(self.ARG_REGS_64[idx], self.ARG_REGS_64[idx + 1])
                 elif kind == 'struct2':
                     # low bytes in x{idx}, high bytes in x{idx+1}
                     self.pop_reg(self.ARG_REGS_64[idx])         # pop low (x0 first)

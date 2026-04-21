@@ -1425,6 +1425,24 @@ int __fpclassifyf(float);
 #undef fpclassify
 #define fpclassify(x) __fpclassifyd(x)
 """
+            # For arm64 Apple, _SC_* constants use macOS values (different from Linux)
+            if inc_name == "unistd.h" and self._is_arm64_apple:
+                content = content.replace("#define _SC_ARG_MAX 0", "#define _SC_ARG_MAX 1")
+                content = content.replace("#define _SC_CHILD_MAX 1", "#define _SC_CHILD_MAX 2")
+                content = content.replace("#define _SC_CLK_TCK 2", "#define _SC_CLK_TCK 3")
+                content = content.replace("#define _SC_NGROUPS_MAX 3", "#define _SC_NGROUPS_MAX 4")
+                content = content.replace("#define _SC_OPEN_MAX 4", "#define _SC_OPEN_MAX 5")
+                content = content.replace("#define _SC_STREAM_MAX 5", "#define _SC_STREAM_MAX 26")
+                content = content.replace("#define _SC_TZNAME_MAX 6", "#define _SC_TZNAME_MAX 27")
+                content = content.replace("#define _SC_JOB_CONTROL 7", "#define _SC_JOB_CONTROL 6")
+                content = content.replace("#define _SC_SAVED_IDS 8", "#define _SC_SAVED_IDS 7")
+                content = content.replace("#define _SC_VERSION 29", "#define _SC_VERSION 8")
+                content = content.replace("#define _SC_PAGESIZE 30", "#define _SC_PAGESIZE 29")
+                content = content.replace("#define _SC_PAGE_SIZE 30", "#define _SC_PAGE_SIZE _SC_PAGESIZE")
+                content = content.replace("#define _SC_NPROCESSORS_CONF 83", "#define _SC_NPROCESSORS_CONF 57")
+                content = content.replace("#define _SC_NPROCESSORS_ONLN 84", "#define _SC_NPROCESSORS_ONLN 58")
+                content = content.replace("#define _SC_PHYS_PAGES 85", "#define _SC_PHYS_PAGES 200")
+                content = content.replace("#define _SC_AVPHYS_PAGES 86", "#undef _SC_AVPHYS_PAGES")
             return content
 
         def _load_file(full):
