@@ -1589,9 +1589,6 @@ class Arm64AppleCodeGen:
             self.emit(f"    ldr d0, [x9, {label}@PAGEOFF]")
 
     def gen_function(self, func: FuncDecl):
-        if len(func.params) > len(self.ARG_REGS_32):
-            self.error("more than 8 integer parameters are not yet supported on arm64-apple-darwin", func.line, func.col)
-
         self.current_func = func
         self.func_is_variadic = func.is_variadic
         self.prepare_function(func)
@@ -1647,8 +1644,15 @@ class Arm64AppleCodeGen:
                             self.emit_local_store("stur", "w10", dest_offset - off)
                 int_idx += 1
             else:
-                arg_reg = self.ARG_REGS_64[int_idx] if (self.is_pointer_type(param.type_spec) or self.is_wide_scalar(param.type_spec)) else self.ARG_REGS_32[int_idx]
-                self.store_var(param.name, src_reg=arg_reg, line=func.line, col=func.col)
+                if int_idx < 8:
+                    arg_reg = self.ARG_REGS_64[int_idx] if (self.is_pointer_type(param.type_spec) or self.is_wide_scalar(param.type_spec)) else self.ARG_REGS_32[int_idx]
+                    self.store_var(param.name, src_reg=arg_reg, line=func.line, col=func.col)
+                else:
+                    # Stack param: at [x29 + 16 + 8*(int_idx - 8)]
+                    stack_off = 16 + 8 * (int_idx - 8)
+                    dest_offset = self.locals.get(param.name, 0)
+                    self.emit(f"    ldr x9, [x29, #{stack_off}]")
+                    self.emit_local_store("stur", "x9", dest_offset)
                 int_idx += 1
 
         self.gen_block(func.body)
@@ -2051,6 +2055,26 @@ class Arm64AppleCodeGen:
             member = members[i]
             member_off = struct_def.member_offset(member.name) or 0
             member_type = member.type_spec
+            # Handle nested array initialiser (e.g. short data[8] = {0, 0, ...})
+            if self.is_array_type(member_type) and isinstance(item.value, InitList):
+                elem_type = self.element_type(member_type)
+                elem_size = elem_type.size_bytes(self.target)
+                for elem_idx, elem_item in enumerate(item.value.items):
+                    if elem_item.value is None:
+                        continue
+                    self.gen_expr(elem_item.value)
+                    elem_off = member_off + elem_idx * elem_size
+                    neg_off = self.locals[decl.name] - elem_off
+                    self.emit(f"    sub x9, x29, #{neg_off}")
+                    if elem_size <= 1:
+                        self.emit("    strb w0, [x9]")
+                    elif elem_size <= 2:
+                        self.emit("    strh w0, [x9]")
+                    elif elem_size <= 4:
+                        self.emit("    str w0, [x9]")
+                    else:
+                        self.emit("    str x0, [x9]")
+                continue
             self.gen_expr(item.value)
             # If storing into float/double but value was an integer, convert
             if self.is_fp_type(member_type):
@@ -3823,8 +3847,6 @@ class Arm64AppleCodeGen:
 
         # Only limit fixed args to 8; variadic extras go on the stack
         max_reg_args = fixed_arg_count if stack_varargs else len(expr.args)
-        if max_reg_args > len(self.ARG_REGS_64):
-            self.error("more than 8 register call arguments are not yet supported on arm64-apple-darwin", expr.line, expr.col)
         stack_bytes = 0
         temp_arg_bytes = len(expr.args) * 16
 
@@ -3928,7 +3950,37 @@ class Arm64AppleCodeGen:
             else:
                 self.push_x0()
 
-        if stack_varargs:
+        if not stack_varargs and max_reg_args > 8:
+            # Non-variadic call with >8 args: args 0-7 go in x0-x7, args 8+ on the stack.
+            n = len(expr.args)
+            stack_count = n - 8
+            nonvariadic_stack_bytes = (stack_count * 8 + 15) & ~15
+            self.emit("    mov x10, sp")
+            self.emit(f"    sub sp, sp, #{nonvariadic_stack_bytes}")
+            # Copy extra args (indices 8..n-1) from software stack to hardware stack
+            for i in range(8, n):
+                sw_off = 16 * (n - 1 - i)
+                hw_off = (i - 8) * 8
+                self.emit(f"    ldr x9, [x10, #{sw_off}]")
+                self.emit(f"    str x9, [sp, #{hw_off}]")
+            # Load first 8 args from software stack into x0-x7 / d0-d7 (reverse order)
+            for i in range(7, -1, -1):
+                sw_off = 16 * (n - 1 - i)
+                a_type = arg_types[i] if i < len(arg_types) else None
+                if self.is_fp_type(a_type):
+                    self.emit(f"    ldr d{i}, [x10, #{sw_off}]")
+                else:
+                    self.emit(f"    ldr {self.ARG_REGS_64[i]}, [x10, #{sw_off}]")
+            if direct_name is not None:
+                self.emit(f"    bl {self.mangle(direct_name)}")
+            else:
+                # Function pointer was pushed before all args: at x10 + 16*n
+                self.emit(f"    ldr x16, [x10, #{16 * n}]")
+                self.emit("    blr x16")
+            extra = 16 if direct_name is None else 0
+            self.emit(f"    add sp, sp, #{nonvariadic_stack_bytes + temp_arg_bytes + extra}")
+            return
+        elif stack_varargs:
             stack_count = len(expr.args) - fixed_arg_count
             stack_bytes = (stack_count * 8 + 15) & ~15
             self.emit("    mov x10, sp")

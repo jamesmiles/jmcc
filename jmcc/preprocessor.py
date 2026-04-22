@@ -28,6 +28,76 @@ class Preprocessor:
 
     # Built-in freestanding headers that JMCC provides
     BUILTIN_HEADERS = {
+        "AvailabilityMacros.h": """
+#ifndef __AVAILABILITYMACROS__
+#define __AVAILABILITYMACROS__
+#define MAC_OS_X_VERSION_10_0   1000
+#define MAC_OS_X_VERSION_10_1   1010
+#define MAC_OS_X_VERSION_10_2   1020
+#define MAC_OS_X_VERSION_10_3   1030
+#define MAC_OS_X_VERSION_10_4   1040
+#define MAC_OS_X_VERSION_10_5   1050
+#define MAC_OS_X_VERSION_10_6   1060
+#define MAC_OS_X_VERSION_10_7   1070
+#define MAC_OS_X_VERSION_10_8   1080
+#define MAC_OS_X_VERSION_10_9   1090
+#define MAC_OS_X_VERSION_10_10  101000
+#define MAC_OS_X_VERSION_10_11  101100
+#define MAC_OS_X_VERSION_10_12  101200
+#define MAC_OS_X_VERSION_10_13  101300
+#define MAC_OS_X_VERSION_10_14  101400
+#define MAC_OS_X_VERSION_10_15  101500
+#define MAC_OS_X_VERSION_11_0   110000
+#define MAC_OS_X_VERSION_12_0   120000
+#define MAC_OS_X_VERSION_13_0   130000
+#define MAC_OS_X_VERSION_14_0   140000
+#define MAC_OS_X_VERSION_15_0   150000
+#ifndef MAC_OS_X_VERSION_MIN_REQUIRED
+    #ifdef __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+        #define MAC_OS_X_VERSION_MIN_REQUIRED __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+    #elif defined(__arm__) || defined(__arm64__)
+        #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_11_0
+    #else
+        #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_10_0
+    #endif
+#endif
+#ifndef MAC_OS_X_VERSION_MAX_ALLOWED
+    #define MAC_OS_X_VERSION_MAX_ALLOWED MAC_OS_X_VERSION_15_0
+#endif
+#define AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_9_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_10_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_11_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_12_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_13_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_14_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_15_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_11_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_12_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_13_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_14_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_15_0_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_0_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_1_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_2_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_3_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_4_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_6_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_7_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_8_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_9_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_10_AND_LATER
+#endif
+""",
         "alloca.h": """
 #define alloca __builtin_alloca
 """,
@@ -1161,6 +1231,11 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf);
             self.macros["__aarch64__"] = Macro("__aarch64__", body="1")
             self.macros["__arm64__"] = Macro("__arm64__", body="1")
             self.macros["__APPLE__"] = Macro("__APPLE__", body="1")
+            # Deployment-target macro; clang sets this from -mmacosx-version-min.
+            # AvailabilityMacros.h derives MAC_OS_X_VERSION_MIN_REQUIRED from it.
+            self.macros["__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__"] = Macro(
+                "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", body="150000"
+            )
         else:
             self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
             self.macros["__linux__"] = Macro("__linux__", body="1")
