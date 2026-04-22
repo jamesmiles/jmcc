@@ -400,15 +400,16 @@ class Arm64AppleCodeGen:
         if type_spec.array_sizes[0] is not None:
             return
         if isinstance(init, InitList):
-            # Compute max index accounting for designator_index (e.g. {5, [2]=2, 3} -> size 4)
+            # Compute max index accounting for designator_index and range designators
             max_idx = -1
             cur_idx = 0
             for item in init.items:
                 if item.designator_index is not None:
                     cur_idx = item.designator_index
-                if cur_idx > max_idx:
-                    max_idx = cur_idx
-                cur_idx += 1
+                end_idx = item.designator_end if item.designator_end is not None else cur_idx
+                if end_idx > max_idx:
+                    max_idx = end_idx
+                cur_idx = end_idx + 1
             type_spec.array_sizes[0] = IntLiteral(value=max_idx + 1)
         elif isinstance(init, StringLiteral) and type_spec.base == "char":
             type_spec.array_sizes[0] = IntLiteral(value=len(init.value) + 1)
@@ -792,9 +793,58 @@ class Arm64AppleCodeGen:
         else:
             return 1
 
+    def _adaptive_flat_count(self, member_type, flat_values: list, cursor: int) -> int:
+        """Count how many flat items are consumed to initialize member_type.
+        Handles string literals filling char arrays as 1 item, and recursively
+        handles structs whose sub-members may include char arrays."""
+        if cursor >= len(flat_values):
+            return 0
+        current = flat_values[cursor]
+        # Braced or compound literal → always 1 item (covers the whole member)
+        if (isinstance(current, InitList)
+                or (isinstance(current, CastExpr) and isinstance(current.operand, InitList))):
+            return 1
+        # String literal for a char/u8 array → 1 item
+        if (isinstance(current, StringLiteral)
+                and self.is_array_type(member_type)
+                and not member_type.is_pointer()):
+            return 1
+        # Array of scalars → each element takes _adaptive_flat_count items
+        if self.is_array_type(member_type):
+            elem = self.element_type(member_type)
+            dim_spec = member_type.array_sizes[0] if member_type.array_sizes else None
+            if dim_spec is not None:
+                if isinstance(dim_spec, IntLiteral):
+                    dim = dim_spec.value
+                else:
+                    dim = self._global_const_int(dim_spec) or 1
+            else:
+                dim = 1
+            total = 0
+            for _ in range(dim):
+                total += self._adaptive_flat_count(elem, flat_values, cursor + total)
+            return total
+        # Struct → recurse into sub-members
+        if (member_type.is_struct() and not member_type.is_pointer()
+                and member_type.struct_def is not None):
+            # If the current flat value is a struct-typed expression (not a scalar),
+            # it represents the entire struct as one initializer item (e.g. 'ls' → struct S)
+            if not isinstance(current, (IntLiteral, CharLiteral, FloatLiteral, StringLiteral)):
+                expr_type = self.get_expr_type(current)
+                if expr_type is not None and expr_type.is_struct() and not expr_type.is_pointer():
+                    return 1
+            total = 0
+            for m in member_type.struct_def.members:
+                total += self._adaptive_flat_count(m.type_spec, flat_values, cursor + total)
+            return total
+        # Scalar → 1 item
+        return 1
+
     def _restructure_flat_init(self, type_spec, init, line: int, col: int):
         """Convert a flat InitList into properly nested InitList for a struct type.
-        C allows struct arrays with no inner braces — values fill members in order."""
+        C allows struct arrays with no inner braces — values fill members in order.
+        Brace-enclosed items ({...}) or compound literals are treated as consuming the
+        entire corresponding member."""
         from jmcc.ast_nodes import InitItem as _II
         struct_def = type_spec.struct_def
         all_members = struct_def.members
@@ -804,7 +854,15 @@ class Arm64AppleCodeGen:
         for member in all_members:
             if flat_cursor >= len(flat_values):
                 break
-            count = self._type_scalar_count(member.type_spec)
+            current = flat_values[flat_cursor]
+            # A brace-enclosed or compound literal item consumes the whole member
+            is_braced = (isinstance(current, InitList)
+                         or (isinstance(current, CastExpr) and isinstance(current.operand, InitList)))
+            if is_braced:
+                new_items.append(_II(value=current))
+                flat_cursor += 1
+                continue
+            count = self._adaptive_flat_count(member.type_spec, flat_values, flat_cursor)
             if count == 1:
                 new_items.append(_II(value=flat_values[flat_cursor]))
                 flat_cursor += 1
@@ -838,8 +896,12 @@ class Arm64AppleCodeGen:
         # Detect flat init for array-of-structs (no inner braces per element).
         is_struct_elem = (elem_type.is_struct() and not elem_type.is_pointer()
                           and elem_type.struct_def is not None)
+        # A CastExpr(InitList) is a compound literal — treat as a full element initializer, not scalar.
+        _first_val = init.items[0].value if init.items else None
+        _first_is_struct_init = (isinstance(_first_val, InitList)
+                                 or (isinstance(_first_val, CastExpr) and isinstance(_first_val.operand, InitList)))
         has_flat_struct = (is_struct_elem and init.items
-                           and not isinstance(init.items[0].value, InitList)
+                           and not _first_is_struct_init
                            and len(init.items) > len(elem_type.struct_def.members))
 
         if has_flat_items:
@@ -875,14 +937,19 @@ class Arm64AppleCodeGen:
                     self.emit_global_value(elem_type, elem_init, line, col)
             return
 
-        # Build index-to-value map respecting designator_index (e.g. {5, [2]=2, 3} -> {0:5, 2:2, 3:3})
+        # Build index-to-value map respecting designator_index and range designators
         init_map: dict = {}
         cur_idx = 0
         for item in init.items:
             if item.designator_index is not None:
                 cur_idx = item.designator_index
-            init_map[cur_idx] = item.value
-            cur_idx += 1
+            if item.designator_end is not None:
+                for i in range(cur_idx, item.designator_end + 1):
+                    init_map[i] = item.value
+                cur_idx = item.designator_end + 1
+            else:
+                init_map[cur_idx] = item.value
+                cur_idx += 1
 
         for index in range(count):
             item = init_map.get(index)
@@ -894,9 +961,51 @@ class Arm64AppleCodeGen:
 
         # For unions: emit only the first (or only initialized) member, then zero-pad to union size.
         if struct_def.is_union:
-            first_val = value.items[0].value if value.items else None
+            # Find first named member (or first member if all anonymous)
             first_member = next((m for m in struct_def.members if m.name != ""), None)
-            if first_member is not None and first_val is not None:
+            if first_member is None:
+                first_member = struct_def.members[0] if struct_def.members else None
+            # Check if any items use designators matching direct union members
+            named_member_indices = {m.name: m for m in struct_def.members if m.name}
+            # Check if designators refer to fields of an anonymous struct/union member
+            designators_used = [item.designator for item in value.items if item.designator is not None]
+            anon_member_match = None
+            if designators_used and not any(d in named_member_indices for d in designators_used):
+                # Check anonymous members' fields
+                for m in struct_def.members:
+                    if m.name == "" and m.type_spec.is_struct() and m.type_spec.struct_def is not None:
+                        anon_fields = {f.name for f in m.type_spec.struct_def.members if f.name}
+                        if all(d in anon_fields for d in designators_used):
+                            anon_member_match = m
+                            break
+            if anon_member_match is not None:
+                # Forward items as InitList for the anonymous struct
+                self.emit_global_value(anon_member_match.type_spec, value, line, col)
+                emitted = self.total_size(anon_member_match.type_spec)
+                if total > emitted:
+                    self.emit(f"    .zero {total - emitted}")
+                return
+            has_direct_designator = any(item.designator in named_member_indices for item in value.items if item.designator is not None)
+            if has_direct_designator:
+                # Named designators for top-level union members — find the last designated member
+                target_member = None
+                target_val = None
+                for item in value.items:
+                    if item.designator in named_member_indices:
+                        target_member = named_member_indices[item.designator]
+                        target_val = item.value
+                if target_member is not None and target_val is not None:
+                    self.emit_global_value(target_member.type_spec, target_val, line, col)
+                    emitted = self.total_size(target_member.type_spec)
+                else:
+                    emitted = 0
+            elif first_member is not None and value.items:
+                # Use all items as the init for the first member (handles flat scalars for array/struct)
+                if len(value.items) == 1:
+                    first_val = value.items[0].value
+                else:
+                    from jmcc.ast_nodes import InitItem
+                    first_val = InitList(items=list(value.items), line=line, col=col)
                 self.emit_global_value(first_member.type_spec, first_val, line, col)
                 emitted = self.total_size(first_member.type_spec)
             else:
@@ -908,6 +1017,10 @@ class Arm64AppleCodeGen:
         current_offset = 0
         # Include ALL members (including anonymous union/struct with name=="")
         all_members = struct_def.members
+
+        # Restructure flat (brace-elided) initializer if more items than members
+        if len(value.items) > len(all_members):
+            value = self._restructure_flat_init(type_spec, value, line, col)
 
         # Build index-based init_values list (handles anon unions positionally)
         init_values = [None] * len(all_members)
@@ -960,6 +1073,10 @@ class Arm64AppleCodeGen:
                     for byte in raw:
                         self.emit(f"    .byte {byte}")
                 else:
+                    if not isinstance(member_value, InitList):
+                        # Scalar initializes the first element of the array (brace elision)
+                        from jmcc.ast_nodes import InitItem as _II
+                        member_value = InitList(items=[_II(value=member_value)], line=line, col=col)
                     self.emit_global_array_init(member_type, member_value, line, col)
                 current_offset += size
             elif member_type.is_pointer():
@@ -1012,6 +1129,17 @@ class Arm64AppleCodeGen:
                 current_offset += size
             elif member_type.is_struct() and not member_type.is_pointer() and isinstance(member_value, InitList):
                 self.emit_global_struct_init(member_type, member_value, line, col)
+                current_offset += member_type.struct_def.size_bytes(self.target)
+            elif (member_type.is_struct() and not member_type.is_pointer()
+                  and isinstance(member_value, CastExpr) and isinstance(member_value.operand, InitList)):
+                # Compound literal used to initialize a struct member: (struct S){...}
+                self.emit_global_struct_init(member_type, member_value.operand, line, col)
+                current_offset += member_type.struct_def.size_bytes(self.target)
+            elif (member_type.is_struct() and not member_type.is_pointer()):
+                # Brace elision: scalar/string used to init a struct — wrap in InitList
+                from jmcc.ast_nodes import InitItem as _II
+                dummy = InitList(items=[_II(value=member_value)], line=line, col=col)
+                self.emit_global_struct_init(member_type, dummy, line, col)
                 current_offset += member_type.struct_def.size_bytes(self.target)
             else:
                 size = member_type.size_bytes(self.target)
@@ -1112,8 +1240,13 @@ class Arm64AppleCodeGen:
             if value is None:
                 self.emit(f"    .zero {self.total_size(type_spec)}")
                 return
+            # Unwrap compound literal: (struct S){...} → InitList
+            if isinstance(value, CastExpr) and isinstance(value.operand, InitList):
+                value = value.operand
             if not isinstance(value, InitList):
-                self.error("arm64-apple-darwin backend expects struct init list here", line, col)
+                # Implicit single-member struct init: wrap scalar in an InitList
+                from jmcc.ast_nodes import InitItem
+                value = InitList(items=[InitItem(value=value)], line=line, col=col)
             # Restructure flat (brace-elided) initializer if needed
             if (type_spec.struct_def is not None
                     and len(value.items) > len(type_spec.struct_def.members)):
@@ -1123,6 +1256,12 @@ class Arm64AppleCodeGen:
         if value is None:
             self.emit(f"    .zero {self.total_size(type_spec)}")
             return
+        # Brace elision: {scalar} for a scalar type — unwrap to the first element
+        if isinstance(value, InitList) and type_spec is not None and not self.is_array_type(type_spec) and not (type_spec.is_struct() and not type_spec.is_pointer()):
+            value = value.items[0].value if value.items else None
+            if value is None:
+                self.emit(f"    .zero {self.total_size(type_spec)}")
+                return
         if isinstance(value, StringLiteral) and type_spec is not None and type_spec.is_pointer():
             label = self.string_label(value.value)
             self.emit(f"    .quad {label}")
@@ -2161,8 +2300,23 @@ class Arm64AppleCodeGen:
                 self.emit(f"    sub x10, x10, #1")
                 self.emit(f"    b {lbl_loop}")
                 self.emit(f"{lbl_end}:")
-        for index, item in enumerate(decl.init.items):
-            value = item.value
+        # Build index-to-value map respecting designator_index and range designators
+        init_map: dict = {}
+        cur_idx = 0
+        for item in decl.init.items:
+            if item.designator_index is not None:
+                cur_idx = item.designator_index
+            if item.designator_end is not None:
+                # Range designator [start ... end] = val
+                for i in range(cur_idx, item.designator_end + 1):
+                    init_map[i] = item.value
+                cur_idx = item.designator_end + 1
+            else:
+                init_map[cur_idx] = item.value
+                cur_idx += 1
+
+        for index in range(total_elem_count):
+            value = init_map.get(index)
             if value is None:
                 continue
             offset = index * elem_size
@@ -2220,6 +2374,30 @@ class Arm64AppleCodeGen:
             else:
                 self.emit("    str w0, [x9]")
 
+    def _resolve_designator_path(self, type_spec, path: list):
+        """Walk a designator path (e.g. ['a', 'j']) through nested struct types.
+        Returns (byte_offset, leaf_type_spec) from the base of type_spec, or None on error."""
+        struct_def = type_spec.struct_def if type_spec is not None else None
+        if struct_def is None:
+            return None
+        offset = 0
+        current_type = type_spec
+        for name in path:
+            sd = current_type.struct_def if current_type is not None else None
+            if sd is None:
+                return None
+            found = None
+            for m in sd.members:
+                if m.name == name:
+                    found = m
+                    break
+            if found is None:
+                return None
+            member_off = sd.member_offset(name, self.target) or 0
+            offset += member_off
+            current_type = found.type_spec
+        return (offset, current_type)
+
     def gen_struct_init_at_addr(self, type_spec, init: 'InitList', x29_neg_offset: int):
         """Write struct init list items to [x29 - x29_neg_offset + member_off] for each member.
         Uses x29-relative stores so gen_expr clobbering scratch regs is safe."""
@@ -2227,16 +2405,91 @@ class Arm64AppleCodeGen:
         if struct_def is None:
             return
         members = [m for m in struct_def.members if m.name != ""]
+        # Apply flat (brace-elided) init restructuring when more items than members
+        if len(init.items) > len(members):
+            init = self._restructure_flat_init(type_spec, init, init.line, init.col)
+        # Zero-initialize the struct region to ensure un-filled members/tails are zero
+        total_bytes = struct_def.size_bytes(self.target)
+        byte_off = 0
+        while byte_off + 8 <= total_bytes:
+            self.emit_stur_zero(8, x29_neg_offset - byte_off)
+            byte_off += 8
+        while byte_off + 4 <= total_bytes:
+            self.emit_stur_zero(4, x29_neg_offset - byte_off)
+            byte_off += 4
+        while byte_off < total_bytes:
+            self.emit_stur_zero(1, x29_neg_offset - byte_off)
+            byte_off += 1
         for i, item in enumerate(init.items):
-            if i >= len(members):
-                break
             if item.value is None:
                 continue
-            member = members[i]
+            # Resolve which member this item targets
+            if item.designator_path is not None and len(item.designator_path) > 0:
+                result = self._resolve_designator_path(type_spec, item.designator_path)
+                if result is None:
+                    continue
+                path_off, leaf_type = result
+                self.gen_expr(item.value)
+                final_neg = x29_neg_offset - path_off
+                self.emit_sub_reg_x29("x9", final_neg)
+                size = leaf_type.size_bytes(self.target) if leaf_type is not None else 4
+                if size <= 1:
+                    self.emit("    strb w0, [x9]")
+                elif size <= 2:
+                    self.emit("    strh w0, [x9]")
+                elif size <= 4:
+                    self.emit("    str w0, [x9]")
+                else:
+                    self.emit("    str x0, [x9]")
+                continue
+            if item.designator is not None:
+                idx = next((j for j, m in enumerate(members) if m.name == item.designator), None)
+                if idx is None:
+                    continue
+                member = members[idx]
+            elif i < len(members):
+                member = members[i]
+            else:
+                break
             member_off = struct_def.member_offset(member.name, self.target) or 0
             member_type = member.type_spec
-            if member_type is not None and member_type.is_struct() and not member_type.is_pointer() and isinstance(item.value, InitList):
-                self.gen_struct_init_at_addr(member_type, item.value, x29_neg_offset - member_off)
+            # Unwrap compound literals
+            init_val = item.value
+            if isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList):
+                init_val = init_val.operand
+            if member_type is not None and member_type.is_struct() and not member_type.is_pointer() and isinstance(init_val, InitList):
+                self.gen_struct_init_at_addr(member_type, init_val, x29_neg_offset - member_off)
+                continue
+            # Struct-valued expression (identifier, deref, cast) → memcpy
+            if (member_type is not None and member_type.is_struct() and not member_type.is_pointer()
+                    and not isinstance(init_val, InitList)):
+                member_size = member_type.struct_def.size_bytes(self.target) if member_type.struct_def else member_type.size_bytes(self.target)
+                self.gen_expr(init_val)           # x0 = source address
+                final_neg = x29_neg_offset - member_off
+                self.emit_sub_reg_x29("x9", final_neg)  # x9 = dest address
+                self.emit("    mov x1, x0")
+                self.emit("    mov x0, x9")
+                self.emit(f"    mov x2, #{member_size}")
+                self.emit("    bl _memcpy")
+                continue
+            if self.is_array_type(member_type) and isinstance(item.value, InitList):
+                elem_type = self.element_type(member_type)
+                elem_size = self.total_size(elem_type)
+                for elem_idx, elem_item in enumerate(item.value.items):
+                    if elem_item.value is None:
+                        continue
+                    self.gen_expr(elem_item.value)
+                    elem_off = member_off + elem_idx * elem_size
+                    final_neg = x29_neg_offset - elem_off
+                    self.emit_sub_reg_x29("x9", final_neg)
+                    if elem_size <= 1:
+                        self.emit("    strb w0, [x9]")
+                    elif elem_size <= 2:
+                        self.emit("    strh w0, [x9]")
+                    elif elem_size <= 4:
+                        self.emit("    str w0, [x9]")
+                    else:
+                        self.emit("    str x0, [x9]")
                 continue
             # Handle char array member initialized with a string literal
             if (self.is_array_type(member_type) and member_type is not None
@@ -2282,12 +2535,55 @@ class Arm64AppleCodeGen:
         if struct_def is None:
             return
         members = [m for m in struct_def.members if m.name != ""]
-        for i, item in enumerate(decl.init.items):
-            if i >= len(members):
-                break
+        init = decl.init
+        # Apply flat (brace-elided) init restructuring when more items than members
+        if len(init.items) > len(members):
+            init = self._restructure_flat_init(decl.type_spec, init, init.line, init.col)
+        # Zero-initialize the whole struct to ensure un-initialized members and
+        # char-array tails (after string copy) are properly zeroed.
+        total_bytes = struct_def.size_bytes(self.target)
+        fp_neg_base = self.locals[decl.name]
+        byte_off = 0
+        while byte_off + 8 <= total_bytes:
+            self.emit_stur_zero(8, fp_neg_base - byte_off)
+            byte_off += 8
+        while byte_off + 4 <= total_bytes:
+            self.emit_stur_zero(4, fp_neg_base - byte_off)
+            byte_off += 4
+        while byte_off < total_bytes:
+            self.emit_stur_zero(1, fp_neg_base - byte_off)
+            byte_off += 1
+        for i, item in enumerate(init.items):
             if item.value is None:
                 continue
-            member = members[i]
+            # Resolve which member this item targets (designator-path or positional)
+            if item.designator_path is not None and len(item.designator_path) > 0:
+                result = self._resolve_designator_path(decl.type_spec, item.designator_path)
+                if result is None:
+                    continue
+                path_off, leaf_type = result
+                self.gen_expr(item.value)
+                neg_off = self.locals[decl.name] - path_off
+                self.emit_sub_reg_x29("x9", neg_off)
+                size = leaf_type.size_bytes(self.target) if leaf_type is not None else 4
+                if size <= 1:
+                    self.emit("    strb w0, [x9]")
+                elif size <= 2:
+                    self.emit("    strh w0, [x9]")
+                elif size <= 4:
+                    self.emit("    str w0, [x9]")
+                else:
+                    self.emit("    str x0, [x9]")
+                continue
+            if item.designator is not None:
+                idx = next((j for j, m in enumerate(members) if m.name == item.designator), None)
+                if idx is None:
+                    continue
+                member = members[idx]
+            elif i < len(members):
+                member = members[i]
+            else:
+                break
             member_off = struct_def.member_offset(member.name, self.target) or 0
             member_type = member.type_spec
             # Handle char array member initialized with a string literal (e.g. char name[100] = "hello")
@@ -2302,14 +2598,51 @@ class Arm64AppleCodeGen:
                 self.emit(f"    mov x2, #{len(s) + 1}")
                 self.emit("    bl _memcpy")
                 continue
+            # Handle nested struct initialiser (e.g. struct S m = {1, 2, {3, 4}})
+            # Also handles compound literal: struct S m = (struct S){1, 2, {3, 4}}
+            init_val = item.value
+            if isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList):
+                init_val = init_val.operand
+            if (member_type is not None and member_type.is_struct() and not member_type.is_pointer()
+                    and isinstance(init_val, InitList)):
+                x29_neg = self.locals[decl.name] - member_off
+                self.gen_struct_init_at_addr(member_type, init_val, x29_neg)
+                continue
+            # Struct-valued expression (identifier, deref, cast) → memcpy
+            if (member_type is not None and member_type.is_struct() and not member_type.is_pointer()
+                    and not isinstance(init_val, InitList)):
+                member_size = member_type.struct_def.size_bytes(self.target) if member_type.struct_def else member_type.size_bytes(self.target)
+                self.gen_expr(init_val)            # x0 = source address
+                x29_neg = self.locals[decl.name] - member_off
+                self.emit_sub_reg_x29("x9", x29_neg)  # x9 = dest address
+                self.emit("    mov x1, x0")
+                self.emit("    mov x0, x9")
+                self.emit(f"    mov x2, #{member_size}")
+                self.emit("    bl _memcpy")
+                continue
             # Handle nested array initialiser (e.g. short data[8] = {0, 0, ...})
             if self.is_array_type(member_type) and isinstance(item.value, InitList):
                 elem_type = self.element_type(member_type)
                 elem_size = elem_type.size_bytes(self.target)
-                for elem_idx, elem_item in enumerate(item.value.items):
-                    if elem_item.value is None:
+                # Build index-to-value map respecting designator_index and range designators
+                elem_map: dict = {}
+                cur_eidx = 0
+                for ei in item.value.items:
+                    if ei.designator_index is not None:
+                        cur_eidx = ei.designator_index
+                    if ei.designator_end is not None:
+                        for k in range(cur_eidx, ei.designator_end + 1):
+                            elem_map[k] = ei.value
+                        cur_eidx = ei.designator_end + 1
+                    else:
+                        elem_map[cur_eidx] = ei.value
+                        cur_eidx += 1
+                total_count = self._array_dim_count(member_type)
+                for elem_idx in range(total_count):
+                    elem_val = elem_map.get(elem_idx)
+                    if elem_val is None:
                         continue
-                    self.gen_expr(elem_item.value)
+                    self.gen_expr(elem_val)
                     elem_off = member_off + elem_idx * elem_size
                     neg_off = self.locals[decl.name] - elem_off
                     self.emit_sub_reg_x29("x9", neg_off)
@@ -3930,8 +4263,46 @@ class Arm64AppleCodeGen:
                                 break
                             member = struct_def.members[i]
                             moff = struct_def.member_offset(member.name, self.target) or 0
+                            mtype = member.type_spec
+                            # Nested struct init: (struct S){1, 2, {3, 4}} where {3,4} is sub-array
+                            if mtype is not None and self.is_array_type(mtype) and isinstance(item.value, InitList):
+                                elem_type = self.element_type(mtype)
+                                elem_sz = self.total_size(elem_type)
+                                for ei, eitem in enumerate(item.value.items):
+                                    if eitem.value is None:
+                                        continue
+                                    self.gen_expr(eitem.value)
+                                    eoff = moff + ei * elem_sz
+                                    if elem_sz <= 1:
+                                        self.emit(f"    strb w0, [x9, #{eoff}]")
+                                    elif elem_sz <= 2:
+                                        self.emit(f"    strh w0, [x9, #{eoff}]")
+                                    elif elem_sz <= 4:
+                                        self.emit(f"    str w0, [x9, #{eoff}]")
+                                    else:
+                                        self.emit(f"    str x0, [x9, #{eoff}]")
+                                continue
+                            if mtype is not None and mtype.is_struct() and not mtype.is_pointer() and isinstance(item.value, InitList):
+                                sub_def = mtype.struct_def
+                                if sub_def is not None:
+                                    for si, sitem in enumerate(item.value.items):
+                                        if si >= len(sub_def.members) or sitem.value is None:
+                                            break
+                                        smember = sub_def.members[si]
+                                        soff = moff + (sub_def.member_offset(smember.name, self.target) or 0)
+                                        self.gen_expr(sitem.value)
+                                        ssz = self.total_size(smember.type_spec) if smember.type_spec else 4
+                                        if ssz <= 1:
+                                            self.emit(f"    strb w0, [x9, #{soff}]")
+                                        elif ssz <= 2:
+                                            self.emit(f"    strh w0, [x9, #{soff}]")
+                                        elif ssz <= 4:
+                                            self.emit(f"    str w0, [x9, #{soff}]")
+                                        else:
+                                            self.emit(f"    str x0, [x9, #{soff}]")
+                                continue
                             self.gen_expr(item.value)
-                            msz = self.total_size(member.type_spec) if member.type_spec else 4
+                            msz = self.total_size(mtype) if mtype else 4
                             if msz <= 1:
                                 self.emit(f"    strb w0, [x9, #{moff}]")
                             elif msz <= 2:
@@ -3975,6 +4346,9 @@ class Arm64AppleCodeGen:
         self.gen_expr(expr.operand)
         target = expr.target_type
         if target is None:
+            return
+        # Struct-to-struct cast: operand address already in x0, no conversion needed
+        if target.is_struct() and not target.is_pointer():
             return
         source = self.get_expr_type(expr.operand)
         src_fp = self.is_fp_type(source)
