@@ -4730,6 +4730,12 @@ class Arm64AppleCodeGen:
         stack_bytes = 0
         temp_arg_bytes = len(expr.args) * 16
 
+        # Save software-stack depth before any arg pushes so we can restore it after cleanup.
+        # Paths that use raw `add sp, sp, #N` (stack_varargs, overflow) don't call pop_reg
+        # and so don't automatically decrement _sw_stack_depth.
+        _sw_depth_before = self._sw_stack_depth
+        _dyn_off_before = self._dyn_sp_offset
+
         fp_staging_top = None
         if direct_name is None:
             # (*fp)(args) is equivalent to fp(args) in C: strip no-op dereferences of
@@ -4878,6 +4884,8 @@ class Arm64AppleCodeGen:
                 self.emit("    blr x16")
             extra = 16 if direct_name is None else 0
             self.emit(f"    add sp, sp, #{nonvariadic_stack_bytes + temp_arg_bytes + extra}")
+            self._sw_stack_depth = _sw_depth_before
+            self._dyn_sp_offset = _dyn_off_before
             return
         elif stack_varargs:
             stack_count = len(expr.args) - fixed_arg_count
@@ -5035,6 +5043,11 @@ class Arm64AppleCodeGen:
             # For indirect variadic calls we didn't pop the function pointer; add its 16 bytes too.
             extra = 16 if (direct_name is None and stack_varargs) else 0
             self.emit(f"    add sp, sp, #{stack_bytes + temp_arg_bytes + extra}")
+            # Restore sw_stack_depth: the raw add sp doesn't go through pop_reg, so it
+            # doesn't auto-decrement _sw_stack_depth. Reset to pre-call depth so that
+            # any outer call staging (e.g. printf(fmt, f(args))) computes correct offsets.
+            self._sw_stack_depth = _sw_depth_before
+            self._dyn_sp_offset = _dyn_off_before
 
     def _gen_va_start(self, expr: FuncCall):
         """arm64 Apple Darwin va_start: ap = (char*)(x29 + 16)
