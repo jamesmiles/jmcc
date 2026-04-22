@@ -428,6 +428,7 @@ APPLE_PHASE1_TESTS = (
     "positive/phase5/317_builtin_va_list_typedef_arm64.c",
     "positive/phase5/318_nullable_nonnull_fnptr_arm64.c",
     "positive/phase5/319_block_ptr_syntax_arm64.c",
+    "positive/phase5/320_nullable_in_struct_fields_arm64.c",
     "negative/semantic_errors/001_undeclared_var.c",
     "negative/semantic_errors/002_break_outside_loop.c",
     "negative/semantic_errors/003_continue_outside_loop.c",
