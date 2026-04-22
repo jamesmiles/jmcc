@@ -41,6 +41,7 @@ from .ast_nodes import (
     StringLiteral,
     Stmt,
     StructDecl,
+    StatementExpr,
     SwitchStmt,
     TernaryOp,
     TypeSpec,
@@ -1228,6 +1229,22 @@ class Arm64AppleCodeGen:
         if type_spec is not None and self.is_array_type(type_spec) and self._has_vla_dim(type_spec):
             self.vla_ptr_locals.add(name)
 
+    def collect_locals_expr(self, expr):
+        """Scan an expression for nested StatementExpr bodies and collect their locals."""
+        if expr is None:
+            return
+        if isinstance(expr, StatementExpr):
+            for stmt in expr.body.stmts:
+                self.collect_locals_stmt(stmt)
+        elif hasattr(expr, '__dict__'):
+            for val in expr.__dict__.values():
+                if isinstance(val, list):
+                    for item in val:
+                        if hasattr(item, 'line'):
+                            self.collect_locals_expr(item)
+                elif hasattr(val, 'line'):
+                    self.collect_locals_expr(val)
+
     def collect_locals_stmt(self, stmt: Stmt):
         if isinstance(stmt, Block):
             for child in stmt.stmts:
@@ -1268,6 +1285,8 @@ class Arm64AppleCodeGen:
             if stmt.stmt is not None:
                 self.collect_locals_stmt(stmt.stmt)
         elif isinstance(stmt, (ReturnStmt, ExprStmt, BreakStmt, ContinueStmt, GotoStmt, IndirectGotoStmt, NullStmt)):
+            if isinstance(stmt, ExprStmt) and stmt.expr is not None:
+                self.collect_locals_expr(stmt.expr)
             return
         else:
             self.error(
@@ -2511,6 +2530,14 @@ class Arm64AppleCodeGen:
             self.gen_func_call(expr)
         elif isinstance(expr, GenericSelection):
             self._gen_generic_selection(expr)
+        elif isinstance(expr, StatementExpr):
+            saved_locals = dict(self.locals)
+            saved_local_types = dict(self.local_types)
+            for stmt in expr.body.stmts:
+                self.gen_stmt(stmt)
+            # Result of the last ExprStmt is already in x0
+            self.locals = saved_locals
+            self.local_types = saved_local_types
         else:
             self.error(
                 f"arm64-apple-darwin backend does not yet support expression type {type(expr).__name__}",

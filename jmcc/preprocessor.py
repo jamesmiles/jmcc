@@ -1767,6 +1767,17 @@ int __fpclassifyf(float);
                 content = content.replace("#define _SC_AVPHYS_PAGES 86", "#undef _SC_AVPHYS_PAGES")
                 # pread64/pwrite64 don't exist on macOS; alias to pread/pwrite
                 content += "\n#define pread64 pread\n#define pwrite64 pwrite\n"
+            # For arm64 Apple, setjmp.h uses direct sigsetjmp/setjmp (not __sigsetjmp wrappers)
+            if inc_name == "setjmp.h" and self._is_arm64_apple:
+                content = """
+typedef long int jmp_buf[_JBLEN];
+typedef long int sigjmp_buf[_JBLEN + 1];
+#define _JBLEN 38
+int setjmp(jmp_buf);
+void longjmp(jmp_buf, int);
+int sigsetjmp(sigjmp_buf, int);
+void siglongjmp(sigjmp_buf, int);
+"""
             return content
 
         def _load_file(full):
