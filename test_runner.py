@@ -443,6 +443,8 @@ APPLE_PHASE1_TESTS = (
     "positive/phase5/332_macos_version_min_required_arm64.c",
     "positive/phase5/333_local_struct_nested_array_init_arm64.c",
     "positive/phase5/334_more_than_8_call_args_arm64.c",
+    "positive/phase5/335_2d_char_array_strlit_init_arm64.c",
+    "positive/phase5/336_sys_mman_constants_arm64.c",
     "negative/semantic_errors/001_undeclared_var.c",
     "negative/semantic_errors/002_break_outside_loop.c",
     "negative/semantic_errors/003_continue_outside_loop.c",
