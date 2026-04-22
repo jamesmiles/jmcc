@@ -486,6 +486,10 @@ class Arm64AppleCodeGen:
             if expr.op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                 return TypeSpec(base="int")
             if expr.op in {"+", "-"}:
+                # ptr - ptr → ptrdiff_t (long = 64-bit signed on arm64)
+                if (expr.op == "-" and left_type is not None and left_type.is_pointer()
+                        and right_type is not None and right_type.is_pointer()):
+                    return TypeSpec(base="long")
                 if left_type is not None and left_type.is_pointer():
                     return left_type
                 if right_type is not None and right_type.is_pointer():
@@ -2831,14 +2835,16 @@ class Arm64AppleCodeGen:
 
         if expr.op == "+" and left_ptr and not right_ptr:
             scale = self.element_size(left_type)
-            self.emit("    sxtw x0, w0")
+            if not self.is_wide_scalar(right_type):
+                self.emit("    sxtw x0, w0")
             if scale != 1:
                 self.emit(f"    mov x2, #{scale}")
                 self.emit("    mul x0, x0, x2")
             self.emit("    add x0, x1, x0")
         elif expr.op == "+" and right_ptr and not left_ptr:
             scale = self.element_size(right_type)
-            self.emit("    sxtw x1, w1")
+            if not self.is_wide_scalar(left_type):
+                self.emit("    sxtw x1, w1")
             if scale != 1:
                 self.emit(f"    mov x2, #{scale}")
                 self.emit("    mul x1, x1, x2")
@@ -2852,7 +2858,8 @@ class Arm64AppleCodeGen:
                 self.emit("    sdiv x0, x0, x2")
         elif expr.op == "-" and left_ptr and not right_ptr:
             scale = self.element_size(left_type)
-            self.emit("    sxtw x0, w0")
+            if not self.is_wide_scalar(right_type):
+                self.emit("    sxtw x0, w0")
             if scale != 1:
                 self.emit(f"    mov x2, #{scale}")
                 self.emit("    mul x0, x0, x2")
