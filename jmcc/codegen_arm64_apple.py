@@ -1438,6 +1438,12 @@ class Arm64AppleCodeGen:
     def pop_d0(self, reg: str = "d1"):
         self.emit(f"    ldr {reg}, [sp], #16")
 
+    def push_s0(self):
+        self.emit("    str s0, [sp, #-16]!")
+
+    def pop_s0(self, reg: str = "s1"):
+        self.emit(f"    ldr {reg}, [sp], #16")
+
     def push_i128(self):
         """Push x0 (lo) / x1 (hi) as a 128-bit value onto the stack."""
         self.emit("    stp x0, x1, [sp, #-16]!")
@@ -2514,29 +2520,52 @@ class Arm64AppleCodeGen:
 
             if self.is_fp_type(target_type):
                 # FP compound assignment — load current, compute, store
+                val_type = self.get_expr_type(expr.value)
+                both_float = (target_type is not None and target_type.base == "float" and
+                              val_type is not None and val_type.base == "float")
                 if isinstance(expr.target, Identifier):
                     self.load_var(expr.target.name, expr.line, expr.col)
                 else:
                     self.gen_expr(expr.target)
-                self.push_d0()
-                self.gen_expr(expr.value)
-                if not self.is_fp_type(self.get_expr_type(expr.value)):
-                    val_type = self.get_expr_type(expr.value)
-                    if val_type is not None and val_type.is_unsigned:
-                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                if both_float:
+                    self.emit("    fcvt s0, d0")
+                    self.push_s0()
+                    self.gen_expr(expr.value)
+                    if not self.is_fp_type(val_type):
+                        self.emit("    scvtf s0, x0" if self.is_wide_scalar(val_type) else "    scvtf s0, w0")
                     else:
-                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
-                self.pop_d0("d1")
-                if op == "+":
-                    self.emit("    fadd d0, d1, d0")
-                elif op == "-":
-                    self.emit("    fsub d0, d1, d0")
-                elif op == "*":
-                    self.emit("    fmul d0, d1, d0")
-                elif op == "/":
-                    self.emit("    fdiv d0, d1, d0")
+                        self.emit("    fcvt s0, d0")
+                    self.pop_s0("s1")
+                    if op == "+":
+                        self.emit("    fadd s0, s1, s0")
+                    elif op == "-":
+                        self.emit("    fsub s0, s1, s0")
+                    elif op == "*":
+                        self.emit("    fmul s0, s1, s0")
+                    elif op == "/":
+                        self.emit("    fdiv s0, s1, s0")
+                    else:
+                        self.error(f"compound assignment '{expr.op}' is not supported for FP on arm64-apple-darwin", expr.line, expr.col)
+                    self.emit("    fcvt d0, s0")
                 else:
-                    self.error(f"compound assignment '{expr.op}' is not supported for FP on arm64-apple-darwin", expr.line, expr.col)
+                    self.push_d0()
+                    self.gen_expr(expr.value)
+                    if not self.is_fp_type(val_type):
+                        if val_type is not None and val_type.is_unsigned:
+                            self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                        else:
+                            self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
+                    self.pop_d0("d1")
+                    if op == "+":
+                        self.emit("    fadd d0, d1, d0")
+                    elif op == "-":
+                        self.emit("    fsub d0, d1, d0")
+                    elif op == "*":
+                        self.emit("    fmul d0, d1, d0")
+                    elif op == "/":
+                        self.emit("    fdiv d0, d1, d0")
+                    else:
+                        self.error(f"compound assignment '{expr.op}' is not supported for FP on arm64-apple-darwin", expr.line, expr.col)
                 if isinstance(expr.target, Identifier):
                     self.store_var(expr.target.name, line=expr.line, col=expr.col)
                 else:
@@ -2866,38 +2895,75 @@ class Arm64AppleCodeGen:
             return
 
         if is_fp_op:
-            self.gen_expr(expr.left)
-            if not self.is_fp_type(left_type):
-                if left_type is not None and left_type.is_unsigned:
-                    self.emit("    ucvtf d0, x0" if self.is_wide_scalar(left_type) else "    ucvtf d0, w0")
-                else:
-                    self.emit("    scvtf d0, x0" if self.is_wide_scalar(left_type) else "    scvtf d0, w0")
-            self.push_d0()
-            self.gen_expr(expr.right)
-            if not self.is_fp_type(right_type):
-                if right_type is not None and right_type.is_unsigned:
-                    self.emit("    ucvtf d0, x0" if self.is_wide_scalar(right_type) else "    ucvtf d0, w0")
-                else:
-                    self.emit("    scvtf d0, x0" if self.is_wide_scalar(right_type) else "    scvtf d0, w0")
-            self.pop_d0("d1")
+            # Use single-precision (s) registers when both operands are float to
+            # preserve float semantics (not double precision).
+            both_float = (left_type is not None and left_type.base == "float" and
+                          right_type is not None and right_type.base == "float")
             fp_cond = {
                 "==": "eq", "!=": "ne",
                 "<": "mi", "<=": "ls",
                 ">": "gt", ">=": "ge",
             }
-            if expr.op in fp_cond:
-                self.emit("    fcmp d1, d0")
-                self.emit(f"    cset w0, {fp_cond[expr.op]}")
-            elif expr.op == "+":
-                self.emit("    fadd d0, d1, d0")
-            elif expr.op == "-":
-                self.emit("    fsub d0, d1, d0")
-            elif expr.op == "*":
-                self.emit("    fmul d0, d1, d0")
-            elif expr.op == "/":
-                self.emit("    fdiv d0, d1, d0")
+            if both_float:
+                # Left operand → s0
+                self.gen_expr(expr.left)
+                if not self.is_fp_type(left_type):
+                    self.emit("    scvtf s0, x0" if self.is_wide_scalar(left_type) else "    scvtf s0, w0")
+                else:
+                    self.emit("    fcvt s0, d0")  # exact: d0 was (double)float_val
+                self.push_s0()
+                # Right operand → s0
+                self.gen_expr(expr.right)
+                if not self.is_fp_type(right_type):
+                    self.emit("    scvtf s0, x0" if self.is_wide_scalar(right_type) else "    scvtf s0, w0")
+                else:
+                    self.emit("    fcvt s0, d0")
+                self.pop_s0("s1")  # s1 = left float value
+                if expr.op in fp_cond:
+                    self.emit("    fcmp s1, s0")
+                    self.emit(f"    cset w0, {fp_cond[expr.op]}")
+                elif expr.op == "+":
+                    self.emit("    fadd s0, s1, s0")
+                    self.emit("    fcvt d0, s0")
+                elif expr.op == "-":
+                    self.emit("    fsub s0, s1, s0")
+                    self.emit("    fcvt d0, s0")
+                elif expr.op == "*":
+                    self.emit("    fmul s0, s1, s0")
+                    self.emit("    fcvt d0, s0")
+                elif expr.op == "/":
+                    self.emit("    fdiv s0, s1, s0")
+                    self.emit("    fcvt d0, s0")
+                else:
+                    self.error(f"binary operator '{expr.op}' is not supported for floating-point on arm64-apple-darwin", expr.line, expr.col)
             else:
-                self.error(f"binary operator '{expr.op}' is not supported for floating-point on arm64-apple-darwin", expr.line, expr.col)
+                self.gen_expr(expr.left)
+                if not self.is_fp_type(left_type):
+                    if left_type is not None and left_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(left_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(left_type) else "    scvtf d0, w0")
+                self.push_d0()
+                self.gen_expr(expr.right)
+                if not self.is_fp_type(right_type):
+                    if right_type is not None and right_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(right_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(right_type) else "    scvtf d0, w0")
+                self.pop_d0("d1")
+                if expr.op in fp_cond:
+                    self.emit("    fcmp d1, d0")
+                    self.emit(f"    cset w0, {fp_cond[expr.op]}")
+                elif expr.op == "+":
+                    self.emit("    fadd d0, d1, d0")
+                elif expr.op == "-":
+                    self.emit("    fsub d0, d1, d0")
+                elif expr.op == "*":
+                    self.emit("    fmul d0, d1, d0")
+                elif expr.op == "/":
+                    self.emit("    fdiv d0, d1, d0")
+                else:
+                    self.error(f"binary operator '{expr.op}' is not supported for floating-point on arm64-apple-darwin", expr.line, expr.col)
             return
 
         self.gen_expr(expr.left)
