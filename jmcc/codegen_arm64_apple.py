@@ -4344,8 +4344,12 @@ class Arm64AppleCodeGen:
             if target is not None:
                 size = self.total_size(target)
                 alloc = (size + 15) & ~15
+                # Track x29-relative base so x9 can be recomputed after any gen_expr
+                # call (gen_expr may clobber x9 e.g. via adrp x9, _global@PAGE).
+                x29_neg_base = self.stack_size + self._sw_stack_depth + self._dyn_sp_offset + alloc
                 # Allocate temp space on stack dynamically
                 self.emit(f"    sub sp, sp, #{alloc}")
+                self._dyn_sp_offset += alloc
                 self.emit(f"    mov x9, sp")
                 if target.is_struct() and not target.is_pointer():
                     struct_def = target.struct_def
@@ -4375,6 +4379,7 @@ class Arm64AppleCodeGen:
                                     if eitem.value is None:
                                         continue
                                     self.gen_expr(eitem.value)
+                                    self.emit_sub_reg_x29("x9", x29_neg_base)
                                     eoff = moff + ei * elem_sz
                                     if elem_sz <= 1:
                                         self.emit(f"    strb w0, [x9, #{eoff}]")
@@ -4394,6 +4399,7 @@ class Arm64AppleCodeGen:
                                         smember = sub_def.members[si]
                                         soff = moff + (sub_def.member_offset(smember.name, self.target) or 0)
                                         self.gen_expr(sitem.value)
+                                        self.emit_sub_reg_x29("x9", x29_neg_base)
                                         ssz = self.total_size(smember.type_spec) if smember.type_spec else 4
                                         if ssz <= 1:
                                             self.emit(f"    strb w0, [x9, #{soff}]")
@@ -4405,6 +4411,7 @@ class Arm64AppleCodeGen:
                                             self.emit(f"    str x0, [x9, #{soff}]")
                                 continue
                             self.gen_expr(item.value)
+                            self.emit_sub_reg_x29("x9", x29_neg_base)
                             msz = self.total_size(mtype) if mtype else 4
                             if msz <= 1:
                                 self.emit(f"    strb w0, [x9, #{moff}]")
@@ -4414,13 +4421,15 @@ class Arm64AppleCodeGen:
                                 self.emit(f"    str w0, [x9, #{moff}]")
                             else:
                                 self.emit(f"    str x0, [x9, #{moff}]")
-                    # Return struct by value if ≤ 16 bytes
+                    # Return struct by value if ≤ 16 bytes (recompute x9 first)
+                    self.emit_sub_reg_x29("x9", x29_neg_base)
                     if size <= 8:
                         self.emit("    ldr x0, [x9]")
                     elif size <= 16:
                         self.emit("    ldr x0, [x9]")
                         self.emit("    ldr x1, [x9, #8]")
                     self.emit(f"    add sp, sp, #{alloc}")
+                    self._dyn_sp_offset -= alloc
                     return
                 elif self.is_array_type(target):
                     # For array compound literals, return address
@@ -4428,6 +4437,7 @@ class Arm64AppleCodeGen:
                     elem_sz = self.total_size(elem_type)
                     for i, item in enumerate(expr.operand.items):
                         self.gen_expr(item.value)
+                        self.emit_sub_reg_x29("x9", x29_neg_base)
                         off = i * elem_sz
                         if elem_sz <= 1:
                             self.emit(f"    strb w0, [x9, #{off}]")
@@ -4437,14 +4447,13 @@ class Arm64AppleCodeGen:
                             self.emit(f"    str w0, [x9, #{off}]")
                         else:
                             self.emit(f"    str x0, [x9, #{off}]")
-                    self.emit("    mov x0, x9")
+                    self.emit_sub_reg_x29("x0", x29_neg_base)
                     # sp is NOT restored — array pointer stays valid on stack.
-                    # Track this permanent decrement so subsequent compound literal
-                    # allocations compute correct x29-relative offsets.
-                    self._dyn_sp_offset += alloc
+                    # _dyn_sp_offset already updated above.
                     return
                 else:
                     self.emit(f"    add sp, sp, #{alloc}")
+                    self._dyn_sp_offset -= alloc
             # Fallback: evaluate first element
             if expr.operand.items:
                 self.gen_expr(expr.operand.items[0].value)
