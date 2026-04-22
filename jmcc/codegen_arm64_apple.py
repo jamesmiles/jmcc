@@ -1443,6 +1443,8 @@ class Arm64AppleCodeGen:
         self.static_locals = {}
         self.vla_ptr_locals = set()
         self.stack_size = 0
+        self._dyn_sp_offset = 0  # accumulated permanent sp decrements during body codegen
+        self._sw_stack_depth = 0  # net software-stack depth (push/pop balance)
         for param in func.params:
             self.alloc_slot(param.name, param.type_spec)
         self.collect_locals_stmt(func.body)
@@ -1623,29 +1625,37 @@ class Arm64AppleCodeGen:
         self.error(f"undefined variable '{name}'", line, col)
 
     def push_x0(self):
+        self._sw_stack_depth += 16
         self.emit("    str x0, [sp, #-16]!")
 
     def pop_reg(self, reg: str):
+        self._sw_stack_depth -= 16
         self.emit(f"    ldr {reg}, [sp], #16")
 
     def push_d0(self):
+        self._sw_stack_depth += 16
         self.emit("    str d0, [sp, #-16]!")
 
     def pop_d0(self, reg: str = "d1"):
+        self._sw_stack_depth -= 16
         self.emit(f"    ldr {reg}, [sp], #16")
 
     def push_s0(self):
+        self._sw_stack_depth += 16
         self.emit("    str s0, [sp, #-16]!")
 
     def pop_s0(self, reg: str = "s1"):
+        self._sw_stack_depth -= 16
         self.emit(f"    ldr {reg}, [sp], #16")
 
     def push_i128(self):
         """Push x0 (lo) / x1 (hi) as a 128-bit value onto the stack."""
+        self._sw_stack_depth += 16
         self.emit("    stp x0, x1, [sp, #-16]!")
 
     def pop_i128(self, lo: str = "x2", hi: str = "x3"):
         """Pop a 128-bit value from the stack into lo/hi registers."""
+        self._sw_stack_depth -= 16
         self.emit(f"    ldp {lo}, {hi}, [sp], #16")
 
     def emit_local_ldp(self, lo: str, hi: str, offset: int):
@@ -2917,7 +2927,9 @@ class Arm64AppleCodeGen:
                     self.push_i128()
                     self.gen_lvalue_addr(expr.target)
                     self.emit("    ldr x2, [sp], #16")
+                    self._sw_stack_depth -= 16
                     self.emit("    ldr x3, [sp], #16")
+                    self._sw_stack_depth -= 16
                     self.emit("    stp x2, x3, [x0]")
                     self.emit("    mov x0, x2")
                     self.emit("    mov x1, x3")
@@ -3833,6 +3845,11 @@ class Arm64AppleCodeGen:
                 self.pop_reg("x0")  # return original value
             return
 
+        # Address-of: just compute the lvalue address, no need to evaluate the operand first.
+        if expr.op == "&":
+            self.gen_lvalue_addr(expr.operand)
+            return
+
         self.gen_expr(expr.operand)
         operand_type = self.get_expr_type(expr.operand)
         wide = self.is_wide_scalar(operand_type) or self.is_wide_scalar(self.get_expr_type(expr))
@@ -3973,6 +3990,57 @@ class Arm64AppleCodeGen:
             if selected is not None:
                 self.gen_lvalue_addr(selected)
                 return
+        elif isinstance(expr, CastExpr) and isinstance(expr.operand, InitList):
+            # Compound literal used as lvalue (e.g. &(S){...}).
+            # Allocate stack space, initialize, return address. sp is NOT restored.
+            target = expr.target_type
+            if target is not None:
+                size = self.total_size(target)
+                alloc = (size + 15) & ~15
+                # Compute the x29-relative negative base BEFORE emitting the sub, then add alloc.
+                # x29_neg_base stays constant — use emit_sub_reg_x29 to recover the address
+                # after any gen_expr call, even if gen_expr permanently lowers sp via nested
+                # compound literals.  Also include _sw_stack_depth: any unbalanced software-stack
+                # pushes (e.g. preceding call arguments) shift sp relative to x29.
+                x29_neg_base = self.stack_size + self._sw_stack_depth + self._dyn_sp_offset + alloc
+                self.emit(f"    sub sp, sp, #{alloc}")
+                self._dyn_sp_offset += alloc
+                if target.is_struct() and not target.is_pointer():
+                    struct_def = target.struct_def
+                    if struct_def is not None:
+                        # Zero-initialize (sp-relative is fine here — no gen_expr yet)
+                        byte_off = 0
+                        while byte_off + 8 <= size:
+                            self.emit(f"    str xzr, [sp, #{byte_off}]")
+                            byte_off += 8
+                        while byte_off + 4 <= size:
+                            self.emit(f"    str wzr, [sp, #{byte_off}]")
+                            byte_off += 4
+                        while byte_off < size:
+                            self.emit(f"    strb wzr, [sp, #{byte_off}]")
+                            byte_off += 1
+                        for i, item in enumerate(expr.operand.items):
+                            if i >= len(struct_def.members) or item.value is None:
+                                break
+                            member = struct_def.members[i]
+                            moff = struct_def.member_offset(member.name, self.target) or 0
+                            mtype = member.type_spec
+                            self.gen_expr(item.value)
+                            # Recompute compound literal base via x29 (immune to sp changes)
+                            self.emit_sub_reg_x29("x9", x29_neg_base)
+                            msz = self.total_size(mtype) if mtype else 4
+                            if self.is_fp_type(mtype):
+                                self.emit(f"    str {'s0' if mtype and mtype.base == 'float' else 'd0'}, [x9, #{moff}]")
+                            elif msz <= 1:
+                                self.emit(f"    strb w0, [x9, #{moff}]")
+                            elif msz <= 2:
+                                self.emit(f"    strh w0, [x9, #{moff}]")
+                            elif msz <= 4:
+                                self.emit(f"    str w0, [x9, #{moff}]")
+                            else:
+                                self.emit(f"    str x0, [x9, #{moff}]")
+                self.emit_sub_reg_x29("x0", x29_neg_base)
+                return
         self.error("expression is not an lvalue", expr.line, expr.col)
 
     def _resolve_generic(self, expr: GenericSelection):
@@ -4066,7 +4134,9 @@ class Arm64AppleCodeGen:
             # VLA element: compute stride at runtime.
             # x0=index, x1=base. Save both, compute size into x0, then multiply.
             self.emit("    str x0, [sp, #-16]!")  # push index
+            self._sw_stack_depth += 16
             self.emit("    str x1, [sp, #-16]!")  # push base
+            self._sw_stack_depth += 16
             self._emit_runtime_size(elem_type)     # x0 = stride (may use stack/x1)
             self.pop_reg("x1")                     # restore base
             self.pop_reg("x2")                     # restore index
@@ -4278,6 +4348,17 @@ class Arm64AppleCodeGen:
                 if target.is_struct() and not target.is_pointer():
                     struct_def = target.struct_def
                     if struct_def is not None:
+                        # Zero-initialize the whole struct so un-filled members are 0.
+                        byte_off = 0
+                        while byte_off + 8 <= size:
+                            self.emit(f"    str xzr, [x9, #{byte_off}]")
+                            byte_off += 8
+                        while byte_off + 4 <= size:
+                            self.emit(f"    str wzr, [x9, #{byte_off}]")
+                            byte_off += 4
+                        while byte_off < size:
+                            self.emit(f"    strb wzr, [x9, #{byte_off}]")
+                            byte_off += 1
                         for i, item in enumerate(expr.operand.items):
                             if i >= len(struct_def.members):
                                 break
@@ -4355,7 +4436,10 @@ class Arm64AppleCodeGen:
                         else:
                             self.emit(f"    str x0, [x9, #{off}]")
                     self.emit("    mov x0, x9")
-                    # Note: sp is NOT restored here — array pointer stays valid
+                    # sp is NOT restored — array pointer stays valid on stack.
+                    # Track this permanent decrement so subsequent compound literal
+                    # allocations compute correct x29-relative offsets.
+                    self._dyn_sp_offset += alloc
                     return
                 else:
                     self.emit(f"    add sp, sp, #{alloc}")
@@ -4630,6 +4714,7 @@ class Arm64AppleCodeGen:
         stack_bytes = 0
         temp_arg_bytes = len(expr.args) * 16
 
+        fp_staging_top = None
         if direct_name is None:
             # (*fp)(args) is equivalent to fp(args) in C: strip no-op dereferences of
             # function pointers (pointer_depth==1, no further dereference needed).
@@ -4645,11 +4730,16 @@ class Arm64AppleCodeGen:
                     break
             self.gen_expr(callee_expr)
             self.push_x0()
+            fp_staging_top = self._sw_stack_depth + self._dyn_sp_offset
 
         # Evaluate all args, pushing them on the stack.
         # For struct ≤ 8 bytes: load the bytes (ldr x0/w0) before pushing.
         # For struct 9-16 bytes: push address + a sentinel so pop knows to use 2 regs.
         # FP args spill as d0.
+        # arg_staging_tops[i] = sw_stack_depth + dyn_sp_offset right after pushing arg i.
+        # This is used to compute correct offsets from x10 (= sp after all pushes) since
+        # compound literal allocations between arg pushes make the staging non-contiguous.
+        arg_staging_tops = []
         arg_types = []
         for i, arg in enumerate(expr.args):
             a_type = self.get_expr_type(arg)
@@ -4663,6 +4753,7 @@ class Arm64AppleCodeGen:
                 self.widen_to_i128(a_type)
                 self.push_i128()
                 arg_types.append(param_type)
+                arg_staging_tops.append(self._sw_stack_depth + self._dyn_sp_offset)
                 continue
             arg_types.append(a_type)
             self.gen_expr(arg)
@@ -4711,6 +4802,7 @@ class Arm64AppleCodeGen:
                     if struct_size > 8:
                         # push x1 first (high), then x0 (low) so pop order is: x0 low, x1 high
                         self.emit("    str x1, [sp, #-16]!")
+                        self._sw_stack_depth += 16
                     self.push_x0()
                 else:
                     # gen_expr returned address; load bytes
@@ -4726,11 +4818,19 @@ class Arm64AppleCodeGen:
                         rem = struct_size - 8
                         self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
                         self.emit("    str x1, [sp, #-16]!")  # push high bytes
+                        self._sw_stack_depth += 16
                         self.push_x0()                        # push low bytes
                     else:
                         self.push_x0()  # pass address for large structs
             else:
                 self.push_x0()
+            arg_staging_tops.append(self._sw_stack_depth + self._dyn_sp_offset)
+
+        # Compute actual offsets from x10 (= sp after all arg pushes) to each arg.
+        # This accounts for compound literal allocations between arg pushes making
+        # the staging stack non-contiguous.
+        final_sp_total = self._sw_stack_depth + self._dyn_sp_offset
+        actual_staging_offs = [final_sp_total - t for t in arg_staging_tops]
 
         if not stack_varargs and max_reg_args > 8:
             # Non-variadic call with >8 args: args 0-7 go in x0-x7, args 8+ on the stack.
@@ -4741,13 +4841,13 @@ class Arm64AppleCodeGen:
             self.emit(f"    sub sp, sp, #{nonvariadic_stack_bytes}")
             # Copy extra args (indices 8..n-1) from software stack to hardware stack
             for i in range(8, n):
-                sw_off = 16 * (n - 1 - i)
+                sw_off = actual_staging_offs[i]
                 hw_off = (i - 8) * 8
                 self.emit(f"    ldr x9, [x10, #{sw_off}]")
                 self.emit(f"    str x9, [sp, #{hw_off}]")
             # Load first 8 args from software stack into x0-x7 / d0-d7 (reverse order)
             for i in range(7, -1, -1):
-                sw_off = 16 * (n - 1 - i)
+                sw_off = actual_staging_offs[i]
                 a_type = arg_types[i] if i < len(arg_types) else None
                 if self.is_fp_type(a_type):
                     self.emit(f"    ldr d{i}, [x10, #{sw_off}]")
@@ -4756,8 +4856,9 @@ class Arm64AppleCodeGen:
             if direct_name is not None:
                 self.emit(f"    bl {self.mangle(direct_name)}")
             else:
-                # Function pointer was pushed before all args: at x10 + 16*n
-                self.emit(f"    ldr x16, [x10, #{16 * n}]")
+                # Function pointer was pushed before all args: use fp_staging_top offset
+                fp_off = final_sp_total - fp_staging_top
+                self.emit(f"    ldr x16, [x10, #{fp_off}]")
                 self.emit("    blr x16")
             extra = 16 if direct_name is None else 0
             self.emit(f"    add sp, sp, #{nonvariadic_stack_bytes + temp_arg_bytes + extra}")
@@ -4768,13 +4869,15 @@ class Arm64AppleCodeGen:
             self.emit("    mov x10, sp")
             self.emit(f"    sub sp, sp, #{stack_bytes}")
             # Copy variadic args to stack slots [sp+0], [sp+8], ...
+            # Use actual_staging_offs to handle non-contiguous staging (e.g. compound literals
+            # allocated between arg pushes shift the earlier args further from x10).
             for index in range(len(expr.args) - 1, fixed_arg_count - 1, -1):
-                offset = (len(expr.args) - 1 - index) * 16
+                offset = actual_staging_offs[index]
                 self.emit(f"    ldr x9, [x10, #{offset}]")
                 self.emit(f"    str x9, [sp, #{(index - fixed_arg_count) * 8}]")
             # Load fixed args into registers
             for index in range(fixed_arg_count - 1, -1, -1):
-                offset = (len(expr.args) - 1 - index) * 16
+                offset = actual_staging_offs[index]
                 a_type = arg_types[index] if index < len(arg_types) else None
                 if self.is_fp_type(a_type):
                     self.emit(f"    ldr d{index}, [x10, #{offset}]")
@@ -4831,14 +4934,21 @@ class Arm64AppleCodeGen:
                 # Some args overflow the 8-register limit; copy them to the hardware call stack.
                 # Use ldr/str (not pop) so we can address the staging area from a saved sp.
                 hw_stack_bytes = (stack_slot * 8 + 15) & ~15
-                total_staging = sum(staging_sizes)
-                # staging_offs[i] = byte offset from saved sp (x10) to arg i's low bytes.
-                # arg[n-1] was pushed last (most recent), so it sits at x10+0.
-                staging_offs = []
-                off = 0
-                for i in range(len(expr.args) - 1, -1, -1):
-                    staging_offs.insert(0, off)
-                    off += staging_sizes[i]
+                # Use actual_staging_offs for correct offsets when compound literals
+                # were allocated between arg pushes (non-contiguous staging stack).
+                # staging_offs[i] = actual offset from x10 (= sp) to arg i's low bytes.
+                # For i128/struct2 args, high bytes are at staging_offs[i] + 16.
+                staging_offs = actual_staging_offs
+                total_staging = final_sp_total - (self._sw_stack_depth + self._dyn_sp_offset - final_sp_total + final_sp_total)
+                # total bytes to pop = all sw bytes pushed during arg evaluation
+                total_staging = final_sp_total - (self._sw_stack_depth + self._dyn_sp_offset - final_sp_total) if False else \
+                    (actual_staging_offs[-1] + staging_sizes[-1]) if actual_staging_offs else 0
+                # Compute as max extent of staging area from x10
+                if actual_staging_offs and staging_sizes:
+                    total_staging = max(actual_staging_offs[i] + staging_sizes[i]
+                                        for i in range(len(actual_staging_offs)))
+                else:
+                    total_staging = 0
                 self.emit("    mov x10, sp")
                 self.emit(f"    sub sp, sp, #{hw_stack_bytes}")
                 # Copy stack-spilled args from staging area to hardware call stack
@@ -4873,7 +4983,8 @@ class Arm64AppleCodeGen:
                 if direct_name is not None:
                     self.emit(f"    bl {self.mangle(direct_name)}")
                 else:
-                    self.emit(f"    ldr x16, [x10, #{total_staging}]")
+                    fp_off = final_sp_total - fp_staging_top
+                    self.emit(f"    ldr x16, [x10, #{fp_off}]")
                     self.emit("    blr x16")
                 extra = 16 if direct_name is None else 0
                 self.emit(f"    add sp, sp, #{hw_stack_bytes + total_staging + extra}")
@@ -4896,10 +5007,10 @@ class Arm64AppleCodeGen:
         if direct_name is not None:
             self.emit(f"    bl {self.mangle(direct_name)}")
         elif stack_varargs:
-            # For indirect variadic calls: the function pointer sits in the staging area at
-            # x10 + n_args*16 (pushed before args). sp has been repositioned to the variadic
-            # area so pop_reg("x16") would read from the wrong slot.
-            self.emit(f"    ldr x16, [x10, #{len(expr.args) * 16}]")
+            # For indirect variadic calls: the function pointer sits in the staging area.
+            # Use fp_staging_top to compute correct offset from x10.
+            fp_off = final_sp_total - fp_staging_top
+            self.emit(f"    ldr x16, [x10, #{fp_off}]")
             self.emit("    blr x16")
         else:
             self.pop_reg("x16")
