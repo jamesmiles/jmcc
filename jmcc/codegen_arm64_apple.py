@@ -289,10 +289,13 @@ class Arm64AppleCodeGen:
         return max(1, size)
 
     def _has_vla_dim(self, type_spec) -> bool:
-        """Return True if type_spec contains any runtime (VLA) array dimension."""
+        """Return True if type_spec contains any runtime (VLA) array dimension.
+        None dims (unsized/flexible arrays) are not VLA dims."""
         if not self.is_array_type(type_spec):
             return False
         for dim in (type_spec.array_sizes or []):
+            if dim is None:
+                continue  # unsized array, not a VLA
             if not isinstance(dim, (IntLiteral, SizeofExpr)):
                 if self._global_const_int(dim) is None:
                     return True
@@ -1571,7 +1574,7 @@ class Arm64AppleCodeGen:
         if is_fp and type_spec is not None and type_spec.base == "float":
             self.emit("    fcvt s0, d0")
             src_reg = "s0"
-        if type_spec is not None and type_spec.base == "_Bool" and not is_fp:
+        if type_spec is not None and type_spec.base == "_Bool" and not is_fp and not type_spec.is_pointer():
             # _Bool stores 0 or 1 — normalize the value before storing.
             # Use src_reg (e.g. w1, w2) not hardcoded w0 so that the right
             # incoming register is normalised when storing non-first parameters.
@@ -4223,10 +4226,27 @@ class Arm64AppleCodeGen:
         if type_spec is None:
             self.error("arm64-apple-darwin could not resolve sizeof operand type", expr.line, expr.col)
 
+        # Compound literal with unsized array type: (T[]){...} — size from initializer count.
+        if (not expr.is_type and self.is_array_type(type_spec)
+                and any(d is None for d in (type_spec.array_sizes or []))
+                and isinstance(expr.operand, CastExpr)
+                and isinstance(expr.operand.operand, InitList)):
+            n = len(expr.operand.operand.items)
+            return max(1, type_spec.size_bytes(self.target) * n)
+
         return self.total_size(type_spec)
 
     def gen_sizeof(self, expr: SizeofExpr):
-        self.emit_int_constant(self.sizeof_value(expr), "w0")
+        # For VLA types (runtime-sized), emit runtime size computation.
+        if expr.is_type:
+            type_spec = expr.operand
+        else:
+            type_spec = self.get_expr_type(expr.operand)
+        if type_spec is not None and self._has_vla_dim(type_spec):
+            self._emit_runtime_size(type_spec)
+            self.emit("    mov w0, w0")  # truncate to 32-bit result
+        else:
+            self.emit_int_constant(self.sizeof_value(expr), "w0")
 
     def alignof_value(self, expr: AlignofExpr) -> int:
         if expr.is_type:
@@ -4678,6 +4698,8 @@ class Arm64AppleCodeGen:
                         self.emit("    sxth w0, w0")
                     self.emit("    sxtw x0, w0")
                     a_type = param_type
+            # Update arg_types with the post-coercion type (may differ from pre-coercion).
+            arg_types[-1] = a_type
             if self.is_int128(a_type):
                 self.push_i128()
             elif self.is_fp_type(a_type):
