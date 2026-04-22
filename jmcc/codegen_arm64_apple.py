@@ -942,6 +942,9 @@ class Arm64AppleCodeGen:
                 self.emit_global_array_init(type_spec, value, line, col)
                 return
         if type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
+            if value is None:
+                self.emit(f"    .zero {self.total_size(type_spec)}")
+                return
             if not isinstance(value, InitList):
                 self.error("arm64-apple-darwin backend expects struct init list here", line, col)
             # Restructure flat (brace-elided) initializer if needed
@@ -1459,6 +1462,10 @@ class Arm64AppleCodeGen:
                 if value.op == "-": return l - r
                 if value.op == "*": return l * r
                 if value.op == "/" and r != 0.0: return l / r
+                if value.op == "<<": return float(int(l) << int(r))
+                if value.op == ">>": return float(int(l) >> int(r))
+                if value.op == "&": return float(int(l) & int(r))
+                if value.op == "|": return float(int(l) | int(r))
         return None
 
     def _global_addr_str(self, value) -> Optional[str]:
