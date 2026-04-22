@@ -435,6 +435,8 @@ APPLE_PHASE1_TESTS = (
     "positive/phase5/324_float_global_neg_init_arm64.c",
     "positive/phase5/325_switch_const_expr_case_arm64.c",
     "positive/phase5/326_addr_struct_member_global_init_arm64.c",
+    "positive/phase5/327_dirent_dir_type_arm64.c",
+    "positive/phase5/328_errno_posix_constants_arm64.c",
     "negative/semantic_errors/001_undeclared_var.c",
     "negative/semantic_errors/002_break_outside_loop.c",
     "negative/semantic_errors/003_continue_outside_loop.c",
