@@ -168,18 +168,18 @@ class StructDef:
             total = (total + max_align - 1) & ~(max_align - 1)
         return total
 
-    def member_offset(self, name):
+    def member_offset(self, name, target=None):
         if self.is_union:
             # Union: all members at offset 0, but also check anonymous sub-members
             for m in self.members:
                 if m.name == name:
                     return 0
                 if m.name == "" and m.type_spec.struct_def:
-                    sub_off = m.type_spec.struct_def.member_offset(name)
+                    sub_off = m.type_spec.struct_def.member_offset(name, target)
                     if sub_off is not None:
                         return sub_off
             return None
-        layout, _ = self._layout_members()
+        layout, _ = self._layout_members(target)
         for i, m in enumerate(self.members):
             entry = layout[i]
             off = entry[0]  # works for both 2-tuple and 4-tuple (bitfield)
@@ -187,7 +187,7 @@ class StructDef:
                 return off
             # Search anonymous struct/union members
             if m.name == "" and m.type_spec.struct_def:
-                sub_off = m.type_spec.struct_def.member_offset(name)
+                sub_off = m.type_spec.struct_def.member_offset(name, target)
                 if sub_off is not None:
                     return off + sub_off
         return None

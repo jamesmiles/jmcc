@@ -1026,6 +1026,24 @@ class Arm64AppleCodeGen:
                     else:
                         self.emit(f"    .quad {intval}")
                     current_offset += size
+                elif isinstance(member_value, FloatLiteral) or (
+                        member_type.base in ("float", "double") and not member_type.is_pointer()
+                        and self._global_const_float(member_value) is not None):
+                    # Float/double member initializer (FloatLiteral or constant float expression)
+                    import struct as _struct
+                    if isinstance(member_value, FloatLiteral):
+                        fval = member_value.value
+                    else:
+                        fval = self._global_const_float(member_value)
+                    use_float = isinstance(member_value, FloatLiteral) and member_value.is_single
+                    use_float = use_float or (not isinstance(member_value, FloatLiteral) and member_type.base == "float")
+                    if member_type.base == "float" or (isinstance(member_value, FloatLiteral) and member_value.is_single):
+                        bits = _struct.unpack('<I', _struct.pack('<f', fval))[0]
+                        self.emit(f"    .long {bits}")
+                    else:
+                        bits = _struct.unpack('<Q', _struct.pack('<d', fval))[0]
+                        self.emit(f"    .quad {bits}")
+                    current_offset += size
                 elif isinstance(member_value, InitList):
                     # Union initializer — use only the first element
                     if member_value.items:
@@ -1665,7 +1683,7 @@ class Arm64AppleCodeGen:
                         self.static_locals.get(obj_name) or self.all_static_locals.get(obj_name, ""))
                     struct_def = src.type_spec.struct_def if src and src.type_spec else None
                     if struct_def is not None:
-                        off = struct_def.member_offset(operand.member)
+                        off = struct_def.member_offset(operand.member, self.target)
                         if off is not None:
                             return mangled if off == 0 else f"{mangled}+{off}"
             elif isinstance(operand, ArrayAccess):
@@ -1683,7 +1701,7 @@ class Arm64AppleCodeGen:
                         base_decl = self.globals[arr.obj.name]
                         struct_def = base_decl.type_spec.struct_def
                         if struct_def is not None:
-                            member_off = struct_def.member_offset(arr.member) or 0
+                            member_off = struct_def.member_offset(arr.member, self.target) or 0
                             member_ts = struct_def.member_type(arr.member)
                             elem_sz = self.element_size(member_ts) if member_ts is not None else 1
                             total_off = member_off + idx * elem_sz
@@ -1937,6 +1955,13 @@ class Arm64AppleCodeGen:
             return
         if decl.type_spec is not None and decl.type_spec.is_static:
             return
+        # Update local type to reflect the declaration in the current scope.
+        # The pre-pass (collect_locals_stmt) reuses one slot per name when the same name
+        # appears in exclusive scopes (e.g. `if` vs `else if`), but always records the
+        # FIRST type encountered.  Fix that by refreshing the type at code-gen time so that
+        # type-resolution queries (`get_var_type`) see the right type while generating this block.
+        if decl.type_spec is not None and decl.name in self.local_types:
+            self.local_types[decl.name] = decl.type_spec
         if decl.type_spec is not None and self.is_array_type(decl.type_spec) and isinstance(decl.init, StringLiteral) and decl.type_spec.base == "char":
             # char a[] = "string" — copy bytes to stack
             offset = self.locals[decl.name]
@@ -2189,7 +2214,7 @@ class Arm64AppleCodeGen:
             if item.value is None:
                 continue
             member = members[i]
-            member_off = struct_def.member_offset(member.name) or 0
+            member_off = struct_def.member_offset(member.name, self.target) or 0
             member_type = member.type_spec
             if member_type is not None and member_type.is_struct() and not member_type.is_pointer() and isinstance(item.value, InitList):
                 self.gen_struct_init_at_addr(member_type, item.value, x29_neg_offset - member_off)
@@ -2244,7 +2269,7 @@ class Arm64AppleCodeGen:
             if item.value is None:
                 continue
             member = members[i]
-            member_off = struct_def.member_offset(member.name) or 0
+            member_off = struct_def.member_offset(member.name, self.target) or 0
             member_type = member.type_spec
             # Handle char array member initialized with a string literal (e.g. char name[100] = "hello")
             if (self.is_array_type(member_type) and member_type is not None
@@ -3724,15 +3749,68 @@ class Arm64AppleCodeGen:
 
         if expr.arrow:
             self.gen_expr(expr.obj)
+        elif not expr.arrow and isinstance(expr.obj, FuncCall):
+            # FuncCall: large-struct convention — x0 = address of struct.
+            # Small structs (≤16 bytes) are handled inline in gen_member_access;
+            # any non-inline case (e.g., lvalue of small struct from func) spills here.
+            obj_sz = struct_type.struct_def.size_bytes(self.target) if struct_type.struct_def else 0
+            self.gen_expr(expr.obj)
+            if obj_sz <= 8:
+                # x0 = bytes; spill to temp stack slot and use its address
+                self.emit("    str x0, [sp, #-16]!")
+                self.emit("    mov x0, sp")
+            elif obj_sz <= 16:
+                self.emit("    str x1, [sp, #-8]")
+                self.emit("    str x0, [sp, #-16]!")
+                self.emit("    mov x0, sp")
+            # else: x0 already = address of struct (large-struct convention)
         else:
             self.gen_lvalue_addr(expr.obj)
 
-        offset = struct_type.struct_def.member_offset(expr.member)
+        offset = struct_type.struct_def.member_offset(expr.member, self.target)
         if offset is None:
             self.error(f"unknown member '{expr.member}'", expr.line, expr.col)
         self.emit_add_reg_imm("x0", offset)
 
     def gen_member_access(self, expr: MemberAccess):
+        # Special case: FuncCall returning a small struct (≤16 bytes).
+        # Our convention: struct bytes are in x0 (≤8 bytes) or x0/x1 (9-16 bytes).
+        # Don't spill to the stack (would corrupt staging area); extract directly from registers.
+        if not expr.arrow and isinstance(expr.obj, FuncCall) and self._is_struct_by_reg_value(expr.obj):
+            obj_type = self.get_expr_type(expr.obj)
+            if obj_type is not None and obj_type.is_struct() and not obj_type.is_pointer():
+                self.gen_expr(expr.obj)  # x0 (and x1 for >8 bytes) = struct bytes
+                sdef = obj_type.struct_def
+                member_type = self.get_expr_type(expr)
+                offset = sdef.member_offset(expr.member, self.target)
+                if offset is None:
+                    self.error(f"unknown member '{expr.member}'", expr.line, expr.col)
+                # If member is in the high half (offset ≥ 8), move x1 → x0
+                if offset >= 8:
+                    self.emit("    mov x0, x1")
+                    bit_off = (offset - 8) * 8
+                else:
+                    bit_off = offset * 8
+                if bit_off > 0:
+                    self.emit(f"    lsr x0, x0, #{bit_off}")
+                # Emit the appropriate type conversion
+                if self.is_fp_type(member_type):
+                    if member_type is not None and member_type.base == "float":
+                        self.emit("    fmov s0, w0")
+                        self.emit("    fcvt d0, s0")
+                    else:  # double or long double (= double on macOS ARM64)
+                        self.emit("    fmov d0, x0")
+                elif member_type is not None and member_type.is_struct() and not member_type.is_pointer():
+                    pass  # struct sub-member stays in x0 as bytes
+                elif self.is_wide_scalar(member_type):
+                    pass  # x0 already has 64-bit value
+                elif self.is_byte_type(member_type):
+                    self.emit("    and w0, w0, #0xff")
+                elif member_type is not None and member_type.base == "short":
+                    self.emit("    and w0, w0, #0xffff")
+                # else: 32-bit value already in w0
+                return
+
         obj_type = self.get_expr_type(expr.obj)
         sdef = obj_type.struct_def if obj_type else None
         if sdef:
@@ -3824,7 +3902,7 @@ class Arm64AppleCodeGen:
                             if i >= len(struct_def.members):
                                 break
                             member = struct_def.members[i]
-                            moff = struct_def.member_offset(member.name) or 0
+                            moff = struct_def.member_offset(member.name, self.target) or 0
                             self.gen_expr(item.value)
                             msz = self.total_size(member.type_spec) if member.type_spec else 4
                             if msz <= 1:
@@ -4280,27 +4358,105 @@ class Arm64AppleCodeGen:
                 else:
                     self.emit(f"    ldr {self.ARG_REGS_64[index]}, [x10, #{offset}]")
         else:
-            # Non-variadic: pop args in reverse into x0-x7 / d0-d7.
-            # reg_assigns is a list of tuples ('fp', idx), ('int', idx), or ('struct2', idx)
+            # Non-variadic: assign registers with hardware-stack spill when register count > 8.
+            # reg_assigns entries: ('int'|'fp'|'i128'|'struct2', reg_idx)
+            #                   or ('stack'|'fp_stack'|'struct2_stack', stack_slot_idx)
             int_idx = 0
             fp_idx = 0
+            stack_slot = 0  # 8-byte hardware stack slots consumed by overflowed args
             reg_assigns = []
+            staging_sizes = []  # bytes each arg occupies in software staging stack
+
             for a_type in arg_types:
                 if self.is_int128(a_type):
-                    reg_assigns.append(('i128', int_idx))
-                    int_idx += 2
+                    if int_idx + 2 <= 8:
+                        reg_assigns.append(('i128', int_idx))
+                        int_idx += 2
+                    else:
+                        reg_assigns.append(('stack', stack_slot))
+                        stack_slot += 2  # __int128 = 16 bytes on call stack = 2 slots
+                    staging_sizes.append(32)  # pushed as two 16-byte staging entries
                 elif self.is_fp_type(a_type):
-                    reg_assigns.append(('fp', fp_idx))
-                    fp_idx += 1
+                    if fp_idx < 8:
+                        reg_assigns.append(('fp', fp_idx))
+                        fp_idx += 1
+                    else:
+                        reg_assigns.append(('fp_stack', stack_slot))
+                        stack_slot += 1
+                    staging_sizes.append(16)
                 elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()
                       and not self.is_array_type(a_type)
                       and 8 < a_type.struct_def.size_bytes(self.target) <= 16):
-                    # 9-16 byte struct: passed in 2 x-registers
-                    reg_assigns.append(('struct2', int_idx))
-                    int_idx += 2
+                    # 9-16 byte struct: 2 integer registers, or call stack when exhausted
+                    if int_idx + 2 <= 8:
+                        reg_assigns.append(('struct2', int_idx))
+                        int_idx += 2
+                    else:
+                        reg_assigns.append(('struct2_stack', stack_slot))
+                        stack_slot += 2  # 9-16 bytes on call stack = 2 slots
+                    staging_sizes.append(32)  # pushed as two 16-byte staging entries
                 else:
-                    reg_assigns.append(('int', int_idx))
-                    int_idx += 1
+                    if int_idx < 8:
+                        reg_assigns.append(('int', int_idx))
+                        int_idx += 1
+                    else:
+                        reg_assigns.append(('stack', stack_slot))
+                        stack_slot += 1
+                    staging_sizes.append(16)
+
+            if stack_slot > 0:
+                # Some args overflow the 8-register limit; copy them to the hardware call stack.
+                # Use ldr/str (not pop) so we can address the staging area from a saved sp.
+                hw_stack_bytes = (stack_slot * 8 + 15) & ~15
+                total_staging = sum(staging_sizes)
+                # staging_offs[i] = byte offset from saved sp (x10) to arg i's low bytes.
+                # arg[n-1] was pushed last (most recent), so it sits at x10+0.
+                staging_offs = []
+                off = 0
+                for i in range(len(expr.args) - 1, -1, -1):
+                    staging_offs.insert(0, off)
+                    off += staging_sizes[i]
+                self.emit("    mov x10, sp")
+                self.emit(f"    sub sp, sp, #{hw_stack_bytes}")
+                # Copy stack-spilled args from staging area to hardware call stack
+                for index in range(len(expr.args)):
+                    kind, idx = reg_assigns[index]
+                    s_off = staging_offs[index]
+                    if kind == 'stack':
+                        self.emit(f"    ldr x9, [x10, #{s_off}]")
+                        self.emit(f"    str x9, [sp, #{idx * 8}]")
+                    elif kind == 'fp_stack':
+                        self.emit(f"    ldr d8, [x10, #{s_off}]")
+                        self.emit(f"    str d8, [sp, #{idx * 8}]")
+                    elif kind == 'struct2_stack':
+                        self.emit(f"    ldr x9, [x10, #{s_off}]")
+                        self.emit(f"    str x9, [sp, #{idx * 8}]")
+                        self.emit(f"    ldr x9, [x10, #{s_off + 16}]")
+                        self.emit(f"    str x9, [sp, #{idx * 8 + 8}]")
+                # Load register args from staging area into call registers
+                for index in range(len(expr.args)):
+                    kind, idx = reg_assigns[index]
+                    s_off = staging_offs[index]
+                    if kind == 'fp':
+                        self.emit(f"    ldr d{idx}, [x10, #{s_off}]")
+                    elif kind == 'i128':
+                        self.emit(f"    ldr {self.ARG_REGS_64[idx]}, [x10, #{s_off}]")
+                        self.emit(f"    ldr {self.ARG_REGS_64[idx + 1]}, [x10, #{s_off + 16}]")
+                    elif kind == 'struct2':
+                        self.emit(f"    ldr {self.ARG_REGS_64[idx]}, [x10, #{s_off}]")
+                        self.emit(f"    ldr {self.ARG_REGS_64[idx + 1]}, [x10, #{s_off + 16}]")
+                    elif kind == 'int':
+                        self.emit(f"    ldr {self.ARG_REGS_64[idx]}, [x10, #{s_off}]")
+                if direct_name is not None:
+                    self.emit(f"    bl {self.mangle(direct_name)}")
+                else:
+                    self.emit(f"    ldr x16, [x10, #{total_staging}]")
+                    self.emit("    blr x16")
+                extra = 16 if direct_name is None else 0
+                self.emit(f"    add sp, sp, #{hw_stack_bytes + total_staging + extra}")
+                return
+
+            # No overflow: pop args in reverse order into registers
             for index in range(len(expr.args) - 1, -1, -1):
                 kind, idx = reg_assigns[index]
                 if kind == 'fp':
