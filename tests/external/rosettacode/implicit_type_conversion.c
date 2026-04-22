@@ -7,6 +7,8 @@
 // LICENSE: GFDL 1.2
 // EXPECTED_STDOUT:
 // STDOUT: 49.000000 was increasingly cast from 16 from 8 from 4 from 2 from 1 bytes from '1'
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64: 49.000000 was increasingly cast from 8 from 8 from 4 from 2 from 1 bytes from '1'
 
 #include <stdio.h>
 main(){

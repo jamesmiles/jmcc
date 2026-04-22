@@ -561,9 +561,13 @@ class Arm64AppleCodeGen:
                 func_decl = self.functions.get(fn)
                 if func_decl is not None and func_decl.return_type is not None:
                     return func_decl.return_type
-                # Indirect call via function pointer variable
+                # Indirect call via function pointer variable.
+                # Parser may represent double (*term)() as double* (is_func_ptr=False),
+                # so also handle the case where the variable is any pointer type.
                 var_type = self.get_var_type(fn)
                 if var_type is not None and (var_type.is_func_ptr or var_type.is_func_type):
+                    return TypeSpec(base=var_type.base, is_unsigned=var_type.is_unsigned)
+                if var_type is not None and var_type.is_pointer():
                     return TypeSpec(base=var_type.base, is_unsigned=var_type.is_unsigned)
             return TypeSpec(base="int")
         return TypeSpec(base="int")
@@ -2167,6 +2171,18 @@ class Arm64AppleCodeGen:
             if member_type is not None and member_type.is_struct() and not member_type.is_pointer() and isinstance(item.value, InitList):
                 self.gen_struct_init_at_addr(member_type, item.value, x29_neg_offset - member_off)
                 continue
+            # Handle char array member initialized with a string literal
+            if (self.is_array_type(member_type) and member_type is not None
+                    and member_type.base == "char" and isinstance(item.value, StringLiteral)):
+                s = item.value.value
+                self.gen_expr(item.value)          # x0 = pointer to string literal
+                final_neg = x29_neg_offset - member_off
+                self.emit_sub_reg_x29("x9", final_neg)  # x9 = member address
+                self.emit("    mov x1, x0")
+                self.emit("    mov x0, x9")
+                self.emit(f"    mov x2, #{len(s) + 1}")
+                self.emit("    bl _memcpy")
+                continue
             self.gen_expr(item.value)
             # If storing into float/double but value was an integer, convert
             if self.is_fp_type(member_type):
@@ -2207,6 +2223,18 @@ class Arm64AppleCodeGen:
             member = members[i]
             member_off = struct_def.member_offset(member.name) or 0
             member_type = member.type_spec
+            # Handle char array member initialized with a string literal (e.g. char name[100] = "hello")
+            if (self.is_array_type(member_type) and member_type is not None
+                    and member_type.base == "char" and isinstance(item.value, StringLiteral)):
+                s = item.value.value
+                self.gen_expr(item.value)          # x0 = pointer to string literal
+                neg_off = self.locals[decl.name] - member_off
+                self.emit_sub_reg_x29("x9", neg_off)   # x9 = member address
+                self.emit("    mov x1, x0")            # x1 = src
+                self.emit("    mov x0, x9")            # x0 = dest
+                self.emit(f"    mov x2, #{len(s) + 1}")
+                self.emit("    bl _memcpy")
+                continue
             # Handle nested array initialiser (e.g. short data[8] = {0, 0, ...})
             if self.is_array_type(member_type) and isinstance(item.value, InitList):
                 elem_type = self.element_type(member_type)

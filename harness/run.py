@@ -321,6 +321,7 @@ def parse_test_metadata(source_path):
         "description": "",
         "expected_exit": 0,
         "expected_stdout": "",
+        "expected_stdout_arm64": "",
         "environment": "hosted",
         "phase": 1,
         "expect_compile_fail": False,
@@ -332,7 +333,9 @@ def parse_test_metadata(source_path):
     }
 
     stdout_lines = []
+    stdout_arm64_lines = []
     in_stdout = False
+    in_stdout_arm64 = False
 
     with open(source_path, "r") as f:
         for line in f:
@@ -348,14 +351,30 @@ def parse_test_metadata(source_path):
             elif comment.startswith("DESCRIPTION:"):
                 metadata["description"] = comment[12:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("EXPECTED_EXIT:"):
                 metadata["expected_exit"] = int(comment[14:].strip())
                 in_stdout = False
+                in_stdout_arm64 = False
+            elif comment.startswith("EXPECTED_STDOUT_ARM64:"):
+                rest = comment[22:]
+                if rest.strip():
+                    stdout_arm64_lines.append(rest.strip())
+                in_stdout = False
+                in_stdout_arm64 = True
+            elif comment.startswith("STDOUT_ARM64:"):
+                content = comment[13:]
+                if content.startswith(" "):
+                    content = content[1:]
+                stdout_arm64_lines.append(content)
+                in_stdout = False
+                in_stdout_arm64 = True
             elif comment.startswith("EXPECTED_STDOUT:"):
                 rest = comment[16:]
                 if rest.strip():
                     stdout_lines.append(rest.strip())
                 in_stdout = True
+                in_stdout_arm64 = False
             elif comment.startswith("STDOUT:"):
                 # Preserve leading whitespace (important for formatted output)
                 content = comment[7:]
@@ -363,38 +382,51 @@ def parse_test_metadata(source_path):
                     content = content[1:]  # strip exactly one space after STDOUT:
                 stdout_lines.append(content)
                 in_stdout = True
+                in_stdout_arm64 = False
             elif comment.startswith("ENVIRONMENT:"):
                 metadata["environment"] = comment[12:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("PHASE:"):
                 metadata["phase"] = int(comment[6:].strip())
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("EXPECT_COMPILE_FAIL:"):
                 metadata["expect_compile_fail"] = comment[20:].strip().lower() == "yes"
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("ERROR_PATTERN:"):
                 metadata["error_pattern"] = comment[14:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("STANDARD_REF:"):
                 metadata["standard_ref"] = comment[13:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("DEFINES:"):
                 defs = comment[8:].strip()
                 metadata["defines"] = [d.strip() for d in defs.replace(",", " ").split() if d.strip()]
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("INCLUDE_PATHS:"):
                 paths = comment[14:].strip()
                 metadata["include_paths"] = [p.strip() for p in paths.replace(",", " ").split() if p.strip()]
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("MULTI_FILE:"):
                 files = comment[11:].strip()
                 metadata["multi_file"] = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
                 in_stdout = False
+                in_stdout_arm64 = False
+            elif in_stdout_arm64 and comment:
+                stdout_arm64_lines.append(comment)
             elif in_stdout and comment:
                 stdout_lines.append(comment)
 
     if stdout_lines:
         metadata["expected_stdout"] = "\n".join(stdout_lines) + "\n"
+    if stdout_arm64_lines:
+        metadata["expected_stdout_arm64"] = "\n".join(stdout_arm64_lines) + "\n"
 
     return metadata
 
@@ -480,7 +512,9 @@ def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
         actual_exit = exec_result["returncode"]
         actual_stdout = exec_result["stdout"]
         expected_exit = metadata["expected_exit"]
-        expected_stdout = metadata["expected_stdout"]
+        # Use arm64-specific expected stdout if available and target is arm64
+        is_arm64_target = target is not None and "arm64" in target
+        expected_stdout = (metadata.get("expected_stdout_arm64") or metadata["expected_stdout"]) if is_arm64_target else metadata["expected_stdout"]
 
         exit_ok = actual_exit == expected_exit
         # Compare stdout with trailing-whitespace tolerance per line
