@@ -71,6 +71,7 @@ class Arm64AppleCodeGen:
         self.globals: Dict[str, GlobalVarDecl] = {}
         self.functions: Dict[str, FuncDecl] = {}
         self.string_literals: Dict[str, str] = {}
+        self.wide_string_literals: Dict[str, str] = {}  # wide (wchar_t) string pool
         self.stack_size = 0
         self.return_label: Optional[str] = None
         self.current_func: Optional[FuncDecl] = None
@@ -180,6 +181,11 @@ class Arm64AppleCodeGen:
         if value not in self.string_literals:
             self.string_literals[value] = self.new_label("str")
         return self.string_literals[value]
+
+    def wide_string_label(self, value: str) -> str:
+        if value not in self.wide_string_literals:
+            self.wide_string_literals[value] = self.new_label("wstr")
+        return self.wide_string_literals[value]
 
     def escape_string(self, value: str) -> str:
         result = []
@@ -405,6 +411,9 @@ class Arm64AppleCodeGen:
             type_spec.array_sizes[0] = IntLiteral(value=max_idx + 1)
         elif isinstance(init, StringLiteral) and type_spec.base == "char":
             type_spec.array_sizes[0] = IntLiteral(value=len(init.value) + 1)
+        elif isinstance(init, StringLiteral) and init.wide:
+            # wchar_t[] = L"...": element count is len+1 (null terminator)
+            type_spec.array_sizes[0] = IntLiteral(value=len(init.value) + 1)
 
     def element_type(self, type_spec):
         if type_spec is None:
@@ -481,6 +490,9 @@ class Arm64AppleCodeGen:
                     return self.clone_type(operand_type, pointer_depth=new_pd)
                 return self.clone_type(operand_type, pointer_depth=new_pd, array_sizes=None)
             if expr.op in {"-", "~", "++", "--"} and operand_type is not None:
+                # Integer promotion: char/short (signed or unsigned) → int
+                if operand_type.base in {"char", "short"} and not operand_type.is_pointer():
+                    return TypeSpec(base="int")
                 return operand_type
             return TypeSpec(base="int")
         if isinstance(expr, BinaryOp):
@@ -488,6 +500,15 @@ class Arm64AppleCodeGen:
             right_type = self.get_expr_type(expr.right)
             if expr.op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                 return TypeSpec(base="int")
+            if expr.op in {"<<", ">>"}:
+                # C standard: result type is that of the promoted left operand
+                # Integer promotion: char/short (signed or unsigned) → int
+                if left_type is None:
+                    return TypeSpec(base="int")
+                _NARROW = {"char", "short"}
+                if left_type.base in _NARROW:
+                    return TypeSpec(base="int")
+                return left_type
             if expr.op in {"+", "-"}:
                 # ptr - ptr → ptrdiff_t (long = 64-bit signed on arm64)
                 if (expr.op == "-" and left_type is not None and left_type.is_pointer()
@@ -604,6 +625,15 @@ class Arm64AppleCodeGen:
                 self.label(label)
                 self.emit(f'    .asciz "{self.escape_string(value)}"')
 
+        if self.wide_string_literals:
+            self.emit("")
+            self.emit("    .data")
+            for value, label in self.wide_string_literals.items():
+                self.emit("    .p2align 2")
+                self.label(label)
+                for cp in [ord(c) for c in value] + [0]:
+                    self.emit(f"    .long {cp}")
+
         if self.float_literals:
             self.emit("")
             # Separate 4-byte and 8-byte float literals into their proper sections
@@ -681,6 +711,13 @@ class Arm64AppleCodeGen:
 
         if isinstance(init, StringLiteral) and type_spec is not None and type_spec.is_array() and type_spec.base == "char":
             self.emit(f'    .asciz "{self.escape_string(init.value)}"')
+            return
+
+        # wchar_t[] = L"...": emit each codepoint as .long (4 bytes)
+        if isinstance(init, StringLiteral) and init.wide and type_spec is not None and type_spec.is_array():
+            self.emit("    .p2align 2")
+            for cp in [ord(c) for c in init.value] + [0]:
+                self.emit(f"    .long {cp}")
             return
 
         if isinstance(init, StringLiteral) and type_spec is not None and type_spec.is_pointer():
@@ -1021,6 +1058,12 @@ class Arm64AppleCodeGen:
                 raw = raw[:limit] + b"\0" * max(0, limit - len(raw))
                 for byte in raw:
                     self.emit(f"    .byte {byte}")
+                return
+            # wchar_t[] = L"...": emit each codepoint as .long (4 bytes) + null terminator
+            if isinstance(value, StringLiteral) and value.wide:
+                codepoints = [ord(c) for c in value.value] + [0]
+                for cp in codepoints:
+                    self.emit(f"    .long {cp}")
                 return
             if isinstance(value, InitList):
                 self.emit_global_array_init(type_spec, value, line, col)
@@ -1878,6 +1921,16 @@ class Arm64AppleCodeGen:
                 self.emit(f"    movz w0, #{code}")
                 self.emit(f"    strb w0, [x9, #{i}]")
             self.emit(f"    strb wzr, [x9, #{len(decl.init.value)}]")
+            return
+        if decl.type_spec is not None and self.is_array_type(decl.type_spec) and isinstance(decl.init, StringLiteral) and decl.init.wide:
+            # wchar_t a[] = L"string" — copy 4-byte codepoints to stack
+            offset = self.locals[decl.name]
+            self.emit_sub_reg_x29("x9", offset)
+            for i, ch in enumerate(decl.init.value):
+                cp = ord(ch)
+                self.emit_int_constant(cp, "w0")
+                self.emit(f"    str w0, [x9, #{i * 4}]")
+            self.emit(f"    str wzr, [x9, #{len(decl.init.value) * 4}]")
             return
         if decl.type_spec is not None and self.is_array_type(decl.type_spec) and isinstance(decl.init, InitList):
             self.gen_local_array_init(decl)
@@ -3796,7 +3849,10 @@ class Arm64AppleCodeGen:
             self.gen_expr(subexpr)
 
     def gen_string_literal(self, expr: StringLiteral):
-        label = self.string_label(expr.value)
+        if expr.wide:
+            label = self.wide_string_label(expr.value)
+        else:
+            label = self.string_label(expr.value)
         self.emit(f"    adrp x0, {label}@PAGE")
         self.emit(f"    add x0, x0, {label}@PAGEOFF")
 
