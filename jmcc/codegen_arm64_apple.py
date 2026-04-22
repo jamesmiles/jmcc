@@ -87,6 +87,72 @@ class Arm64AppleCodeGen:
     def emit(self, line: str):
         self.output.append(line)
 
+    # ── large-immediate helpers ───────────────────────────────────────────────
+
+    def emit_large_imm(self, reg: str, n: int):
+        """Load an arbitrary non-negative integer into reg using movz/movk."""
+        n = int(n)
+        chunks = [(n >> s) & 0xFFFF for s in (0, 16, 32, 48)]
+        first = True
+        for shift, val in zip((0, 16, 32, 48), chunks):
+            if not first and val == 0:
+                continue
+            suffix = f", lsl #{shift}" if shift else ""
+            if first:
+                self.emit(f"    movz {reg}, #{val}{suffix}")
+                first = False
+            else:
+                self.emit(f"    movk {reg}, #{val}{suffix}")
+
+    def emit_sp_sub(self, n: int):
+        """sub sp, sp, #n — split into <=4095 chunks (arm64 imm12 constraint)."""
+        while n > 0:
+            chunk = min(n, 4095)
+            self.emit(f"    sub sp, sp, #{chunk}")
+            n -= chunk
+
+    def emit_sp_add(self, n: int):
+        """add sp, sp, #n — split into <=4095 chunks (arm64 imm12 constraint)."""
+        while n > 0:
+            chunk = min(n, 4095)
+            self.emit(f"    add sp, sp, #{chunk}")
+            n -= chunk
+
+    def emit_sub_reg_x29(self, reg: str, n: int):
+        """sub reg, x29, #n — use scratch x9 for n > 4095."""
+        if n <= 4095:
+            self.emit(f"    sub {reg}, x29, #{n}")
+        else:
+            self.emit_large_imm("x9", n)
+            self.emit(f"    sub {reg}, x29, x9")
+
+    def emit_add_reg_imm(self, reg: str, n: int):
+        """add reg, reg, #n — use scratch x9 for n > 4095."""
+        if n <= 4095:
+            self.emit(f"    add {reg}, {reg}, #{n}")
+        else:
+            self.emit_large_imm("x9", n)
+            self.emit(f"    add {reg}, {reg}, x9")
+
+    def emit_stur_zero(self, size_bytes: int, fp_neg_off: int):
+        """Store zero at [x29, #-fp_neg_off]. Uses str+sub x9 for out-of-range offsets."""
+        off = -fp_neg_off
+        if -256 <= off <= 255:
+            if size_bytes >= 8:
+                self.emit(f"    stur xzr, [x29, #{off}]")
+            elif size_bytes >= 4:
+                self.emit(f"    stur wzr, [x29, #{off}]")
+            else:
+                self.emit(f"    sturb wzr, [x29, #{off}]")
+        else:
+            self.emit_sub_reg_x29("x9", fp_neg_off)
+            if size_bytes >= 8:
+                self.emit("    str xzr, [x9]")
+            elif size_bytes >= 4:
+                self.emit("    str wzr, [x9]")
+            else:
+                self.emit("    strb wzr, [x9]")
+
     def label(self, name: str):
         self.emit(f"{name}:")
 
@@ -1124,9 +1190,9 @@ class Arm64AppleCodeGen:
                 if name in self.vla_ptr_locals:
                     self.emit_local_load("ldur", "x0", self.locals[name])
                 else:
-                    self.emit(f"    sub x0, x29, #{self.locals[name]}")
+                    self.emit_sub_reg_x29("x0", self.locals[name])
             elif type_spec is not None and type_spec.is_struct() and not type_spec.is_pointer():
-                self.emit(f"    sub x0, x29, #{self.locals[name]}")
+                self.emit_sub_reg_x29("x0", self.locals[name])
             elif self.is_int128(type_spec):
                 self.emit_local_ldp("x0", "x1", self.locals[name])
             elif self.is_fp_type(type_spec):
@@ -1316,7 +1382,7 @@ class Arm64AppleCodeGen:
         if offset <= 512:
             self.emit(f"    ldp {lo}, {hi}, [x29, #-{offset}]")
         else:
-            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit_sub_reg_x29("x9", offset)
             self.emit(f"    ldp {lo}, {hi}, [x9]")
 
     def emit_local_stp(self, lo: str, hi: str, offset: int):
@@ -1324,7 +1390,7 @@ class Arm64AppleCodeGen:
         if offset <= 512:
             self.emit(f"    stp {lo}, {hi}, [x29, #-{offset}]")
         else:
-            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit_sub_reg_x29("x9", offset)
             self.emit(f"    stp {lo}, {hi}, [x9]")
 
     def widen_to_i128(self, type_spec):
@@ -1354,7 +1420,7 @@ class Arm64AppleCodeGen:
         if offset <= 255:
             self.emit(f"    {instr} {reg}, [x29, #-{offset}]")
         else:
-            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit_sub_reg_x29("x9", offset)
             scaled = instr.replace("ldur", "ldr")
             self.emit(f"    {scaled} {reg}, [x9]")
 
@@ -1363,7 +1429,7 @@ class Arm64AppleCodeGen:
         if offset <= 255:
             self.emit(f"    {instr} {reg}, [x29, #-{offset}]")
         else:
-            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit_sub_reg_x29("x9", offset)
             scaled = instr.replace("stur", "str")
             self.emit(f"    {scaled} {reg}, [x9]")
 
@@ -1613,7 +1679,7 @@ class Arm64AppleCodeGen:
         self.emit("    stp x29, x30, [sp, #-16]!")
         self.emit("    mov x29, sp")
         if self.stack_size:
-            self.emit(f"    sub sp, sp, #{self.stack_size}")
+            self.emit_sp_sub(self.stack_size)
 
         int_idx = 0
         fp_idx = 0
@@ -1782,7 +1848,7 @@ class Arm64AppleCodeGen:
         if decl.type_spec is not None and self.is_array_type(decl.type_spec) and isinstance(decl.init, StringLiteral) and decl.type_spec.base == "char":
             # char a[] = "string" — copy bytes to stack
             offset = self.locals[decl.name]
-            self.emit(f"    sub x9, x29, #{offset}")
+            self.emit_sub_reg_x29("x9", offset)
             for i, ch in enumerate(decl.init.value):
                 code = ord(ch)
                 if code >= 0xF700:
@@ -1847,7 +1913,7 @@ class Arm64AppleCodeGen:
                 # gen_expr returned source address in x0 — copy via memcpy
                 self.push_x0()
                 if decl.name in self.locals:
-                    self.emit(f"    sub x0, x29, #{self.locals[decl.name]}")
+                    self.emit_sub_reg_x29("x0", self.locals[decl.name])
                 elif decl.name in self.static_locals:
                     self.emit_symbol_addr(self.static_locals[decl.name], "x0")
                 elif decl.name in self.globals:
@@ -1914,20 +1980,20 @@ class Arm64AppleCodeGen:
                 # Small arrays: unrolled inline stores (8/4/1 bytes at a time)
                 filled = 0
                 while filled + 8 <= total_bytes:
-                    self.emit(f"    stur xzr, [x29, #{-(base_offset - filled)}]")
+                    self.emit_stur_zero(8, base_offset - filled)
                     filled += 8
                 while filled + 4 <= total_bytes:
-                    self.emit(f"    stur wzr, [x29, #{-(base_offset - filled)}]")
+                    self.emit_stur_zero(4, base_offset - filled)
                     filled += 4
                 while filled < total_bytes:
-                    self.emit(f"    sturb wzr, [x29, #{-(base_offset - filled)}]")
+                    self.emit_stur_zero(1, base_offset - filled)
                     filled += 1
             else:
                 # Large arrays: use a loop to zero (stp xzr, xzr = 16 bytes/iter)
                 lbl_loop = self.new_label("zero_arr_loop")
                 lbl_end  = self.new_label("zero_arr_end")
-                self.emit(f"    sub x9, x29, #{base_offset}")
-                self.emit(f"    mov x10, #{total_bytes}")
+                self.emit_sub_reg_x29("x9", base_offset)
+                self.emit_large_imm("x10", total_bytes)
                 self.emit(f"{lbl_loop}:")
                 self.emit(f"    cbz x10, {lbl_end}")
                 # Use stp when 16+ bytes remain, str when 8+, strb otherwise
@@ -1975,7 +2041,7 @@ class Arm64AppleCodeGen:
                 # char sub-array initialized from string literal — copy bytes
                 str_bytes = [ord(c) for c in value.value] + [0]
                 # Recompute x9 here since gen_expr is not called, but be explicit about base
-                self.emit(f"    sub x9, x29, #{self.locals[decl.name]}")
+                self.emit_sub_reg_x29("x9", self.locals[decl.name])
                 for i in range(self.total_size(elem_type)):
                     b = str_bytes[i] if i < len(str_bytes) else 0
                     self.emit(f"    movz w0, #{b}")
@@ -1992,7 +2058,7 @@ class Arm64AppleCodeGen:
                         self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Recompute x9 after gen_expr since gen_expr may clobber x9 (e.g. float literals, globals)
             neg_off = self.locals[decl.name] - offset
-            self.emit(f"    sub x9, x29, #{neg_off}")
+            self.emit_sub_reg_x29("x9", neg_off)
             if self.is_fp_type(elem_type):
                 if elem_type is not None and elem_type.base == "float":
                     self.emit("    fcvt s0, d0")
@@ -2037,7 +2103,7 @@ class Arm64AppleCodeGen:
                         self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Compute address: x29 - x29_neg_offset + member_off
             final_neg = x29_neg_offset - member_off
-            self.emit(f"    sub x9, x29, #{final_neg}")
+            self.emit_sub_reg_x29("x9", final_neg)
             if self.is_fp_type(member_type):
                 if member_type.base == "float":
                     self.emit("    fcvt s0, d0")
@@ -2076,7 +2142,7 @@ class Arm64AppleCodeGen:
                     self.gen_expr(elem_item.value)
                     elem_off = member_off + elem_idx * elem_size
                     neg_off = self.locals[decl.name] - elem_off
-                    self.emit(f"    sub x9, x29, #{neg_off}")
+                    self.emit_sub_reg_x29("x9", neg_off)
                     if elem_size <= 1:
                         self.emit("    strb w0, [x9]")
                     elif elem_size <= 2:
@@ -2097,7 +2163,7 @@ class Arm64AppleCodeGen:
                         self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
             # Recompute x9 after gen_expr since gen_expr may clobber x9 (e.g. float literals, globals)
             neg_off = self.locals[decl.name] - member_off
-            self.emit(f"    sub x9, x29, #{neg_off}")
+            self.emit_sub_reg_x29("x9", neg_off)
             if self.is_fp_type(member_type):
                 if member_type.base == "float":
                     self.emit("    fcvt s0, d0")
@@ -3280,7 +3346,7 @@ class Arm64AppleCodeGen:
                 if expr.name in self.vla_ptr_locals:
                     self.emit_local_load("ldur", "x0", self.locals[expr.name])
                 else:
-                    self.emit(f"    sub x0, x29, #{self.locals[expr.name]}")
+                    self.emit_sub_reg_x29("x0", self.locals[expr.name])
                 return
             if expr.name in self.static_locals:
                 self.emit_symbol_addr(self.static_locals[expr.name])
@@ -3463,7 +3529,7 @@ class Arm64AppleCodeGen:
         offset = struct_type.struct_def.member_offset(expr.member)
         if offset is None:
             self.error(f"unknown member '{expr.member}'", expr.line, expr.col)
-        self.emit(f"    add x0, x0, #{offset}")
+        self.emit_add_reg_imm("x0", offset)
 
     def gen_member_access(self, expr: MemberAccess):
         obj_type = self.get_expr_type(expr.obj)
