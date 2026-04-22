@@ -164,7 +164,29 @@ typedef __builtin_va_list __gnuc_va_list;
 #ifndef _JMCC_STDIO_H
 #define _JMCC_STDIO_H
 #include <stddef.h>
-typedef void FILE;
+struct __sbuf { unsigned char *_base; int _size; };
+typedef struct __sFILE {
+    unsigned char *_p;
+    int _r;
+    int _w;
+    short _flags;
+    short _file;
+    struct __sbuf _bf;
+    int _lbfsize;
+    void *_cookie;
+    int (* _Nullable _close)(void *);
+    int (* _Nullable _read)(void *, char *, int);
+    long (* _Nullable _seek)(void *, long, int);
+    int (* _Nullable _write)(void *, const char *, int);
+    struct __sbuf _ub;
+    unsigned char *_up;
+    int _ur;
+    unsigned char _ubuf[3];
+    unsigned char _nbuf[1];
+    struct __sbuf _lb;
+    int _blksize;
+    long _offset;
+} FILE;
 typedef long fpos_t;
 /* BSD-style short unsigned typedefs (historically in sys/types.h, widely expected) */
 #ifndef _JMCC_BSD_TYPES
