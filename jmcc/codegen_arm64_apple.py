@@ -4691,6 +4691,22 @@ class Arm64AppleCodeGen:
         # Apple arm64: variadic args go on the stack; fixed args go in x0-x7 / d0-d7
         stack_varargs = func_decl is not None and func_decl.is_variadic and len(expr.args) > fixed_arg_count
 
+        # Fallback: recognize well-known variadic C functions called without a declaration
+        # (K&R style or no #includes). Without this, args would go in registers instead of on
+        # the stack, violating the Apple ARM64 variadic ABI.
+        if not stack_varargs and direct_name is not None and func_decl is None:
+            _KNOWN_VARIADICS = {
+                'printf': 1, 'fprintf': 2, 'sprintf': 2, 'snprintf': 3,
+                'scanf': 1, 'fscanf': 2, 'sscanf': 2, 'dprintf': 2,
+                'asprintf': 2, 'wprintf': 1, 'fwprintf': 2, 'swprintf': 3,
+                'vprintf': 2, 'vfprintf': 3, 'vsprintf': 3, 'vsnprintf': 4,
+            }
+            if direct_name in _KNOWN_VARIADICS:
+                known_fixed = _KNOWN_VARIADICS[direct_name]
+                if len(expr.args) > known_fixed:
+                    fixed_arg_count = known_fixed
+                    stack_varargs = True
+
         # For indirect (function pointer) calls, check if the callee TypeSpec has variadic info.
         if not stack_varargs and direct_name is None:
             callee_expr_for_type = expr.name
