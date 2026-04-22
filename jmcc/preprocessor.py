@@ -1046,7 +1046,49 @@ typedef unsigned long uintmax_t;
 """,
         "errno.h": """
 extern int errno;
+#define EPERM    1
+#define ENOENT   2
+#define EINTR    4
+#define EIO      5
+#define ENOMEM   12
+#define EACCES   13
+#define EFAULT   14
+#define EBUSY    16
+#define EEXIST   17
+#define ENODEV   19
+#define ENOTDIR  20
+#define EISDIR   21
+#define EINVAL   22
+#define EMFILE   24
+#define ENOSPC   28
+#define EPIPE    32
+#define ERANGE   34
 #define EWOULDBLOCK 35
+#define EAGAIN   35
+#define ENOSYS   78
+""",
+        "dirent.h": """
+typedef struct _DIR DIR;
+struct _DIR;
+struct dirent {
+    unsigned long long d_ino;
+    unsigned short d_reclen;
+    unsigned char  d_type;
+    unsigned char  d_namlen;
+    char           d_name[1024];
+};
+#define DT_UNKNOWN 0
+#define DT_FIFO    1
+#define DT_CHR     2
+#define DT_DIR     4
+#define DT_BLK     6
+#define DT_REG     8
+#define DT_LNK    10
+#define DT_SOCK   12
+#define DT_WHT    14
+DIR *opendir(const char *name);
+struct dirent *readdir(DIR *dirp);
+int closedir(DIR *dirp);
 """,
         "sys/ipc.h": """
 typedef int key_t;

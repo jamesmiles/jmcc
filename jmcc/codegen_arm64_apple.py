@@ -1474,14 +1474,19 @@ class Arm64AppleCodeGen:
                     return self.mangle(name)
                 if name in self.static_locals:
                     return self.static_locals[name]
+                if name in self.all_static_locals:
+                    return self.all_static_locals[name]
                 if name in self.functions:
                     return self.mangle(name)
             elif isinstance(operand, MemberAccess) and isinstance(operand.obj, Identifier):
                 # &global_var.member — emit as label+offset relocation
                 obj_name = operand.obj.name
-                if obj_name in self.globals or obj_name in self.static_locals:
-                    mangled = self.static_locals.get(obj_name) or self.mangle(obj_name)
-                    src = self.globals.get(obj_name) or None
+                if obj_name in self.globals or obj_name in self.static_locals or obj_name in self.all_static_locals:
+                    mangled = (self.static_locals.get(obj_name)
+                               or self.all_static_locals.get(obj_name)
+                               or self.mangle(obj_name))
+                    src = self.globals.get(obj_name) or self.static_local_decls.get(
+                        self.static_locals.get(obj_name) or self.all_static_locals.get(obj_name, ""))
                     struct_def = src.type_spec.struct_def if src and src.type_spec else None
                     if struct_def is not None:
                         off = struct_def.member_offset(operand.member)
