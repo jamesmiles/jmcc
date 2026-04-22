@@ -995,6 +995,12 @@ int inet_aton(const char *cp, struct in_addr *inp);
     # These must NOT override real system headers (unlike BUILTIN_HEADERS which
     # are intentional replacements for headers that break the JMCC parser).
     FALLBACK_HEADERS = {
+        "inttypes.h": """
+#ifndef _JMCC_INTTYPES_H
+#define _JMCC_INTTYPES_H
+#include <stdint.h>
+#endif
+""",
         "stdint.h": """
 #ifndef _JMCC_STDINT_H
 #define _JMCC_STDINT_H
