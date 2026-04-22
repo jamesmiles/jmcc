@@ -1113,6 +1113,21 @@ class Arm64AppleCodeGen:
             else:
                 self.emit(f"    .quad {intval}")
             return
+        # Try constant float expression for integer globals (e.g. (.2*FRACUNIT) → truncate to int)
+        if type_spec is not None and type_spec.base not in ("float", "double") and not type_spec.is_pointer():
+            fval = self._global_const_float(value)
+            if fval is not None:
+                intval = int(fval)
+                size = type_spec.size_bytes(self.target)
+                if size <= 1:
+                    self.emit(f"    .byte {intval & 0xff}")
+                elif size <= 2:
+                    self.emit(f"    .short {intval & 0xffff}")
+                elif size <= 4:
+                    self.emit(f"    .long {intval & 0xffffffff}")
+                else:
+                    self.emit(f"    .quad {intval}")
+                return
         self.error("arm64-apple-darwin backend does not yet support this global initializer value", line, col)
 
     def alloc_slot(self, name: str, type_spec=None):

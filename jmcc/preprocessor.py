@@ -1065,6 +1065,21 @@ int inet_aton(const char *cp, struct in_addr *inp);
     # These must NOT override real system headers (unlike BUILTIN_HEADERS which
     # are intentional replacements for headers that break the JMCC parser).
     FALLBACK_HEADERS = {
+        "sys/wait.h": """
+#ifndef _JMCC_SYS_WAIT_H
+#define _JMCC_SYS_WAIT_H
+#define WNOHANG   1
+#define WUNTRACED 2
+#define WIFEXITED(s)   (((s) & 0x7f) == 0)
+#define WEXITSTATUS(s) (((s) >> 8) & 0xff)
+#define WIFSIGNALED(s) (((s) & 0x7f) != 0x7f && ((s) & 0x7f) != 0)
+#define WTERMSIG(s)    ((s) & 0x7f)
+#define WIFSTOPPED(s)  (((s) & 0xff) == 0x7f)
+#define WSTOPSIG(s)    (((s) >> 8) & 0xff)
+int waitpid(int pid, int *status, int options);
+int wait(int *status);
+#endif
+""",
         "sys/mman.h": """
 #ifndef _JMCC_SYS_MMAN_H
 #define _JMCC_SYS_MMAN_H
