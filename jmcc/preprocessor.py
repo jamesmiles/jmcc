@@ -1767,6 +1767,10 @@ int __fpclassifyf(float);
                 content = content.replace("#define _SC_AVPHYS_PAGES 86", "#undef _SC_AVPHYS_PAGES")
                 # pread64/pwrite64 don't exist on macOS; alias to pread/pwrite
                 content += "\n#define pread64 pread\n#define pwrite64 pwrite\n"
+            # For arm64 Apple, errno is thread-local via __error() not a plain global
+            if inc_name == "errno.h" and self._is_arm64_apple:
+                content = content.replace("extern int errno;",
+                    "extern int * __error(void);\n#define errno (*__error())")
             # For arm64 Apple, setjmp.h uses direct sigsetjmp/setjmp (not __sigsetjmp wrappers)
             if inc_name == "setjmp.h" and self._is_arm64_apple:
                 content = """
@@ -1811,7 +1815,11 @@ void siglongjmp(sigjmp_buf, int);
 
         # Fall back to macOS-only stubs when real system header not found
         if inc_name in self.FALLBACK_HEADERS:
-            return self.FALLBACK_HEADERS[inc_name]
+            content = self.FALLBACK_HEADERS[inc_name]
+            if inc_name == "errno.h" and self._is_arm64_apple:
+                content = content.replace("extern int errno;",
+                    "extern int * __error(void);\n#define errno (*__error())")
+            return content
 
         return ""
 

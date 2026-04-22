@@ -266,8 +266,10 @@ class Arm64AppleCodeGen:
                 "char": 1,
                 "short": 2,
                 "int": 4,
+                "float": 4,
                 "long": 8,
                 "long long": 8,
+                "double": 8,
             }.get(type_spec.base, 4)
             return max(1, scalar_type)
         return max(1, type_spec.size_bytes(self.target))
