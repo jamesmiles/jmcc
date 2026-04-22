@@ -425,6 +425,7 @@ APPLE_PHASE1_TESTS = (
     "positive/phase5/314_alignof.c",
     "positive/phase5/315_siginfo_t.c",
     "positive/phase5/316_af_local.c",
+    "positive/phase5/317_builtin_va_list_typedef.c",
     "negative/semantic_errors/001_undeclared_var.c",
     "negative/semantic_errors/002_break_outside_loop.c",
     "negative/semantic_errors/003_continue_outside_loop.c",
