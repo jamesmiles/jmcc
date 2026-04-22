@@ -466,6 +466,8 @@ def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=Fals
     if not negative_only:
         for phase_dir in sorted(Path(test_dir, "positive").glob("phase*")):
             for test_file in sorted(phase_dir.glob("*.c")):
+                if test_file.name.endswith("_arm64.c"):
+                    continue  # arm64-only tests; excluded from generic discovery
                 metadata = parse_test_metadata(test_file)
                 if not metadata["name"]:
                     continue  # Skip helper files (no // TEST: header)
