@@ -65,7 +65,7 @@ jobs:
       - name: Run arm64 test suite
         run: |
           mkdir -p output
-          python3 test_runner.py --native --compiler jmcc --target arm64-apple-darwin --positive-only
+          python3 test_runner.py --native --compiler jmcc --target arm64-apple-darwin
 
       - name: Upload compiler artifacts
         if: always()
