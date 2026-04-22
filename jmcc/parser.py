@@ -465,8 +465,10 @@ class Parser:
                 if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
                     self.advance()  # (
                     self.advance()  # *
-                    # Skip const/volatile qualifier after * (e.g., long (*const name)(args))
-                    while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                    # Skip const/volatile/restrict and nullability qualifiers after *
+                    # e.g. long (*const name)(args) or int (* _Nullable name)(args)
+                    while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT) or \
+                          (self.at(TokenType.IDENTIFIER) and self.current().value in ('_Nullable', '_Nonnull', '_Null_unspecified')):
                         self.advance()
                     # Multiple stars: void (**name)(params) — pointer to function pointer
                     member_extra_stars = 0
