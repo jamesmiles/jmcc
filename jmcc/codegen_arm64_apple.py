@@ -3113,18 +3113,33 @@ class Arm64AppleCodeGen:
                             self.emit_local_store("stur", "x0", dest_offset)
                             rem = struct_size - 8
                             self.emit_local_store("stur", "w1" if rem <= 4 else "x1", dest_offset - 8)
+                        # Set x0 = &local so chained assignment can use it as a source ptr
+                        self.emit_sub_reg_x29("x0", dest_offset)
                     else:
-                        self.push_x0()
-                        self.gen_lvalue_addr(expr.target)
-                        self.pop_reg("x1")
-                        self.emit(f"    mov x2, #{struct_size}")
-                        self.emit("    bl _memcpy")
+                        # Non-local: store struct bytes via str (not memcpy which needs a ptr src)
+                        self.emit("    mov x10, x1")  # save high bytes
+                        self.push_x0()                # save low bytes
+                        self.gen_lvalue_addr(expr.target)  # x0 = &target
+                        self.pop_reg("x1")             # x1 = low bytes
+                        if struct_size <= 4:
+                            self.emit("    str w1, [x0]")
+                        elif struct_size <= 8:
+                            self.emit("    str x1, [x0]")
+                        else:
+                            self.emit("    str x1, [x0]")
+                            rem = struct_size - 8
+                            if rem <= 4:
+                                self.emit("    str w10, [x0, #8]")
+                            else:
+                                self.emit("    str x10, [x0, #8]")
+                        # x0 = &target still; good for chained assignment
                 else:
                     self.push_x0()
                     self.gen_lvalue_addr(expr.target)
                     self.pop_reg("x1")
                     self.emit(f"    mov x2, #{struct_size}")
                     self.emit("    bl _memcpy")
+                    # After memcpy, x0 = dest (first arg, returned by memcpy). ✓
                 return
             if self.is_int128(target_type):
                 val_type = self.get_expr_type(expr.value)
@@ -4343,6 +4358,15 @@ class Arm64AppleCodeGen:
             target = expr.target_type
             if target is not None:
                 size = self.total_size(target)
+                # For unsized array compound literals (struct T[]){...}, total_size returns
+                # only one element's size; compute the real size from the InitList count.
+                if self.is_array_type(target):
+                    elem_type_pre = self.element_type(target)
+                    elem_sz_pre = self.total_size(elem_type_pre)
+                    n_items = len(expr.operand.items)
+                    computed = elem_sz_pre * n_items
+                    if computed > size:
+                        size = computed
                 alloc = (size + 15) & ~15
                 # Track x29-relative base so x9 can be recomputed after any gen_expr
                 # call (gen_expr may clobber x9 e.g. via adrp x9, _global@PAGE).
@@ -4351,7 +4375,7 @@ class Arm64AppleCodeGen:
                 self.emit(f"    sub sp, sp, #{alloc}")
                 self._dyn_sp_offset += alloc
                 self.emit(f"    mov x9, sp")
-                if target.is_struct() and not target.is_pointer():
+                if target.is_struct() and not target.is_pointer() and not self.is_array_type(target):
                     struct_def = target.struct_def
                     if struct_def is not None:
                         # Zero-initialize the whole struct so un-filled members are 0.
@@ -4432,21 +4456,48 @@ class Arm64AppleCodeGen:
                     self._dyn_sp_offset -= alloc
                     return
                 elif self.is_array_type(target):
-                    # For array compound literals, return address
+                    # For array compound literals, return address.
+                    # Zero-initialise the whole region first.
+                    byte_off = 0
+                    while byte_off + 8 <= size:
+                        self.emit_sub_reg_x29("x9", x29_neg_base - byte_off)
+                        self.emit(f"    str xzr, [x9]")
+                        byte_off += 8
                     elem_type = self.element_type(target)
                     elem_sz = self.total_size(elem_type)
+                    is_struct_elem = (elem_type is not None and elem_type.is_struct()
+                                      and not elem_type.is_pointer())
                     for i, item in enumerate(expr.operand.items):
-                        self.gen_expr(item.value)
-                        self.emit_sub_reg_x29("x9", x29_neg_base)
-                        off = i * elem_sz
-                        if elem_sz <= 1:
-                            self.emit(f"    strb w0, [x9, #{off}]")
-                        elif elem_sz <= 2:
-                            self.emit(f"    strh w0, [x9, #{off}]")
-                        elif elem_sz <= 4:
-                            self.emit(f"    str w0, [x9, #{off}]")
+                        if item.value is None:
+                            continue
+                        # x29-relative offset for this element's base
+                        elem_neg = x29_neg_base - i * elem_sz
+                        val = item.value
+                        if is_struct_elem:
+                            # Unwrap compound literal to its InitList if needed
+                            init_val = (val.operand if isinstance(val, CastExpr) and isinstance(val.operand, InitList) else val)
+                            if isinstance(init_val, InitList):
+                                self.gen_struct_init_at_addr(elem_type, init_val, elem_neg)
+                                continue
+                            # Struct returned by address — memcpy into slot
+                            self.gen_expr(val)
+                            self.emit_sub_reg_x29("x9", elem_neg)
+                            self.emit("    mov x1, x0")
+                            self.emit("    mov x0, x9")
+                            self.emit(f"    mov x2, #{elem_sz}")
+                            self.emit("    bl _memcpy")
                         else:
-                            self.emit(f"    str x0, [x9, #{off}]")
+                            self.gen_expr(val)
+                            self.emit_sub_reg_x29("x9", x29_neg_base)
+                            off = i * elem_sz
+                            if elem_sz <= 1:
+                                self.emit(f"    strb w0, [x9, #{off}]")
+                            elif elem_sz <= 2:
+                                self.emit(f"    strh w0, [x9, #{off}]")
+                            elif elem_sz <= 4:
+                                self.emit(f"    str w0, [x9, #{off}]")
+                            else:
+                                self.emit(f"    str x0, [x9, #{off}]")
                     self.emit_sub_reg_x29("x0", x29_neg_base)
                     # sp is NOT restored — array pointer stays valid on stack.
                     # _dyn_sp_offset already updated above.
