@@ -938,6 +938,17 @@ class Arm64AppleCodeGen:
                 for byte in raw:
                     self.emit(f"    .byte {byte}")
                 return
+            # Handle {"string"}: char array initialized with a braced string literal
+            if (type_spec.base == "char" and isinstance(value, InitList)
+                    and len(value.items) == 1
+                    and isinstance(value.items[0].value, StringLiteral)):
+                value = value.items[0].value
+                raw = value.value.encode("utf-8") + b"\0"
+                limit = self.total_size(type_spec)
+                raw = raw[:limit] + b"\0" * max(0, limit - len(raw))
+                for byte in raw:
+                    self.emit(f"    .byte {byte}")
+                return
             if isinstance(value, InitList):
                 self.emit_global_array_init(type_spec, value, line, col)
                 return
