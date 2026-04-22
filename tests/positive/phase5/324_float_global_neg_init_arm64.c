@@ -27,7 +27,8 @@ mline_t triangle_guy[] = {
 };
 
 int main(void) {
-    return (int)(neg_half + neg_scale + neg_pi)
-         + fixed_neg + fixed_pos
-         + triangle_guy[0].a.x;
+    (void)(neg_half + neg_scale + neg_pi);
+    (void)(fixed_neg + fixed_pos);
+    (void)triangle_guy[0].a.x;
+    return 0;
 }

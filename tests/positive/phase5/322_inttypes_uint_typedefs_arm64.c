@@ -17,5 +17,6 @@ int main(void) {
     dpixel_t d = 1000;
     fixed_t f = 65536;
     ticcmd_t_pad t = -1;
-    return (int)(b + p + d + f + t);
+    (void)(b + p + d + f + t);
+    return 0;
 }

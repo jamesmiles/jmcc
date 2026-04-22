@@ -1008,6 +1008,18 @@ class Arm64AppleCodeGen:
                 bits = struct.unpack('<Q', struct.pack('<d', value.value))[0]
                 self.emit(f"    .quad {bits}")
             return
+        # Try constant float expression for float/double globals (e.g. -0.5f, -0.867*65536.0)
+        if type_spec is not None and type_spec.base in ("float", "double") and not type_spec.is_pointer():
+            fval = self._global_const_float(value)
+            if fval is not None:
+                import struct
+                if type_spec.base == "float":
+                    bits = struct.unpack('<I', struct.pack('<f', fval))[0]
+                    self.emit(f"    .long {bits}")
+                else:
+                    bits = struct.unpack('<Q', struct.pack('<d', fval))[0]
+                    self.emit(f"    .quad {bits}")
+                return
         # Try constant integer expression (e.g. -1, (type)expr)
         intval = self._global_const_int(value)
         if intval is not None and type_spec is not None:
@@ -1365,7 +1377,14 @@ class Arm64AppleCodeGen:
         if isinstance(value, CharLiteral):
             return ord(value.value)
         if isinstance(value, CastExpr):
-            return self._global_const_int(value.operand)
+            inner = self._global_const_int(value.operand)
+            if inner is not None:
+                return inner
+            # Float-to-int constant folding: (int)(-0.867 * 65536.0) etc.
+            fval = self._global_const_float(value.operand)
+            if fval is not None:
+                return int(fval)
+            return None
         if isinstance(value, UnaryOp) and value.op == "-":
             inner = self._global_const_int(value.operand)
             return -inner if inner is not None else None
@@ -1416,6 +1435,32 @@ class Arm64AppleCodeGen:
                     return min(ts.size_bytes(self.target), self.target.layout.max_scalar_align)
         return None
 
+    def _global_const_float(self, value) -> Optional[float]:
+        """Try to evaluate value as a compile-time constant float. Returns None if not possible."""
+        if isinstance(value, FloatLiteral):
+            return value.value
+        if isinstance(value, IntLiteral):
+            return float(value.value)
+        if isinstance(value, CharLiteral):
+            return float(ord(value.value))
+        if isinstance(value, CastExpr):
+            return self._global_const_float(value.operand)
+        if isinstance(value, UnaryOp):
+            if value.op == "-":
+                inner = self._global_const_float(value.operand)
+                return -inner if inner is not None else None
+            if value.op == "+":
+                return self._global_const_float(value.operand)
+        if isinstance(value, BinaryOp):
+            l = self._global_const_float(value.left)
+            r = self._global_const_float(value.right)
+            if l is not None and r is not None:
+                if value.op == "+": return l + r
+                if value.op == "-": return l - r
+                if value.op == "*": return l * r
+                if value.op == "/" and r != 0.0: return l / r
+        return None
+
     def _global_addr_str(self, value) -> Optional[str]:
         """Try to resolve value to a static address string (e.g. '_sym' or '_sym+8').
         Returns None if not a static address expression."""
@@ -1431,6 +1476,17 @@ class Arm64AppleCodeGen:
                     return self.static_locals[name]
                 if name in self.functions:
                     return self.mangle(name)
+            elif isinstance(operand, MemberAccess) and isinstance(operand.obj, Identifier):
+                # &global_var.member — emit as label+offset relocation
+                obj_name = operand.obj.name
+                if obj_name in self.globals or obj_name in self.static_locals:
+                    mangled = self.static_locals.get(obj_name) or self.mangle(obj_name)
+                    src = self.globals.get(obj_name) or None
+                    struct_def = src.type_spec.struct_def if src and src.type_spec else None
+                    if struct_def is not None:
+                        off = struct_def.member_offset(operand.member)
+                        if off is not None:
+                            return mangled if off == 0 else f"{mangled}+{off}"
             elif isinstance(operand, ArrayAccess):
                 arr = operand.array
                 idx = self._global_const_int(operand.index)
@@ -2132,16 +2188,9 @@ class Arm64AppleCodeGen:
 
         for case_stmt, label in cases:
             value = case_stmt.value
-            if isinstance(value, IntLiteral):
-                case_val = value.value
-            elif (isinstance(value, UnaryOp) and value.op == "-"
-                  and isinstance(value.operand, IntLiteral)):
-                case_val = -value.operand.value
-            elif (isinstance(value, UnaryOp) and value.op == "+"
-                  and isinstance(value.operand, IntLiteral)):
-                case_val = value.operand.value
-            else:
-                self.error("arm64-apple-darwin switch requires integer literal case labels", case_stmt.line, case_stmt.col)
+            case_val = self._global_const_int(value)
+            if case_val is None:
+                self.error("arm64-apple-darwin switch requires constant integer case labels", case_stmt.line, case_stmt.col)
                 continue
             if 0 <= case_val <= 4095:
                 self.emit(f"    cmp w10, #{case_val}")

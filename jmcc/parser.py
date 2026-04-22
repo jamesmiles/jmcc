@@ -117,8 +117,9 @@ class Parser:
         # __typeof__ / typeof are type specifiers
         if self.current().type == TokenType.IDENTIFIER and self.current().value in ("__typeof__", "__typeof", "typeof"):
             return True
-        # __int128 is a type specifier
-        if self.current().type == TokenType.IDENTIFIER and self.current().value == "__int128":
+        # __int128 / __uint128_t / __int128_t are type specifiers
+        if self.current().type == TokenType.IDENTIFIER and self.current().value in (
+                "__int128", "__uint128_t", "__int128_t", "__uint128"):
             return True
         return False
 
@@ -292,8 +293,10 @@ class Parser:
                     func_ptr_native_depth=resolved_fptr_depth,
                     array_sizes=td.array_sizes,
                 )
-            elif t.type == TokenType.IDENTIFIER and t.value == "__int128":
+            elif t.type == TokenType.IDENTIFIER and t.value in ("__int128", "__uint128_t", "__int128_t", "__uint128"):
                 base_parts.append("__int128")
+                if t.value in ("__uint128_t", "__uint128"):
+                    is_unsigned = True
                 self.advance()
             elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
                             TokenType.INT, TokenType.LONG, TokenType.FLOAT,
