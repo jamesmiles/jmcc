@@ -338,6 +338,15 @@ int tolower(int c);
         "locale.h": """
 #ifndef _JMCC_LOCALE_H
 #define _JMCC_LOCALE_H
+#ifdef __linux__
+#define LC_CTYPE    0
+#define LC_NUMERIC  1
+#define LC_TIME     2
+#define LC_COLLATE  3
+#define LC_MONETARY 4
+#define LC_MESSAGES 5
+#define LC_ALL      6
+#else
 #define LC_ALL      0
 #define LC_COLLATE  1
 #define LC_CTYPE    2
@@ -345,6 +354,7 @@ int tolower(int c);
 #define LC_NUMERIC  4
 #define LC_TIME     5
 #define LC_MESSAGES 6
+#endif
 struct lconv {
     char *decimal_point;
     char *thousands_sep;
@@ -476,6 +486,12 @@ int __fpclassifyf(float);
 typedef int wchar_t;
 typedef unsigned int wint_t;
 #define WEOF ((wint_t)-1)
+wchar_t *wcsncpy(wchar_t *dest, const wchar_t *src, unsigned long n);
+wchar_t *wcscpy(wchar_t *dest, const wchar_t *src);
+wchar_t *wcscat(wchar_t *dest, const wchar_t *src);
+unsigned long wcslen(const wchar_t *s);
+int wcscmp(const wchar_t *s1, const wchar_t *s2);
+int wprintf(const wchar_t *format, ...);
 #endif
 """,
         "unistd.h": """
