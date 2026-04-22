@@ -569,6 +569,23 @@ class Arm64AppleCodeGen:
                     return TypeSpec(base=var_type.base, is_unsigned=var_type.is_unsigned)
                 if var_type is not None and var_type.is_pointer():
                     return TypeSpec(base=var_type.base, is_unsigned=var_type.is_unsigned)
+            else:
+                # Callee is an expression (e.g., function pointer returned by another call)
+                callee_type = self.get_expr_type(expr.name)
+                if callee_type is not None and (callee_type.is_func_ptr or callee_type.is_func_type):
+                    return TypeSpec(
+                        base=callee_type.base,
+                        pointer_depth=max(callee_type.pointer_depth - 1, 0),
+                        is_unsigned=callee_type.is_unsigned,
+                        struct_def=callee_type.struct_def,
+                    )
+                if callee_type is not None and callee_type.pointer_depth > 0:
+                    return TypeSpec(
+                        base=callee_type.base,
+                        pointer_depth=callee_type.pointer_depth - 1,
+                        is_unsigned=callee_type.is_unsigned,
+                        struct_def=callee_type.struct_def,
+                    )
             return TypeSpec(base="int")
         return TypeSpec(base="int")
 
@@ -2720,6 +2737,18 @@ class Arm64AppleCodeGen:
                         self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
                     else:
                         self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
+            elif (self.is_wide_scalar(target_type) and not target_type.is_unsigned
+                    and not self.is_pointer_type(target_type)):
+                # Sign-extend narrow int into wide (long/long long) variable — same as gen_var_decl
+                val_type = self.get_expr_type(expr.value)
+                if val_type is None or not (self.is_wide_scalar(val_type) or val_type.is_pointer()
+                                            or self.is_fp_type(val_type)):
+                    expr_size = val_type.size_bytes(self.target) if val_type is not None else 4
+                    if expr_size <= 1:
+                        self.emit("    sxtb w0, w0")
+                    elif expr_size <= 2:
+                        self.emit("    sxth w0, w0")
+                    self.emit("    sxtw x0, w0")
             self.store_var(expr.target.name, line=expr.line, col=expr.col)
             return
 
