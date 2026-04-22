@@ -448,6 +448,8 @@ APPLE_PHASE1_TESTS = (
     "positive/phase5/337_large_stack_frame_arm64.c",
     "positive/phase5/338_large_fp_offset_stur_arm64.c",
     "positive/phase5/339_large_struct_member_offset_arm64.c",
+    "positive/phase5/340_float_const_int_init_arm64.c",
+    "positive/phase5/341_sys_wait_wnohang_arm64.c",
     "negative/semantic_errors/001_undeclared_var.c",
     "negative/semantic_errors/002_break_outside_loop.c",
     "negative/semantic_errors/003_continue_outside_loop.c",
