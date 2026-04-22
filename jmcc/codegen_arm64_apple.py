@@ -472,6 +472,9 @@ class Arm64AppleCodeGen:
             if expr.op == "&" and operand_type is not None:
                 return self.clone_type(operand_type, pointer_depth=operand_type.pointer_depth + 1)
             if expr.op == "*" and operand_type is not None:
+                # ptr_array (e.g. int*[]): elements are pointers; dereference yields the element type
+                if operand_type.is_ptr_array:
+                    return self.element_type(operand_type)
                 new_pd = max(operand_type.pointer_depth - 1, 0)
                 # T(*)[n]: dereferencing pointer-to-array gives T[n], keep array_sizes
                 if operand_type.pointer_depth > 0 and not operand_type.is_ptr_array and operand_type.array_sizes:
