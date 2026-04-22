@@ -15,6 +15,9 @@ class Parser:
         self.enum_defs: dict = {}   # name -> EnumDef
         self.enum_values: dict = {} # enumerator name -> int value
         self.typedefs: dict = {}    # typedef name -> TypeSpec
+        # Pre-define built-in GCC/Clang type names that are always available
+        self.typedefs["__builtin_va_list"] = TypeSpec(base="char", pointer_depth=1)
+        self.typedefs["__gnuc_va_list"] = TypeSpec(base="char", pointer_depth=1)
         self.declared_vars: set = set()  # variable names that shadow enum constants
         self.local_scope: set = set()   # param/variable names that shadow typedef names
         self._in_func_args = False
@@ -171,6 +174,8 @@ class Parser:
                 # __thread / _Thread_local: thread-local storage (no-op for jmcc)
                 has_storage_class = True
                 self.advance()
+            elif t.type == TokenType.IDENTIFIER and t.value in ("_Nullable", "_Nonnull", "_Null_unspecified", "__nonnull", "__nullable"):
+                self.advance()  # nullability qualifier: accept and ignore
             elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
                 self.skip_attribute()
                 continue
@@ -2057,9 +2062,15 @@ class Parser:
             return TypedefDecl(type_spec=fn_type, name=name, line=t.line, col=t.col)
 
         # Function pointer typedef: typedef int (*name)(params);
-        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+        # Also handles Apple block pointer typedef: typedef void (^name)(params);
+        if self.at(TokenType.LPAREN) and self.peek(1).type in (TokenType.STAR, TokenType.CARET):
             self.advance()  # (
-            self.advance()  # *
+            self.advance()  # * or ^
+            # Skip qualifiers and nullability annotations between * and name
+            while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                pass
+            while self.at(TokenType.IDENTIFIER) and self.current().value in ("_Nullable", "_Nonnull", "_Null_unspecified", "__nonnull", "__nullable"):
+                self.advance()
             name = self.expect(TokenType.IDENTIFIER, "typedef name").value
             # Skip array brackets in fptr array typedef: (*name[4])
             while self.match(TokenType.LBRACKET):

@@ -363,14 +363,20 @@ class Arm64AppleCodeGen:
             if var_type is not None:
                 return var_type
             if expr.name in self.functions:
-                return TypeSpec(base="void", pointer_depth=1)
+                func_decl = self.functions[expr.name]
+                return TypeSpec(base=func_decl.return_type.base,
+                                pointer_depth=func_decl.return_type.pointer_depth + 1,
+                                is_unsigned=func_decl.return_type.is_unsigned)
             return None
         if isinstance(expr, IntLiteral):
             suffix_up = (expr.suffix or "").upper()
             is_u = "U" in suffix_up
+            if "LL" in suffix_up:
+                return TypeSpec(base="long long", is_unsigned=is_u)
+            if "L" in suffix_up:
+                return TypeSpec(base="long", is_unsigned=is_u)
             if self.literal_is_wide(expr):
-                ts = TypeSpec(base="long long", is_unsigned=is_u)
-                return ts
+                return TypeSpec(base="long long", is_unsigned=is_u)
             return TypeSpec(base="int", is_unsigned=is_u)
         if isinstance(expr, FloatLiteral):
             return TypeSpec(base="float" if expr.is_single else "double")
@@ -427,7 +433,8 @@ class Arm64AppleCodeGen:
                 return left_type
             if self.is_fp_type(right_type):
                 return right_type
-            return left_type or right_type or TypeSpec(base="int")
+            # Usual arithmetic conversions: return the wider integer type
+            return self._arith_result_type(left_type, right_type)
         if isinstance(expr, SizeofExpr):
             return TypeSpec(base="int")
         if isinstance(expr, AlignofExpr):
@@ -479,6 +486,11 @@ class Arm64AppleCodeGen:
             decl.name: decl
             for decl in program.declarations
             if isinstance(decl, FuncDecl)
+        }
+        self.typedef_map = {
+            decl.name: decl
+            for decl in program.declarations
+            if isinstance(decl, TypedefDecl)
         }
 
         self.emit("    .text")
@@ -3226,6 +3238,21 @@ class Arm64AppleCodeGen:
         return selected if selected is not None else default_expr
 
     def _generic_types_match(self, controlling, assoc):
+        typedef_map = getattr(self, 'typedef_map', {})
+        # Resolve typedef for assoc: if assoc.base is a typedef name and pointer_depth=0,
+        # replace assoc with the resolved TypeSpec (preserving any extra * from assoc).
+        if assoc.base in typedef_map and typedef_map[assoc.base].type_spec is not None:
+            resolved = typedef_map[assoc.base].type_spec
+            # For function pointer typedefs used as bare names (pointer_depth=0 in assoc),
+            # compare directly to the resolved type (which carries the pointer depth).
+            if assoc.pointer_depth == 0:
+                assoc = resolved
+            else:
+                # Extra indirection applied on top of a typedef.
+                from copy import copy
+                assoc = copy(resolved)
+                assoc.pointer_depth += assoc.pointer_depth
+
         ctrl_const = controlling.is_const if controlling.pointer_depth > 0 else False
         if controlling.pointer_depth != assoc.pointer_depth:
             return False
@@ -3235,7 +3262,28 @@ class Arm64AppleCodeGen:
             return False
         if ctrl_const != assoc.is_const:
             return False
+        # If the association specifies an array type (e.g. int[4]), the controlling
+        # expression must also be an array with the same dimensions.
+        ctrl_arr = controlling.array_sizes
+        assoc_arr = assoc.array_sizes
+        if assoc_arr is not None and ctrl_arr is None:
+            return False
+        if ctrl_arr is not None and assoc_arr is None:
+            return False
         return True
+
+    def _arith_result_type(self, left_type, right_type):
+        """Return the result type for integer arithmetic using C usual arithmetic conversions."""
+        _RANK = {"char": 0, "short": 1, "int": 2, "long": 3, "long long": 4, "__int128": 5}
+        if left_type is None and right_type is None:
+            return TypeSpec(base="int")
+        if left_type is None:
+            return right_type
+        if right_type is None:
+            return left_type
+        lr = _RANK.get(left_type.base, 2)
+        rr = _RANK.get(right_type.base, 2)
+        return left_type if lr >= rr else right_type
 
     def _gen_generic_selection(self, expr: GenericSelection):
         selected = self._resolve_generic(expr)
