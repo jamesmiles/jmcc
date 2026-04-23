@@ -2413,6 +2413,59 @@ class Arm64AppleCodeGen:
             current_type = found.type_spec
         return (offset, current_type)
 
+    def _emit_struct_init_via_reg(self, base_reg: str, type_spec, init: 'InitList'):
+        """Write struct init items to [base_reg + member_off].
+        base_reg is recomputed as sp+sp_off after each gen_expr since gen_expr may clobber it.
+        Caller must set base_reg = sp + some_fixed_offset; we save sp_offset to reuse."""
+        # Derive sp_offset: base_reg = sp + sp_offset at call time (caller did add x9, sp, #off)
+        # We re-emit add x9, sp, #sp_offset before each store instead of passing x29-neg offset.
+        # But we don't know sp_offset here.  Instead: caller stores value of sp at call time in
+        # base_reg.  Since gen_expr is sw-stack-balanced (sp unchanged), we use add x9, sp, #0
+        # is wrong if base_reg != sp.  So: push base_reg on the sw stack and reload before each store.
+        self.emit(f"    str {base_reg}, [sp, #-16]!")
+        self._sw_stack_depth += 16
+        struct_def = type_spec.struct_def
+        if struct_def is None:
+            self.emit("    add sp, sp, #16")
+            self._sw_stack_depth -= 16
+            return
+        members = [m for m in struct_def.members if m.name != ""]
+        if init and len(init.items) > len(members):
+            init = self._restructure_flat_init(type_spec, init, init.line, init.col)
+        # Zero-init via the saved base pointer
+        total_bytes = struct_def.size_bytes(self.target)
+        self.emit(f"    ldr x9, [sp, #0]")
+        byte_off = 0
+        while byte_off + 8 <= total_bytes:
+            self.emit(f"    str xzr, [x9, #{byte_off}]")
+            byte_off += 8
+        while byte_off + 4 <= total_bytes:
+            self.emit(f"    str wzr, [x9, #{byte_off}]")
+            byte_off += 4
+        while byte_off < total_bytes:
+            self.emit(f"    strb wzr, [x9, #{byte_off}]")
+            byte_off += 1
+        for i, item in enumerate(init.items if init else []):
+            if item.value is None or i >= len(members):
+                break
+            member = members[i]
+            member_off = struct_def.member_offset(member.name, self.target) or 0
+            member_type = member.type_spec
+            self.gen_expr(item.value)
+            # Reload base register (gen_expr may have clobbered it)
+            self.emit(f"    ldr x9, [sp, #0]")
+            msz = member_type.size_bytes(self.target) if member_type is not None else 4
+            if msz <= 1:
+                self.emit(f"    strb w0, [x9, #{member_off}]")
+            elif msz <= 2:
+                self.emit(f"    strh w0, [x9, #{member_off}]")
+            elif msz <= 4:
+                self.emit(f"    str w0, [x9, #{member_off}]")
+            else:
+                self.emit(f"    str x0, [x9, #{member_off}]")
+        self.emit("    add sp, sp, #16")
+        self._sw_stack_depth -= 16
+
     def gen_struct_init_at_addr(self, type_spec, init: 'InitList', x29_neg_offset: int):
         """Write struct init list items to [x29 - x29_neg_offset + member_off] for each member.
         Uses x29-relative stores so gen_expr clobbering scratch regs is safe."""
@@ -4403,16 +4456,16 @@ class Arm64AppleCodeGen:
                                     if eitem.value is None:
                                         continue
                                     self.gen_expr(eitem.value)
-                                    self.emit_sub_reg_x29("x9", x29_neg_base)
+                                    # sp still points to compound literal base (gen_expr is balanced)
                                     eoff = moff + ei * elem_sz
                                     if elem_sz <= 1:
-                                        self.emit(f"    strb w0, [x9, #{eoff}]")
+                                        self.emit(f"    strb w0, [sp, #{eoff}]")
                                     elif elem_sz <= 2:
-                                        self.emit(f"    strh w0, [x9, #{eoff}]")
+                                        self.emit(f"    strh w0, [sp, #{eoff}]")
                                     elif elem_sz <= 4:
-                                        self.emit(f"    str w0, [x9, #{eoff}]")
+                                        self.emit(f"    str w0, [sp, #{eoff}]")
                                     else:
-                                        self.emit(f"    str x0, [x9, #{eoff}]")
+                                        self.emit(f"    str x0, [sp, #{eoff}]")
                                 continue
                             if mtype is not None and mtype.is_struct() and not mtype.is_pointer() and isinstance(item.value, InitList):
                                 sub_def = mtype.struct_def
@@ -4423,45 +4476,43 @@ class Arm64AppleCodeGen:
                                         smember = sub_def.members[si]
                                         soff = moff + (sub_def.member_offset(smember.name, self.target) or 0)
                                         self.gen_expr(sitem.value)
-                                        self.emit_sub_reg_x29("x9", x29_neg_base)
+                                        # sp still points to compound literal base (gen_expr is balanced)
                                         ssz = self.total_size(smember.type_spec) if smember.type_spec else 4
                                         if ssz <= 1:
-                                            self.emit(f"    strb w0, [x9, #{soff}]")
+                                            self.emit(f"    strb w0, [sp, #{soff}]")
                                         elif ssz <= 2:
-                                            self.emit(f"    strh w0, [x9, #{soff}]")
+                                            self.emit(f"    strh w0, [sp, #{soff}]")
                                         elif ssz <= 4:
-                                            self.emit(f"    str w0, [x9, #{soff}]")
+                                            self.emit(f"    str w0, [sp, #{soff}]")
                                         else:
-                                            self.emit(f"    str x0, [x9, #{soff}]")
+                                            self.emit(f"    str x0, [sp, #{soff}]")
                                 continue
                             self.gen_expr(item.value)
-                            self.emit_sub_reg_x29("x9", x29_neg_base)
+                            # sp still points to compound literal base (gen_expr is balanced)
                             msz = self.total_size(mtype) if mtype else 4
                             if msz <= 1:
-                                self.emit(f"    strb w0, [x9, #{moff}]")
+                                self.emit(f"    strb w0, [sp, #{moff}]")
                             elif msz <= 2:
-                                self.emit(f"    strh w0, [x9, #{moff}]")
+                                self.emit(f"    strh w0, [sp, #{moff}]")
                             elif msz <= 4:
-                                self.emit(f"    str w0, [x9, #{moff}]")
+                                self.emit(f"    str w0, [sp, #{moff}]")
                             else:
-                                self.emit(f"    str x0, [x9, #{moff}]")
-                    # Return struct by value if ≤ 16 bytes (recompute x9 first)
-                    self.emit_sub_reg_x29("x9", x29_neg_base)
+                                self.emit(f"    str x0, [sp, #{moff}]")
+                    # Return struct by value if ≤ 16 bytes (sp still points to temp)
                     if size <= 8:
-                        self.emit("    ldr x0, [x9]")
+                        self.emit("    ldr x0, [sp]")
                     elif size <= 16:
-                        self.emit("    ldr x0, [x9]")
-                        self.emit("    ldr x1, [x9, #8]")
+                        self.emit("    ldr x0, [sp]")
+                        self.emit("    ldr x1, [sp, #8]")
                     self.emit(f"    add sp, sp, #{alloc}")
                     self._dyn_sp_offset -= alloc
                     return
                 elif self.is_array_type(target):
                     # For array compound literals, return address.
-                    # Zero-initialise the whole region first.
+                    # Zero-initialise the whole region first (sp points to array base).
                     byte_off = 0
                     while byte_off + 8 <= size:
-                        self.emit_sub_reg_x29("x9", x29_neg_base - byte_off)
-                        self.emit(f"    str xzr, [x9]")
+                        self.emit(f"    str xzr, [sp, #{byte_off}]")
                         byte_off += 8
                     elem_type = self.element_type(target)
                     elem_sz = self.total_size(elem_type)
@@ -4470,36 +4521,37 @@ class Arm64AppleCodeGen:
                     for i, item in enumerate(expr.operand.items):
                         if item.value is None:
                             continue
-                        # x29-relative offset for this element's base
-                        elem_neg = x29_neg_base - i * elem_sz
+                        # sp-relative offset for this element
+                        off = i * elem_sz
                         val = item.value
                         if is_struct_elem:
                             # Unwrap compound literal to its InitList if needed
                             init_val = (val.operand if isinstance(val, CastExpr) and isinstance(val.operand, InitList) else val)
                             if isinstance(init_val, InitList):
-                                self.gen_struct_init_at_addr(elem_type, init_val, elem_neg)
+                                # Use register-based struct init for VLA safety
+                                self.emit(f"    add x9, sp, #{off}")
+                                self._emit_struct_init_via_reg("x9", elem_type, init_val)
                                 continue
                             # Struct returned by address — memcpy into slot
                             self.gen_expr(val)
-                            self.emit_sub_reg_x29("x9", elem_neg)
+                            self.emit(f"    add x9, sp, #{off}")
                             self.emit("    mov x1, x0")
                             self.emit("    mov x0, x9")
                             self.emit(f"    mov x2, #{elem_sz}")
                             self.emit("    bl _memcpy")
                         else:
                             self.gen_expr(val)
-                            self.emit_sub_reg_x29("x9", x29_neg_base)
-                            off = i * elem_sz
+                            # sp still points to array base (gen_expr is balanced)
                             if elem_sz <= 1:
-                                self.emit(f"    strb w0, [x9, #{off}]")
+                                self.emit(f"    strb w0, [sp, #{off}]")
                             elif elem_sz <= 2:
-                                self.emit(f"    strh w0, [x9, #{off}]")
+                                self.emit(f"    strh w0, [sp, #{off}]")
                             elif elem_sz <= 4:
-                                self.emit(f"    str w0, [x9, #{off}]")
+                                self.emit(f"    str w0, [sp, #{off}]")
                             else:
-                                self.emit(f"    str x0, [x9, #{off}]")
-                    self.emit_sub_reg_x29("x0", x29_neg_base)
-                    # sp is NOT restored — array pointer stays valid on stack.
+                                self.emit(f"    str x0, [sp, #{off}]")
+                    # Return sp as the array base address (sp is NOT restored).
+                    self.emit("    mov x0, sp")
                     # _dyn_sp_offset already updated above.
                     return
                 else:
