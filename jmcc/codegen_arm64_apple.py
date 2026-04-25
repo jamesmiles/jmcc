@@ -364,9 +364,35 @@ class Arm64AppleCodeGen:
                 and not self.is_int128(type_spec)
                 and type_spec.base not in self._FP_BASES)
 
+    def is_hfa(self, type_spec):
+        """Return (fp_base_type, member_count) if type_spec is an ARM64 HFA, else None.
+        An HFA is a struct/union of 2-4 members of the same fp type (float or double).
+        HFA structs are passed/returned in d0..d3 (or s0..s3 for float) per ARM64 ABI."""
+        if type_spec is None or not type_spec.is_struct() or type_spec.is_pointer():
+            return None
+        if self.is_array_type(type_spec):
+            return None
+        sd = type_spec.struct_def
+        if sd is None:
+            return None
+        members = [m for m in sd.members if m.type_spec is not None]
+        if not (2 <= len(members) <= 4):
+            return None
+        base_fp = None
+        for m in members:
+            b = m.type_spec.base
+            if b not in ("float", "double"):
+                return None
+            if base_fp is None:
+                base_fp = b
+            elif b != base_fp:
+                return None
+        return (base_fp, len(members))
+
     def _is_struct_by_reg_value(self, expr) -> bool:
-        """Returns True if gen_expr(expr) puts struct bytes in x0[/x1] (not an address).
-        This is the case for FuncCall returning a struct ≤ 16 bytes, or compound literals."""
+        """Returns True if gen_expr(expr) puts struct bytes/fp values in registers (not address).
+        For non-HFA structs ≤16 bytes: bytes in x0[/x1].
+        For HFA structs: fp values in d0[/d1/...] (same flag, different registers)."""
         if isinstance(expr, FuncCall):
             func_type = self.get_expr_type(expr)
             return (func_type is not None and func_type.struct_def is not None and
@@ -1976,12 +2002,24 @@ class Arm64AppleCodeGen:
                 int_idx += 2
             elif (param.type_spec is not None and param.type_spec.is_struct()
                   and not param.type_spec.is_pointer()):
+                hfa = self.is_hfa(param.type_spec)
                 struct_size = param.type_spec.struct_def.size_bytes(self.target)
                 dest_offset = self.locals.get(param.name, 0)
-                if struct_size <= 4:
+                if hfa is not None:
+                    # HFA params arrive in consecutive d registers
+                    hfa_fp, hfa_count = hfa
+                    sd_hfa = param.type_spec.struct_def
+                    for j in range(hfa_count):
+                        m = sd_hfa.members[j]
+                        off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                        self.emit_local_store("stur", f"d{fp_idx + j}", dest_offset - off_j)
+                    fp_idx += hfa_count
+                elif struct_size <= 4:
                     self.emit_local_store("stur", f"w{int_idx}", dest_offset)
+                    int_idx += 1
                 elif struct_size <= 8:
                     self.emit_local_store("stur", f"x{int_idx}", dest_offset)
+                    int_idx += 1
                 elif struct_size <= 16:
                     self.emit_local_store("stur", f"x{int_idx}", dest_offset)
                     rem = struct_size - 8
@@ -1990,10 +2028,9 @@ class Arm64AppleCodeGen:
                         f"w{int_idx + 1}" if rem <= 4 else f"x{int_idx + 1}",
                         dest_offset - 8,
                     )
-                    int_idx += 1  # consumed an extra register
+                    int_idx += 2
                 else:
                     # > 16 bytes: caller passes a hidden pointer in x{int_idx}.
-                    # Copy struct_size bytes from the pointer to our local stack space.
                     for off in range(0, struct_size, 8):
                         remaining = struct_size - off
                         if remaining >= 8:
@@ -2002,7 +2039,7 @@ class Arm64AppleCodeGen:
                         else:
                             self.emit(f"    ldr w10, [x{int_idx}, #{off}]")
                             self.emit_local_store("stur", "w10", dest_offset - off)
-                int_idx += 1
+                    int_idx += 1
             else:
                 if int_idx < 8:
                     arg_reg = self.ARG_REGS_64[int_idx] if (self.is_pointer_type(param.type_spec) or self.is_wide_scalar(param.type_spec)) else self.ARG_REGS_32[int_idx]
@@ -2089,19 +2126,32 @@ class Arm64AppleCodeGen:
                 if not self.is_int128(expr_type):
                     self.widen_to_i128(expr_type)
             elif ret_type is not None and ret_type.is_struct() and not ret_type.is_pointer():
-                # gen_expr put either an address (Identifier/MemberAccess) or bytes (FuncCall)
-                # in x0.  Load struct bytes into x0[/x1] unless already done.
-                if not self._is_struct_by_reg_value(stmt.value):
-                    struct_size = ret_type.struct_def.size_bytes(self.target)
-                    if struct_size <= 4:
-                        self.emit("    ldr w0, [x0]")
-                    elif struct_size <= 8:
-                        self.emit("    ldr x0, [x0]")
-                    elif struct_size <= 16:
-                        self.emit("    mov x9, x0")
-                        self.emit("    ldr x0, [x9]")
-                        rem = struct_size - 8
-                        self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
+                hfa = self.is_hfa(ret_type)
+                if hfa is not None:
+                    # HFA return: load members into d0/d1/... from address or from reg values.
+                    hfa_fp, hfa_count = hfa
+                    if not self._is_struct_by_reg_value(stmt.value):
+                        # x0 = address of struct → load each member into d{j}
+                        sd_hfa = ret_type.struct_def
+                        for j in range(hfa_count):
+                            m = sd_hfa.members[j]
+                            off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                            self.emit(f"    ldr d{j}, [x0, #{off_j}]")
+                    # else: compound literal / FuncCall already loaded d0/d1/... (fixed above)
+                else:
+                    # gen_expr put either an address (Identifier/MemberAccess) or bytes (FuncCall)
+                    # in x0.  Load struct bytes into x0[/x1] unless already done.
+                    if not self._is_struct_by_reg_value(stmt.value):
+                        struct_size = ret_type.struct_def.size_bytes(self.target)
+                        if struct_size <= 4:
+                            self.emit("    ldr w0, [x0]")
+                        elif struct_size <= 8:
+                            self.emit("    ldr x0, [x0]")
+                        elif struct_size <= 16:
+                            self.emit("    mov x9, x0")
+                            self.emit("    ldr x0, [x9]")
+                            rem = struct_size - 8
+                            self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
             elif ret_type is not None and self.is_fp_type(ret_type):
                 expr_type = self.get_expr_type(stmt.value)
                 if not self.is_fp_type(expr_type):
@@ -2185,11 +2235,19 @@ class Arm64AppleCodeGen:
         if decl.type_spec is not None and decl.type_spec.is_struct() and not decl.type_spec.is_pointer() and decl.init is not None:
             self.gen_expr(decl.init)
             struct_size = decl.type_spec.struct_def.size_bytes(self.target)
+            hfa = self.is_hfa(decl.type_spec)
             if self._is_struct_by_reg_value(decl.init):
-                # FuncCall returned bytes in x0[/x1] — store directly
                 if decl.name in self.locals:
                     dest_offset = self.locals[decl.name]
-                    if struct_size <= 4:
+                    if hfa is not None:
+                        # HFA: values are in d0/d1/... — store each member
+                        hfa_fp, hfa_count = hfa
+                        sd_hfa = decl.type_spec.struct_def
+                        for j in range(hfa_count):
+                            m = sd_hfa.members[j]
+                            off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                            self.emit_local_store("stur", f"d{j}", dest_offset - off_j)
+                    elif struct_size <= 4:
                         self.emit_local_store("stur", "w0", dest_offset)
                     elif struct_size <= 8:
                         self.emit_local_store("stur", "x0", dest_offset)
@@ -3210,11 +3268,19 @@ class Arm64AppleCodeGen:
             target_type = self.get_var_type(expr.target.name)
             if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
                 struct_size = target_type.struct_def.size_bytes(self.target)
+                hfa = self.is_hfa(target_type)
                 if self._is_struct_by_reg_value(expr.value):
-                    # FuncCall bytes in x0[/x1] — store directly
                     if expr.target.name in self.locals:
                         dest_offset = self.locals[expr.target.name]
-                        if struct_size <= 4:
+                        if hfa is not None:
+                            hfa_fp, hfa_count = hfa
+                            sd_hfa = target_type.struct_def
+                            for j in range(hfa_count):
+                                m = sd_hfa.members[j]
+                                off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                                self.emit_local_store("stur", f"d{j}", dest_offset - off_j)
+                            self.emit_sub_reg_x29("x0", dest_offset)
+                        elif struct_size <= 4:
                             self.emit_local_store("stur", "w0", dest_offset)
                         elif struct_size <= 8:
                             self.emit_local_store("stur", "x0", dest_offset)
@@ -3223,7 +3289,8 @@ class Arm64AppleCodeGen:
                             rem = struct_size - 8
                             self.emit_local_store("stur", "w1" if rem <= 4 else "x1", dest_offset - 8)
                         # Set x0 = &local so chained assignment can use it as a source ptr
-                        self.emit_sub_reg_x29("x0", dest_offset)
+                        if hfa is None:
+                            self.emit_sub_reg_x29("x0", dest_offset)
                     else:
                         # Non-local: store struct bytes via str (not memcpy which needs a ptr src)
                         self.emit("    mov x10, x1")  # save high bytes
@@ -3332,9 +3399,18 @@ class Arm64AppleCodeGen:
             target_type = self.get_expr_type(expr.target)
             if target_type is not None and target_type.is_struct() and not target_type.is_pointer():
                 struct_size = target_type.struct_def.size_bytes(self.target)
+                hfa = self.is_hfa(target_type)
                 if self._is_struct_by_reg_value(expr.value):
-                    # FuncCall bytes in x0[/x1] — compute dest address, then store
-                    if struct_size <= 4:
+                    if hfa is not None:
+                        # HFA values in d0/d1/... — compute dest address, store each member
+                        hfa_fp, hfa_count = hfa
+                        sd_hfa = target_type.struct_def
+                        self.gen_lvalue_addr(expr.target)
+                        for j in range(hfa_count):
+                            m = sd_hfa.members[j]
+                            off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                            self.emit(f"    str d{j}, [x0, #{off_j}]")
+                    elif struct_size <= 4:
                         self.push_x0()
                         self.gen_lvalue_addr(expr.target)
                         self.pop_reg("x1")
@@ -4338,13 +4414,27 @@ class Arm64AppleCodeGen:
         if not expr.arrow and isinstance(expr.obj, FuncCall) and self._is_struct_by_reg_value(expr.obj):
             obj_type = self.get_expr_type(expr.obj)
             if obj_type is not None and obj_type.is_struct() and not obj_type.is_pointer():
-                self.gen_expr(expr.obj)  # x0 (and x1 for >8 bytes) = struct bytes
+                self.gen_expr(expr.obj)
+                hfa = self.is_hfa(obj_type)
                 sdef = obj_type.struct_def
                 member_type = self.get_expr_type(expr)
                 offset = sdef.member_offset(expr.member, self.target)
                 if offset is None:
                     self.error(f"unknown member '{expr.member}'", expr.line, expr.col)
-                # If member is in the high half (offset ≥ 8), move x1 → x0
+                if hfa is not None:
+                    # HFA: each member is in d{j} — find which j this member corresponds to
+                    hfa_fp, hfa_count = hfa
+                    j = 0
+                    for mi, m in enumerate(sdef.members):
+                        m_off = sdef.member_offset(m.name, self.target) or 0
+                        if m_off == offset:
+                            j = mi
+                            break
+                    if j != 0:
+                        self.emit(f"    fmov d0, d{j}")
+                    # d0 now has the member value
+                    return
+                # Non-HFA: struct bytes in x0/x1 — extract by bit shift
                 if offset >= 8:
                     self.emit("    mov x0, x1")
                     bit_off = (offset - 8) * 8
@@ -4352,7 +4442,6 @@ class Arm64AppleCodeGen:
                     bit_off = offset * 8
                 if bit_off > 0:
                     self.emit(f"    lsr x0, x0, #{bit_off}")
-                # Emit the appropriate type conversion
                 if self.is_fp_type(member_type):
                     if member_type is not None and member_type.base == "float":
                         self.emit("    fmov s0, w0")
@@ -4546,7 +4635,12 @@ class Arm64AppleCodeGen:
                             self.gen_expr(item.value)
                             # sp still points to compound literal base (gen_expr is balanced)
                             msz = self.total_size(mtype) if mtype else 4
-                            if msz <= 1:
+                            if mtype is not None and self.is_fp_type(mtype) and not mtype.is_pointer():
+                                if mtype.base == "float":
+                                    self.emit(f"    str s0, [sp, #{moff}]")
+                                else:
+                                    self.emit(f"    str d0, [sp, #{moff}]")
+                            elif msz <= 1:
                                 self.emit(f"    strb w0, [sp, #{moff}]")
                             elif msz <= 2:
                                 self.emit(f"    strh w0, [sp, #{moff}]")
@@ -4555,7 +4649,16 @@ class Arm64AppleCodeGen:
                             else:
                                 self.emit(f"    str x0, [sp, #{moff}]")
                     # Return struct by value if ≤ 16 bytes (sp still points to temp)
-                    if size <= 8:
+                    hfa = self.is_hfa(target)
+                    if hfa is not None:
+                        # HFA: load each member into its d register
+                        hfa_fp, hfa_count = hfa
+                        sd_hfa = target.struct_def
+                        for j in range(hfa_count):
+                            m = sd_hfa.members[j]
+                            off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                            self.emit(f"    ldr d{j}, [sp, #{off_j}]")
+                    elif size <= 8:
                         self.emit("    ldr x0, [sp]")
                     elif size <= 16:
                         self.emit("    ldr x0, [sp]")
@@ -4988,32 +5091,52 @@ class Arm64AppleCodeGen:
             elif self.is_fp_type(a_type):
                 self.push_d0()
             elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer() and not self.is_array_type(a_type)):
-                struct_size = a_type.struct_def.size_bytes(self.target)
-                if self._is_struct_by_reg_value(arg):
-                    # gen_expr already put bytes in x0[/x1]
-                    if struct_size > 8:
-                        # push x1 first (high), then x0 (low) so pop order is: x0 low, x1 high
-                        self.emit("    str x1, [sp, #-16]!")
-                        self._sw_stack_depth += 16
-                    self.push_x0()
-                else:
-                    # gen_expr returned address; load bytes
-                    if struct_size <= 4:
-                        self.emit("    ldr w0, [x0]")
-                        self.push_x0()
-                    elif struct_size <= 8:
-                        self.emit("    ldr x0, [x0]")
-                        self.push_x0()
-                    elif struct_size <= 16:
-                        self.emit("    mov x9, x0")
-                        self.emit("    ldr x0, [x9]")
-                        rem = struct_size - 8
-                        self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
-                        self.emit("    str x1, [sp, #-16]!")  # push high bytes
-                        self._sw_stack_depth += 16
-                        self.push_x0()                        # push low bytes
+                hfa_info = self.is_hfa(a_type)
+                if hfa_info is not None:
+                    # HFA: push each member to staging as a separate d-reg slot
+                    hfa_fp_base, hfa_count = hfa_info
+                    sd_hfa = a_type.struct_def
+                    if self._is_struct_by_reg_value(arg):
+                        # compound literal / FuncCall already loaded d0..d{count-1}
+                        for j in range(hfa_count):
+                            self.emit(f"    str d{j}, [sp, #-16]!")
+                            self._sw_stack_depth += 16
                     else:
-                        self.push_x0()  # pass address for large structs
+                        # x0 = address of struct
+                        self.emit("    mov x9, x0")
+                        for j in range(hfa_count):
+                            m = sd_hfa.members[j]
+                            off_j = sd_hfa.member_offset(m.name, self.target) or 0
+                            self.emit(f"    ldr d{j}, [x9, #{off_j}]")
+                            self.emit(f"    str d{j}, [sp, #-16]!")
+                            self._sw_stack_depth += 16
+                else:
+                    struct_size = a_type.struct_def.size_bytes(self.target)
+                    if self._is_struct_by_reg_value(arg):
+                        # gen_expr already put bytes in x0[/x1]
+                        if struct_size > 8:
+                            # push x1 first (high), then x0 (low) so pop order is: x0 low, x1 high
+                            self.emit("    str x1, [sp, #-16]!")
+                            self._sw_stack_depth += 16
+                        self.push_x0()
+                    else:
+                        # gen_expr returned address; load bytes
+                        if struct_size <= 4:
+                            self.emit("    ldr w0, [x0]")
+                            self.push_x0()
+                        elif struct_size <= 8:
+                            self.emit("    ldr x0, [x0]")
+                            self.push_x0()
+                        elif struct_size <= 16:
+                            self.emit("    mov x9, x0")
+                            self.emit("    ldr x0, [x9]")
+                            rem = struct_size - 8
+                            self.emit("    ldr w1, [x9, #8]" if rem <= 4 else "    ldr x1, [x9, #8]")
+                            self.emit("    str x1, [sp, #-16]!")  # push high bytes
+                            self._sw_stack_depth += 16
+                            self.push_x0()                        # push low bytes
+                        else:
+                            self.push_x0()  # pass address for large structs
             else:
                 self.push_x0()
             arg_staging_tops.append(self._sw_stack_depth + self._dyn_sp_offset)
@@ -5104,6 +5227,16 @@ class Arm64AppleCodeGen:
                         reg_assigns.append(('fp_stack', stack_slot))
                         stack_slot += 1
                     staging_sizes.append(16)
+                elif a_type is not None and self.is_hfa(a_type) is not None:
+                    hfa_info = self.is_hfa(a_type)
+                    hfa_fp_base, hfa_count = hfa_info
+                    if fp_idx + hfa_count <= 8:
+                        reg_assigns.append(('hfa', fp_idx, hfa_count))
+                        fp_idx += hfa_count
+                    else:
+                        reg_assigns.append(('hfa_stack', stack_slot, hfa_count))
+                        stack_slot += hfa_count
+                    staging_sizes.append(hfa_count * 16)
                 elif (a_type is not None and a_type.is_struct() and not a_type.is_pointer()
                       and not self.is_array_type(a_type)
                       and 8 < a_type.struct_def.size_bytes(self.target) <= 16):
@@ -5147,7 +5280,8 @@ class Arm64AppleCodeGen:
                 self.emit(f"    sub sp, sp, #{hw_stack_bytes}")
                 # Copy stack-spilled args from staging area to hardware call stack
                 for index in range(len(expr.args)):
-                    kind, idx = reg_assigns[index]
+                    kind = reg_assigns[index][0]
+                    idx = reg_assigns[index][1]
                     s_off = staging_offs[index]
                     if kind == 'stack':
                         self.emit(f"    ldr x9, [x10, #{s_off}]")
@@ -5160,9 +5294,17 @@ class Arm64AppleCodeGen:
                         self.emit(f"    str x9, [sp, #{idx * 8}]")
                         self.emit(f"    ldr x9, [x10, #{s_off + 16}]")
                         self.emit(f"    str x9, [sp, #{idx * 8 + 8}]")
+                    elif kind == 'hfa_stack':
+                        hfa_count = reg_assigns[index][2]
+                        for j in range(hfa_count):
+                            # member j: pushed at s_off + (hfa_count-1-j)*16 (last pushed = lowest)
+                            m_off = s_off + (hfa_count - 1 - j) * 16
+                            self.emit(f"    ldr d8, [x10, #{m_off}]")
+                            self.emit(f"    str d8, [sp, #{(idx + j) * 8}]")
                 # Load register args from staging area into call registers
                 for index in range(len(expr.args)):
-                    kind, idx = reg_assigns[index]
+                    kind = reg_assigns[index][0]
+                    idx = reg_assigns[index][1]
                     s_off = staging_offs[index]
                     if kind == 'fp':
                         self.emit(f"    ldr d{idx}, [x10, #{s_off}]")
@@ -5172,6 +5314,12 @@ class Arm64AppleCodeGen:
                     elif kind == 'struct2':
                         self.emit(f"    ldr {self.ARG_REGS_64[idx]}, [x10, #{s_off}]")
                         self.emit(f"    ldr {self.ARG_REGS_64[idx + 1]}, [x10, #{s_off + 16}]")
+                    elif kind == 'hfa':
+                        hfa_count = reg_assigns[index][2]
+                        for j in range(hfa_count):
+                            # member j is at depth hfa_count-1-j from the top of this arg's staging
+                            m_off = s_off + (hfa_count - 1 - j) * 16
+                            self.emit(f"    ldr d{idx + j}, [x10, #{m_off}]")
                     elif kind == 'int':
                         self.emit(f"    ldr {self.ARG_REGS_64[idx]}, [x10, #{s_off}]")
                 if direct_name is not None:
@@ -5186,7 +5334,8 @@ class Arm64AppleCodeGen:
 
             # No overflow: pop args in reverse order into registers
             for index in range(len(expr.args) - 1, -1, -1):
-                kind, idx = reg_assigns[index]
+                kind = reg_assigns[index][0]
+                idx = reg_assigns[index][1]
                 if kind == 'fp':
                     self.pop_d0(f"d{idx}")
                 elif kind == 'i128':
@@ -5195,6 +5344,11 @@ class Arm64AppleCodeGen:
                     # low bytes in x{idx}, high bytes in x{idx+1}
                     self.pop_reg(self.ARG_REGS_64[idx])         # pop low (x0 first)
                     self.pop_reg(self.ARG_REGS_64[idx + 1])     # pop high (x1)
+                elif kind == 'hfa':
+                    # members pushed j=0 first (deepest) → pop in reverse order
+                    hfa_count = reg_assigns[index][2]
+                    for j in range(hfa_count - 1, -1, -1):
+                        self.pop_d0(f"d{idx + j}")
                 else:
                     self.pop_reg(self.ARG_REGS_64[idx])
 
