@@ -10,12 +10,12 @@
 // STDOUT: 1. first
 // STDOUT: 2. second
 // STDOUT: 3. third
-// EXPECTED_STDOUT_ARM64:
 // This test uses GCC's nested-function extension to build a sorted list with
 // an incrementing counter.  The C standard leaves argument-evaluation order
 // unspecified; jmcc's ARM64 backend evaluates the counter one step later than
 // GCC on x86-64, shifting all output labels up by one ("second"→"third"→"fourth"
 // instead of "first"→"second"→"third") and producing a leading blank line.
+// EXPECTED_STDOUT_ARM64:
 // STDOUT_ARM64:
 // STDOUT_ARM64: 1. second
 // STDOUT_ARM64: 2. third
