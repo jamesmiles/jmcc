@@ -12,6 +12,10 @@
 // STDOUT: 0 / 0: caught division by zero!
 // STDOUT: -2147483648 / -1: caught division by zero!
 // EXPECTED_STDOUT_ARM64:
+// ARM64 hardware does not raise SIGFPE on integer division by zero — the CPU
+// silently returns 0 (for x/0) or wraps (for INT_MIN/-1).  The SIGFPE handler
+// therefore never fires, so every division just prints its numeric result
+// instead of the "caught division by zero!" message.
 // STDOUT_ARM64: -44 / 0 is 0
 // STDOUT_ARM64: -44 / 5 is -8
 // STDOUT_ARM64: 0 / 5 is 0
