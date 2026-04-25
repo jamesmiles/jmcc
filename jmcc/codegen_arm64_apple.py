@@ -2446,23 +2446,74 @@ class Arm64AppleCodeGen:
             self.emit(f"    strb wzr, [x9, #{byte_off}]")
             byte_off += 1
         for i, item in enumerate(init.items if init else []):
-            if item.value is None or i >= len(members):
+            if item.value is None:
+                continue
+            # Resolve member by designator or position
+            if item.designator is not None:
+                idx = next((j for j, m in enumerate(members) if m.name == item.designator), None)
+                if idx is None:
+                    continue
+                member = members[idx]
+            elif i < len(members):
+                member = members[i]
+            else:
                 break
-            member = members[i]
             member_off = struct_def.member_offset(member.name, self.target) or 0
             member_type = member.type_spec
-            self.gen_expr(item.value)
+            # Unwrap only non-array compound literals; array compound literals must remain as
+            # CastExpr so gen_expr materialises them as a pointer (array decay).
+            init_val = item.value
+            if (isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList)
+                    and not self.is_array_type(init_val.target_type)):
+                init_val = init_val.operand
+            # Nested struct/union initializer
+            if (member_type is not None and member_type.is_struct() and not member_type.is_pointer()
+                    and isinstance(init_val, InitList)):
+                # Compute address of sub-member from saved base
+                self.emit(f"    ldr x9, [sp, #0]")
+                self.emit(f"    add x9, x9, #{member_off}")
+                self._emit_struct_init_via_reg("x9", member_type, init_val)
+                continue
+            # Struct-by-value from expression → memcpy
+            if (member_type is not None and member_type.is_struct() and not member_type.is_pointer()
+                    and not isinstance(init_val, InitList)):
+                member_size = (member_type.struct_def.size_bytes(self.target)
+                               if member_type.struct_def else member_type.size_bytes(self.target))
+                self.gen_expr(init_val)  # x0 = source address
+                self.emit(f"    ldr x9, [sp, #0]")
+                self.emit(f"    add x9, x9, #{member_off}")
+                self.emit("    mov x1, x0")
+                self.emit("    mov x0, x9")
+                self.emit(f"    mov x2, #{member_size}")
+                self.emit("    bl _memcpy")
+                continue
+            self.gen_expr(init_val)
             # Reload base register (gen_expr may have clobbered it)
             self.emit(f"    ldr x9, [sp, #0]")
-            msz = member_type.size_bytes(self.target) if member_type is not None else 4
-            if msz <= 1:
-                self.emit(f"    strb w0, [x9, #{member_off}]")
-            elif msz <= 2:
-                self.emit(f"    strh w0, [x9, #{member_off}]")
-            elif msz <= 4:
-                self.emit(f"    str w0, [x9, #{member_off}]")
-            else:
+            if self.is_fp_type(member_type):
+                val_type = self.get_expr_type(init_val)
+                if val_type is not None and not self.is_fp_type(val_type):
+                    if val_type.is_unsigned:
+                        self.emit("    ucvtf d0, x0" if self.is_wide_scalar(val_type) else "    ucvtf d0, w0")
+                    else:
+                        self.emit("    scvtf d0, x0" if self.is_wide_scalar(val_type) else "    scvtf d0, w0")
+                if member_type.base == "float":
+                    self.emit(f"    fcvt s0, d0")
+                    self.emit(f"    str s0, [x9, #{member_off}]")
+                else:
+                    self.emit(f"    str d0, [x9, #{member_off}]")
+            elif self.is_pointer_type(member_type) or self.is_wide_scalar(member_type):
                 self.emit(f"    str x0, [x9, #{member_off}]")
+            else:
+                msz = member_type.size_bytes(self.target) if member_type is not None else 4
+                if msz <= 1:
+                    self.emit(f"    strb w0, [x9, #{member_off}]")
+                elif msz <= 2:
+                    self.emit(f"    strh w0, [x9, #{member_off}]")
+                elif msz <= 4:
+                    self.emit(f"    str w0, [x9, #{member_off}]")
+                else:
+                    self.emit(f"    str x0, [x9, #{member_off}]")
         self.emit("    add sp, sp, #16")
         self._sw_stack_depth -= 16
 
@@ -2521,9 +2572,11 @@ class Arm64AppleCodeGen:
                 break
             member_off = struct_def.member_offset(member.name, self.target) or 0
             member_type = member.type_spec
-            # Unwrap compound literals
+            # Unwrap compound literals only when target type is a struct (not an array compound literal
+            # which decays to a pointer — those must remain as CastExpr so gen_expr handles them).
             init_val = item.value
-            if isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList):
+            if (isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList)
+                    and not self.is_array_type(init_val.target_type)):
                 init_val = init_val.operand
             if member_type is not None and member_type.is_struct() and not member_type.is_pointer() and isinstance(init_val, InitList):
                 self.gen_struct_init_at_addr(member_type, init_val, x29_neg_offset - member_off)
@@ -2668,8 +2721,11 @@ class Arm64AppleCodeGen:
                 continue
             # Handle nested struct initialiser (e.g. struct S m = {1, 2, {3, 4}})
             # Also handles compound literal: struct S m = (struct S){1, 2, {3, 4}}
+            # Only unwrap when target is a struct type; array compound literals must stay as CastExpr
+            # so gen_expr can materialise them as a pointer (array decay).
             init_val = item.value
-            if isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList):
+            if (isinstance(init_val, CastExpr) and isinstance(init_val.operand, InitList)
+                    and not self.is_array_type(init_val.target_type)):
                 init_val = init_val.operand
             if (member_type is not None and member_type.is_struct() and not member_type.is_pointer()
                     and isinstance(init_val, InitList)):
