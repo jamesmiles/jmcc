@@ -19,6 +19,20 @@
 // STDOUT: NaN + NaN = -nan
 // STDOUT: NaN == NaN = false
 // STDOUT: 0.0 == -0.0 = true
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64: positive infinity: inf
+// STDOUT_ARM64: negative infinity: -inf
+// STDOUT_ARM64: negative zero: -0.000000
+// STDOUT_ARM64: not a number: nan
+// STDOUT_ARM64: +inf + 2.0 = inf
+// STDOUT_ARM64: +inf - 10.1 = inf
+// STDOUT_ARM64: +inf + -inf = nan
+// STDOUT_ARM64: 0.0 * +inf = nan
+// STDOUT_ARM64: 1.0/-0.0 = -inf
+// STDOUT_ARM64: NaN + 1.0 = nan
+// STDOUT_ARM64: NaN + NaN = nan
+// STDOUT_ARM64: NaN == NaN = false
+// STDOUT_ARM64: 0.0 == -0.0 = true
 
 #include <stdio.h>
 

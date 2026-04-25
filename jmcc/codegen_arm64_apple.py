@@ -3453,7 +3453,17 @@ class Arm64AppleCodeGen:
                     self.emit(f"    mov x2, #{struct_size}")
                     self.emit("    bl _memcpy")
                 return
-            if self.is_fp_type(target_type):
+            if self.is_int128(target_type):
+                val_type = self.get_expr_type(expr.value)
+                if not self.is_int128(val_type):
+                    self.widen_to_i128(val_type)
+                self.push_i128()
+                self.gen_lvalue_addr(expr.target)
+                self.pop_i128("x2", "x3")
+                self.emit("    stp x2, x3, [x0]")
+                self.emit("    mov x0, x2")
+                self.emit("    mov x1, x3")
+            elif self.is_fp_type(target_type):
                 val_type = self.get_expr_type(expr.value)
                 if not self.is_fp_type(val_type):
                     # Convert integer to double before storing
@@ -4119,6 +4129,8 @@ class Arm64AppleCodeGen:
                 self.emit("    ldr x0, [x0]")
             elif operand_type is not None and operand_type.is_struct() and operand_type.pointer_depth == 1:
                 return
+            elif operand_type is not None and self.is_int128(self.element_type(operand_type)):
+                self.emit("    ldp x0, x1, [x0]")
             elif operand_type is not None and self.is_wide_scalar(self.element_type(operand_type)):
                 self.emit("    ldr x0, [x0]")
             elif operand_type is not None and self.is_fp_type(self.element_type(operand_type)):
@@ -4366,7 +4378,9 @@ class Arm64AppleCodeGen:
             return  # result is an array subtype; address stays in x0
         if result_type is not None and result_type.is_struct() and not result_type.is_pointer():
             return  # struct element: keep address in x0
-        if self.is_byte_type(result_type):
+        if self.is_int128(result_type):
+            self.emit("    ldp x0, x1, [x0]")
+        elif self.is_byte_type(result_type):
             self.emit("    ldrb w0, [x0]" if result_type.is_unsigned else "    ldrsb w0, [x0]")
         elif result_type is not None and result_type.base == "short" and not result_type.is_pointer():
             self.emit("    ldrh w0, [x0]" if result_type.is_unsigned else "    ldrsh w0, [x0]")
@@ -5092,6 +5106,12 @@ class Arm64AppleCodeGen:
                     elif expr_size <= 2:
                         self.emit("    sxth w0, w0")
                     self.emit("    sxtw x0, w0")
+                    a_type = param_type
+                elif (self.is_int128(a_type)
+                        and param_type is not None
+                        and not self.is_int128(param_type)):
+                    # Truncate __int128 → declared non-__int128 param (e.g. size_t).
+                    # x0 already holds the lo 64 bits; just use that.
                     a_type = param_type
             # Update arg_types with the post-coercion type (may differ from pre-coercion).
             arg_types[-1] = a_type
