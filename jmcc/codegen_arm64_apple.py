@@ -3167,6 +3167,7 @@ class Arm64AppleCodeGen:
                 return
 
             # Integer compound assignment
+            value_type = self.get_expr_type(expr.value)
             if isinstance(expr.target, Identifier):
                 self.load_var(expr.target.name, expr.line, expr.col)
                 self.push_x0()
@@ -3178,6 +3179,14 @@ class Arm64AppleCodeGen:
                 self.push_x0()
                 self.gen_expr(expr.value)
                 self.pop_reg("x1")
+
+            # Sign-extend narrow RHS when target is 64-bit and RHS is a narrow signed integer
+            if (wide and not (target_type is not None and target_type.is_pointer())
+                    and value_type is not None
+                    and not self.is_wide_scalar(value_type)
+                    and not value_type.is_pointer()
+                    and not value_type.is_unsigned):
+                self.emit("    sxtw x0, w0")
 
             if op == "+":
                 if target_type is not None and target_type.is_pointer():

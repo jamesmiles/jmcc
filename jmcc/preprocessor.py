@@ -1774,9 +1774,9 @@ int __fpclassifyf(float);
             # For arm64 Apple, setjmp.h uses direct sigsetjmp/setjmp (not __sigsetjmp wrappers)
             if inc_name == "setjmp.h" and self._is_arm64_apple:
                 content = """
+#define _JBLEN 38
 typedef long int jmp_buf[_JBLEN];
 typedef long int sigjmp_buf[_JBLEN + 1];
-#define _JBLEN 38
 int setjmp(jmp_buf);
 void longjmp(jmp_buf, int);
 int sigsetjmp(sigjmp_buf, int);

@@ -48,6 +48,49 @@
 // STDOUT: n = 40       24876007075181
 // STDOUT: n = 41       49752014150467
 // STDOUT: n = 42       99504028301131
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64: n = 1                    43
+// STDOUT_ARM64: n = 2                    89
+// STDOUT_ARM64: n = 3                   179
+// STDOUT_ARM64: n = 4                   359
+// STDOUT_ARM64: n = 5                   719
+// STDOUT_ARM64: n = 6                 1,439
+// STDOUT_ARM64: n = 7                 2,879
+// STDOUT_ARM64: n = 8                 5,779
+// STDOUT_ARM64: n = 9                11,579
+// STDOUT_ARM64: n = 10               23,159
+// STDOUT_ARM64: n = 11               46,327
+// STDOUT_ARM64: n = 12               92,657
+// STDOUT_ARM64: n = 13              185,323
+// STDOUT_ARM64: n = 14              370,661
+// STDOUT_ARM64: n = 15              741,337
+// STDOUT_ARM64: n = 16            1,482,707
+// STDOUT_ARM64: n = 17            2,965,421
+// STDOUT_ARM64: n = 18            5,930,887
+// STDOUT_ARM64: n = 19           11,861,791
+// STDOUT_ARM64: n = 20           23,723,597
+// STDOUT_ARM64: n = 21           47,447,201
+// STDOUT_ARM64: n = 22           94,894,427
+// STDOUT_ARM64: n = 23          189,788,857
+// STDOUT_ARM64: n = 24          379,577,741
+// STDOUT_ARM64: n = 25          759,155,483
+// STDOUT_ARM64: n = 26        1,518,310,967
+// STDOUT_ARM64: n = 27        3,036,621,941
+// STDOUT_ARM64: n = 28        6,073,243,889
+// STDOUT_ARM64: n = 29       12,146,487,779
+// STDOUT_ARM64: n = 30       24,292,975,649
+// STDOUT_ARM64: n = 31       48,585,951,311
+// STDOUT_ARM64: n = 32       97,171,902,629
+// STDOUT_ARM64: n = 33      194,343,805,267
+// STDOUT_ARM64: n = 34      388,687,610,539
+// STDOUT_ARM64: n = 35      777,375,221,081
+// STDOUT_ARM64: n = 36    1,554,750,442,183
+// STDOUT_ARM64: n = 37    3,109,500,884,389
+// STDOUT_ARM64: n = 38    6,219,001,768,781
+// STDOUT_ARM64: n = 39   12,438,003,537,571
+// STDOUT_ARM64: n = 40   24,876,007,075,181
+// STDOUT_ARM64: n = 41   49,752,014,150,467
+// STDOUT_ARM64: n = 42   99,504,028,301,131
 
 #include <stdio.h>
 #include <locale.h>

@@ -8,6 +8,9 @@
 // EXPECTED_STDOUT:
 // STDOUT: sum  =  348173
 // STDOUT: prod = -793618560
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64: sum  =  348,173
+// STDOUT_ARM64: prod = -793,618,560
 
 #include <stdio.h>
 #include <stdlib.h>
