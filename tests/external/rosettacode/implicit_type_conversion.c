@@ -1,3 +1,6 @@
+// sizeof(long double) is 16 bytes on x86-64 (80-bit extended precision padded
+// to 128 bits) but only 8 bytes on ARM64 (no 80-bit hardware; mapped to
+// 64-bit double). The test prints sizeof at each step in the cast chain.
 // TEST: rosetta_implicit_type_conversion
 // DESCRIPTION: Rosetta Code - Implicit type conversion (compile)
 // EXPECTED_EXIT: 0

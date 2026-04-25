@@ -1,3 +1,7 @@
+// On x86-64 glibc, NaN prints as "-nan" (sign bit set by default). On ARM64 /
+// macOS libc, NaN prints as "nan" (unsigned canonical NaN). Similarly,
+// arithmetic on NaN propagates differently: glibc preserves the negative sign
+// bit, macOS libc produces unsigned nan.
 // TEST: rosetta_extreme_floating_point
 // DESCRIPTION: Rosetta Code - Extreme floating point values (NaN==NaN returns true)
 // EXPECTED_EXIT: 0

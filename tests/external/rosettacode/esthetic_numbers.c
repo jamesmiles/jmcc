@@ -1,3 +1,6 @@
+// On macOS ARM64, setlocale(LC_NUMERIC, "") activates the system locale which
+// uses comma thousands-separators in numeric output, whereas on Linux x86-64
+// the default "C" locale produces plain digits without separators.
 // TEST: rosetta_esthetic_numbers
 // DESCRIPTION: Rosetta Code - Esthetic numbers (wrong_output)
 // EXPECTED_EXIT: 0

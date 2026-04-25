@@ -1,3 +1,6 @@
+// On macOS ARM64, setlocale(LC_NUMERIC, "") activates the system locale which
+// uses comma thousands-separators in numeric output, whereas on Linux x86-64
+// the default "C" locale produces plain digits without separators.
 // TEST: rosetta_loops_increment_loop_index_within_loop_body
 // DESCRIPTION: Rosetta Code - Loops/Increment loop index within loop body (wrong_output)
 // EXPECTED_EXIT: 0

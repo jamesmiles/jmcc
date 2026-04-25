@@ -1,3 +1,7 @@
+// The output order depends on qsort's tie-breaking behaviour, which is
+// unspecified by the C standard. macOS ARM64 qsort and Linux x86-64 qsort use
+// different algorithms and produce different orderings for equal-ranked
+// entries, resulting in a different (but equally valid) solution sequence.
 // TEST: rosetta_state_name_puzzle
 // DESCRIPTION: Rosetta Code - State name puzzle (qsort, string manipulation, SIGSEGV)
 // EXPECTED_EXIT: 0
