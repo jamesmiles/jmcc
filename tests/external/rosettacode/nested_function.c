@@ -10,6 +10,11 @@
 // STDOUT: 1. first
 // STDOUT: 2. second
 // STDOUT: 3. third
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64:
+// STDOUT_ARM64: 1. second
+// STDOUT_ARM64: 2. third
+// STDOUT_ARM64: 3. fourth
 
 
 #include<stdlib.h>

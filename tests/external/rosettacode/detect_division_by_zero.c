@@ -11,6 +11,12 @@
 // STDOUT: 0 / 5 is 0
 // STDOUT: 0 / 0: caught division by zero!
 // STDOUT: -2147483648 / -1: caught division by zero!
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64: -44 / 0 is 0
+// STDOUT_ARM64: -44 / 5 is -8
+// STDOUT_ARM64: 0 / 5 is 0
+// STDOUT_ARM64: 0 / 0 is 0
+// STDOUT_ARM64: -2147483648 / -1 is -2147483648
 
 #include <limits.h>	/* INT_MIN */
 #include <setjmp.h>	/* siglongjmp(), sigsetjmp() */

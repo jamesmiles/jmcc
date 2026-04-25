@@ -2060,8 +2060,15 @@ class Arm64AppleCodeGen:
         self.emit("    ret")
 
     def gen_block(self, block: Block):
+        # Save local_types so inner-scope variable declarations that shadow outer ones
+        # (e.g. `struct s s; { int s; ... }`) don't corrupt the type map for code after the block.
+        has_non_decl = any(not isinstance(s, VarDecl) for s in block.stmts)
+        if has_non_decl:
+            saved_local_types = dict(self.local_types)
         for stmt in block.stmts:
             self.gen_stmt(stmt)
+        if has_non_decl:
+            self.local_types = saved_local_types
 
     def gen_stmt(self, stmt: Stmt):
         if isinstance(stmt, Block):
