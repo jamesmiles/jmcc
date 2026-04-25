@@ -5,16 +5,16 @@
 // PHASE: 5
 // SOURCE: https://rosettacode.org/wiki/Nested_function#C
 // LICENSE: GFDL 1.2
-// EXPECTED_STDOUT:
-// STDOUT:
-// STDOUT: 1. first
-// STDOUT: 2. second
-// STDOUT: 3. third
 // This test uses GCC's nested-function extension to build a sorted list with
 // an incrementing counter.  The C standard leaves argument-evaluation order
 // unspecified; jmcc's ARM64 backend evaluates the counter one step later than
 // GCC on x86-64, shifting all output labels up by one ("second"→"third"→"fourth"
 // instead of "first"→"second"→"third") and producing a leading blank line.
+// EXPECTED_STDOUT:
+// STDOUT:
+// STDOUT: 1. first
+// STDOUT: 2. second
+// STDOUT: 3. third
 // EXPECTED_STDOUT_ARM64:
 // STDOUT_ARM64:
 // STDOUT_ARM64: 1. second

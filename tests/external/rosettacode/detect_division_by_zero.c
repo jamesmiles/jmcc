@@ -5,16 +5,16 @@
 // PHASE: 5
 // SOURCE: https://rosettacode.org/wiki/Detect_division_by_zero#C
 // LICENSE: GFDL 1.2
+// ARM64 hardware does not raise SIGFPE on integer division by zero — the CPU
+// silently returns 0 (for x/0) or wraps (for INT_MIN/-1).  The SIGFPE handler
+// therefore never fires, so every division just prints its numeric result
+// instead of the "caught division by zero!" message.
 // EXPECTED_STDOUT:
 // STDOUT: -44 / 0: caught division by zero!
 // STDOUT: -44 / 5 is -8
 // STDOUT: 0 / 5 is 0
 // STDOUT: 0 / 0: caught division by zero!
 // STDOUT: -2147483648 / -1: caught division by zero!
-// ARM64 hardware does not raise SIGFPE on integer division by zero — the CPU
-// silently returns 0 (for x/0) or wraps (for INT_MIN/-1).  The SIGFPE handler
-// therefore never fires, so every division just prints its numeric result
-// instead of the "caught division by zero!" message.
 // EXPECTED_STDOUT_ARM64:
 // STDOUT_ARM64: -44 / 0 is 0
 // STDOUT_ARM64: -44 / 5 is -8
