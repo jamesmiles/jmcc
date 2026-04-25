@@ -843,6 +843,7 @@ int kill(int pid, int sig);
 #define SA_RESTART 0x10000000
 #define SA_NODEFER 0x40000000
 #define SA_RESETHAND 0x80000000
+#define SI_USER 0
 #define FPE_INTDIV 1
 #define FPE_INTOVF 2
 #define FPE_FLTDIV 3
@@ -938,6 +939,7 @@ unsigned int ntohl(unsigned int netlong);
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
 #define SOCK_RAW 3
+#define SOCK_NONBLOCK 00004000
 #define AF_UNSPEC 0
 #define AF_UNIX 1
 #define AF_LOCAL AF_UNIX
@@ -987,6 +989,21 @@ int sendto(int sockfd, const void *buf, unsigned long len, int flags, const stru
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 int send(int sockfd, const void *buf, unsigned long len, int flags);
 int recv(int sockfd, void *buf, unsigned long len, int flags);
+""",
+        "sys/wait.h": """
+#ifndef _JMCC_SYS_WAIT_H
+#define _JMCC_SYS_WAIT_H
+#define WNOHANG   1
+#define WUNTRACED 2
+#define WIFEXITED(s)   (((s) & 0x7f) == 0)
+#define WEXITSTATUS(s) (((s) >> 8) & 0xff)
+#define WIFSIGNALED(s) (((s) & 0x7f) != 0x7f && ((s) & 0x7f) != 0)
+#define WTERMSIG(s)    ((s) & 0x7f)
+#define WIFSTOPPED(s)  (((s) & 0xff) == 0x7f)
+#define WSTOPSIG(s)    (((s) >> 8) & 0xff)
+int waitpid(int pid, int *status, int options);
+int wait(int *status);
+#endif
 """,
         "sys/uio.h": """
 struct iovec {
@@ -1065,21 +1082,6 @@ int inet_aton(const char *cp, struct in_addr *inp);
     # These must NOT override real system headers (unlike BUILTIN_HEADERS which
     # are intentional replacements for headers that break the JMCC parser).
     FALLBACK_HEADERS = {
-        "sys/wait.h": """
-#ifndef _JMCC_SYS_WAIT_H
-#define _JMCC_SYS_WAIT_H
-#define WNOHANG   1
-#define WUNTRACED 2
-#define WIFEXITED(s)   (((s) & 0x7f) == 0)
-#define WEXITSTATUS(s) (((s) >> 8) & 0xff)
-#define WIFSIGNALED(s) (((s) & 0x7f) != 0x7f && ((s) & 0x7f) != 0)
-#define WTERMSIG(s)    ((s) & 0x7f)
-#define WIFSTOPPED(s)  (((s) & 0xff) == 0x7f)
-#define WSTOPSIG(s)    (((s) >> 8) & 0xff)
-int waitpid(int pid, int *status, int options);
-int wait(int *status);
-#endif
-""",
         "regex.h": """
 #ifndef _JMCC_REGEX_H
 #define _JMCC_REGEX_H
