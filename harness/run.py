@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import shutil
+import platform
 from pathlib import Path
 
 HARNESS_DIR = Path(__file__).parent
@@ -41,8 +42,17 @@ def ensure_docker_image():
 
 def _is_amd64():
     """Check if host is already amd64 (no emulation needed)."""
-    import platform
     return platform.machine() in ("x86_64", "AMD64")
+
+
+def _native_host_target():
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "darwin" and machine in ("arm64", "aarch64"):
+        return "arm64-apple-darwin"
+    if system == "linux" and machine in ("x86_64", "amd64"):
+        return "x86_64-linux"
+    return None
 
 
 def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
@@ -82,8 +92,17 @@ def docker_exec(cmd, input_data=None, timeout=TIMEOUT_SECONDS):
         return TimeoutResult()
 
 
-def _native_assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None):
+def _native_assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None, target=None):
     """Assemble and link on the host without Docker."""
+    if target == "arm64-apple-darwin":
+        args = ["clang", "-arch", "arm64", "-o", output_path, asm_path]
+        args.extend(extra_asm_paths or [])
+        r = subprocess.run(
+            args,
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+        )
+        return {"success": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode}
+
     obj_path = asm_path + ".o"
     extra_obj_paths = []
     try:
@@ -134,16 +153,54 @@ def _native_execute_hosted(binary_path, stdin_data=None):
         return {"stdout": "", "stderr": "TIMEOUT", "returncode": -1}
 
 
-def compile_with_reference(source_path, compiler, output_path, std="c11"):
-    """Compile a C file with a reference compiler inside Docker."""
-    src_name = os.path.basename(source_path)
-    out_name = os.path.basename(output_path)
+def _resolve_include_paths(source_path, metadata):
+    test_dir = os.path.dirname(os.path.abspath(source_path))
+    include_paths = [test_dir]
+    for path in metadata.get("include_paths", []):
+        include_paths.append(os.path.join(test_dir, path) if not os.path.isabs(path) else path)
+    for entry in os.listdir(test_dir):
+        subdir = os.path.join(test_dir, entry)
+        if os.path.isdir(subdir) and entry != "helpers":
+            include_paths.append(subdir)
+    return include_paths
 
-    result = docker_exec([
-        compiler, f"-std={std}", "-pedantic", "-Wall", "-Werror",
-        "-o", f"/work/output/{out_name}",
-        f"/work/tests/{src_name}"
-    ])
+
+def _resolve_multi_file_paths(source_path, metadata):
+    source_dir = os.path.dirname(os.path.abspath(source_path))
+    return [os.path.join(source_dir, helper_file) for helper_file in metadata.get("multi_file", [])]
+
+
+def compile_with_reference(source_path, compiler, output_path, metadata=None, std="c11"):
+    """Compile a C file with a reference compiler."""
+    metadata = metadata or {}
+    include_paths = _resolve_include_paths(source_path, metadata)
+    extra_sources = _resolve_multi_file_paths(source_path, metadata)
+    cmd = [compiler, f"-std={std}", "-pedantic", "-Wall", "-Werror"]
+    for define in metadata.get("defines", []):
+        cmd.append(f"-D{define}")
+    for include_path in include_paths:
+        cmd.extend(["-I", include_path])
+    cmd.extend([source_path, *extra_sources, "-o", output_path])
+
+    if _use_native():
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+        )
+    else:
+        out_name = os.path.basename(output_path)
+        source_names = [f"/work/tests/{os.path.basename(source_path)}"] + [
+            f"/work/tests/{os.path.basename(extra_source)}" for extra_source in extra_sources
+        ]
+        docker_cmd = [compiler, f"-std={std}", "-pedantic", "-Wall", "-Werror"]
+        for define in metadata.get("defines", []):
+            docker_cmd.append(f"-D{define}")
+        for include_path in include_paths:
+            docker_cmd.extend(["-I", f"/work/tests/{os.path.relpath(include_path, PROJECT_DIR / 'tests')}"])
+        docker_cmd.extend([*source_names, "-o", f"/work/output/{out_name}"])
+        result = docker_exec(docker_cmd)
 
     return {
         "success": result.returncode == 0,
@@ -153,9 +210,11 @@ def compile_with_reference(source_path, compiler, output_path, std="c11"):
     }
 
 
-def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=None):
+def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=None, target=None):
     """Compile a C file with JMCC (runs on host, Python)."""
     cmd = [sys.executable, str(PROJECT_DIR / "jmcc.py"), source_path, "-o", output_asm_path]
+    if target:
+        cmd.extend(["--target", target])
     for d in (defines or []):
         cmd.extend(["-D", d])
     for p in (include_paths or []):
@@ -174,10 +233,17 @@ def compile_with_jmcc(source_path, output_asm_path, defines=None, include_paths=
     }
 
 
-def assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None):
+def assemble_and_link(asm_path, output_path, freestanding=False, extra_asm_paths=None, target=None):
     """Assemble and link JMCC output (native or Docker)."""
     if _use_native():
-        return _native_assemble_and_link(asm_path, output_path, freestanding, extra_asm_paths=extra_asm_paths)
+        effective_target = target or _native_host_target()
+        return _native_assemble_and_link(
+            asm_path,
+            output_path,
+            freestanding,
+            extra_asm_paths=extra_asm_paths,
+            target=effective_target,
+        )
     asm_name = os.path.basename(asm_path)
     out_name = os.path.basename(output_path)
 
@@ -255,6 +321,7 @@ def parse_test_metadata(source_path):
         "description": "",
         "expected_exit": 0,
         "expected_stdout": "",
+        "expected_stdout_arm64": "",
         "environment": "hosted",
         "phase": 1,
         "expect_compile_fail": False,
@@ -266,7 +333,9 @@ def parse_test_metadata(source_path):
     }
 
     stdout_lines = []
+    stdout_arm64_lines = []
     in_stdout = False
+    in_stdout_arm64 = False
 
     with open(source_path, "r") as f:
         for line in f:
@@ -282,14 +351,30 @@ def parse_test_metadata(source_path):
             elif comment.startswith("DESCRIPTION:"):
                 metadata["description"] = comment[12:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("EXPECTED_EXIT:"):
                 metadata["expected_exit"] = int(comment[14:].strip())
                 in_stdout = False
+                in_stdout_arm64 = False
+            elif comment.startswith("EXPECTED_STDOUT_ARM64:"):
+                rest = comment[22:]
+                if rest.strip():
+                    stdout_arm64_lines.append(rest.strip())
+                in_stdout = False
+                in_stdout_arm64 = True
+            elif comment.startswith("STDOUT_ARM64:"):
+                content = comment[13:]
+                if content.startswith(" "):
+                    content = content[1:]
+                stdout_arm64_lines.append(content)
+                in_stdout = False
+                in_stdout_arm64 = True
             elif comment.startswith("EXPECTED_STDOUT:"):
                 rest = comment[16:]
                 if rest.strip():
                     stdout_lines.append(rest.strip())
                 in_stdout = True
+                in_stdout_arm64 = False
             elif comment.startswith("STDOUT:"):
                 # Preserve leading whitespace (important for formatted output)
                 content = comment[7:]
@@ -297,43 +382,56 @@ def parse_test_metadata(source_path):
                     content = content[1:]  # strip exactly one space after STDOUT:
                 stdout_lines.append(content)
                 in_stdout = True
+                in_stdout_arm64 = False
             elif comment.startswith("ENVIRONMENT:"):
                 metadata["environment"] = comment[12:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("PHASE:"):
                 metadata["phase"] = int(comment[6:].strip())
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("EXPECT_COMPILE_FAIL:"):
                 metadata["expect_compile_fail"] = comment[20:].strip().lower() == "yes"
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("ERROR_PATTERN:"):
                 metadata["error_pattern"] = comment[14:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("STANDARD_REF:"):
                 metadata["standard_ref"] = comment[13:].strip()
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("DEFINES:"):
                 defs = comment[8:].strip()
                 metadata["defines"] = [d.strip() for d in defs.replace(",", " ").split() if d.strip()]
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("INCLUDE_PATHS:"):
                 paths = comment[14:].strip()
                 metadata["include_paths"] = [p.strip() for p in paths.replace(",", " ").split() if p.strip()]
                 in_stdout = False
+                in_stdout_arm64 = False
             elif comment.startswith("MULTI_FILE:"):
                 files = comment[11:].strip()
                 metadata["multi_file"] = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
                 in_stdout = False
+                in_stdout_arm64 = False
+            elif in_stdout_arm64 and comment:
+                stdout_arm64_lines.append(comment)
             elif in_stdout and comment:
                 stdout_lines.append(comment)
 
     if stdout_lines:
         metadata["expected_stdout"] = "\n".join(stdout_lines) + "\n"
+    if stdout_arm64_lines:
+        metadata["expected_stdout_arm64"] = "\n".join(stdout_arm64_lines) + "\n"
 
     return metadata
 
 
-def run_test(source_path, compiler="jmcc", skip_reference=False):
+def run_test(source_path, compiler="jmcc", skip_reference=False, target=None):
     """
     Run a single test. Returns a result dict.
     """
@@ -357,21 +455,11 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
     if compiler == "jmcc":
         asm_path = str(output_dir / f"{test_name}.s")
         bin_path = str(output_dir / f"{test_name}")
-
-        # Resolve include paths relative to test file directory
-        test_dir = os.path.dirname(os.path.abspath(source_path))
-        inc_paths = []
-        for p in metadata.get("include_paths", []):
-            inc_paths.append(os.path.join(test_dir, p) if not os.path.isabs(p) else p)
-        # Auto-add subdirectories of the test file's directory
-        for entry in os.listdir(test_dir):
-            subdir = os.path.join(test_dir, entry)
-            if os.path.isdir(subdir) and entry != "helpers":
-                inc_paths.append(subdir)
+        inc_paths = _resolve_include_paths(source_path, metadata)
 
         # Compile with JMCC
         comp = compile_with_jmcc(source_path, asm_path, defines=metadata.get("defines"),
-                                 include_paths=inc_paths if inc_paths else None)
+                                 include_paths=inc_paths if inc_paths else None, target=target)
 
         if metadata["expect_compile_fail"]:
             if not comp["success"]:
@@ -387,19 +475,29 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
 
         # Compile multi-file helpers
         extra_asm_paths = []
-        source_dir = str(Path(source_path).parent)
-        for helper_file in metadata.get("multi_file", []):
-            helper_path = os.path.join(source_dir, helper_file)
-            helper_asm = str(output_dir / f"{Path(helper_file).stem}.s")
-            hcomp = compile_with_jmcc(helper_path, helper_asm)
+        for helper_path in _resolve_multi_file_paths(source_path, metadata):
+            helper_asm = str(output_dir / f"{Path(helper_path).stem}.s")
+            hcomp = compile_with_jmcc(
+                helper_path,
+                helper_asm,
+                defines=metadata.get("defines"),
+                include_paths=inc_paths if inc_paths else None,
+                target=target,
+            )
             if not hcomp["success"]:
-                result["details"] = f"JMCC compilation failed (helper {helper_file}):\n{hcomp['stderr']}"
+                result["details"] = f"JMCC compilation failed (helper {os.path.basename(helper_path)}):\n{hcomp['stderr']}"
                 return result
             extra_asm_paths.append(helper_asm)
 
         # Assemble and link
         freestanding = metadata["environment"] == "freestanding"
-        link = assemble_and_link(asm_path, bin_path, freestanding=freestanding, extra_asm_paths=extra_asm_paths)
+        link = assemble_and_link(
+            asm_path,
+            bin_path,
+            freestanding=freestanding,
+            extra_asm_paths=extra_asm_paths,
+            target=target,
+        )
         if not link["success"]:
             result["details"] = f"Assembly/linking failed:\n{link['stderr']}"
             return result
@@ -414,7 +512,9 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
         actual_exit = exec_result["returncode"]
         actual_stdout = exec_result["stdout"]
         expected_exit = metadata["expected_exit"]
-        expected_stdout = metadata["expected_stdout"]
+        # Use arm64-specific expected stdout if available and target is arm64
+        is_arm64_target = target is not None and "arm64" in target
+        expected_stdout = (metadata.get("expected_stdout_arm64") or metadata["expected_stdout"]) if is_arm64_target else metadata["expected_stdout"]
 
         exit_ok = actual_exit == expected_exit
         # Compare stdout with trailing-whitespace tolerance per line
@@ -437,7 +537,7 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
         bin_path = str(output_dir / f"{test_name}_{compiler}")
 
         # For negative tests, check that reference compiler also rejects
-        comp = compile_with_reference(source_path, compiler, bin_path)
+        comp = compile_with_reference(source_path, compiler, bin_path, metadata=metadata)
 
         if metadata["expect_compile_fail"]:
             result["passed"] = not comp["success"]
@@ -472,15 +572,19 @@ def run_test(source_path, compiler="jmcc", skip_reference=False):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: run.py <source.c> [--compiler jmcc|gcc|clang]")
+        print("Usage: run.py <source.c> [--compiler jmcc|gcc|clang] [--target target-triple]")
         sys.exit(1)
 
     source = sys.argv[1]
     compiler = "jmcc"
+    target = None
     if "--compiler" in sys.argv:
         idx = sys.argv.index("--compiler")
         compiler = sys.argv[idx + 1]
+    if "--target" in sys.argv:
+        idx = sys.argv.index("--target")
+        target = sys.argv[idx + 1]
 
     ensure_docker_image()
-    result = run_test(source, compiler=compiler)
+    result = run_test(source, compiler=compiler, target=target)
     print(json.dumps(result, indent=2))

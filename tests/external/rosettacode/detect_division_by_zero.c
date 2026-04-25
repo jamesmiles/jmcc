@@ -1,3 +1,7 @@
+// ARM64 hardware does not raise SIGFPE on integer division by zero — the CPU
+// silently returns 0 (for x/0) or wraps (for INT_MIN/-1). The SIGFPE handler
+// therefore never fires, so every division just prints its numeric result
+// instead of the "caught division by zero!" message.
 // TEST: rosetta_detect_division_by_zero
 // DESCRIPTION: Rosetta Code - Detect division by zero (compile)
 // EXPECTED_EXIT: 0
@@ -11,6 +15,12 @@
 // STDOUT: 0 / 5 is 0
 // STDOUT: 0 / 0: caught division by zero!
 // STDOUT: -2147483648 / -1: caught division by zero!
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64: -44 / 0 is 0
+// STDOUT_ARM64: -44 / 5 is -8
+// STDOUT_ARM64: 0 / 5 is 0
+// STDOUT_ARM64: 0 / 0 is 0
+// STDOUT_ARM64: -2147483648 / -1 is -2147483648
 
 #include <limits.h>	/* INT_MIN */
 #include <setjmp.h>	/* siglongjmp(), sigsetjmp() */

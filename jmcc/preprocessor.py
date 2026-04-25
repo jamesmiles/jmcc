@@ -28,6 +28,76 @@ class Preprocessor:
 
     # Built-in freestanding headers that JMCC provides
     BUILTIN_HEADERS = {
+        "AvailabilityMacros.h": """
+#ifndef __AVAILABILITYMACROS__
+#define __AVAILABILITYMACROS__
+#define MAC_OS_X_VERSION_10_0   1000
+#define MAC_OS_X_VERSION_10_1   1010
+#define MAC_OS_X_VERSION_10_2   1020
+#define MAC_OS_X_VERSION_10_3   1030
+#define MAC_OS_X_VERSION_10_4   1040
+#define MAC_OS_X_VERSION_10_5   1050
+#define MAC_OS_X_VERSION_10_6   1060
+#define MAC_OS_X_VERSION_10_7   1070
+#define MAC_OS_X_VERSION_10_8   1080
+#define MAC_OS_X_VERSION_10_9   1090
+#define MAC_OS_X_VERSION_10_10  101000
+#define MAC_OS_X_VERSION_10_11  101100
+#define MAC_OS_X_VERSION_10_12  101200
+#define MAC_OS_X_VERSION_10_13  101300
+#define MAC_OS_X_VERSION_10_14  101400
+#define MAC_OS_X_VERSION_10_15  101500
+#define MAC_OS_X_VERSION_11_0   110000
+#define MAC_OS_X_VERSION_12_0   120000
+#define MAC_OS_X_VERSION_13_0   130000
+#define MAC_OS_X_VERSION_14_0   140000
+#define MAC_OS_X_VERSION_15_0   150000
+#ifndef MAC_OS_X_VERSION_MIN_REQUIRED
+    #ifdef __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+        #define MAC_OS_X_VERSION_MIN_REQUIRED __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+    #elif defined(__arm__) || defined(__arm64__)
+        #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_11_0
+    #else
+        #define MAC_OS_X_VERSION_MIN_REQUIRED MAC_OS_X_VERSION_10_0
+    #endif
+#endif
+#ifndef MAC_OS_X_VERSION_MAX_ALLOWED
+    #define MAC_OS_X_VERSION_MAX_ALLOWED MAC_OS_X_VERSION_15_0
+#endif
+#define AVAILABLE_MAC_OS_X_VERSION_10_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_2_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_3_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_4_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_6_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_7_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_8_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_9_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_10_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_11_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_12_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_13_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_14_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_10_15_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_11_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_12_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_13_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_14_0_AND_LATER
+#define AVAILABLE_MAC_OS_X_VERSION_15_0_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_0_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_1_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_2_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_3_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_4_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_5_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_6_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_7_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_8_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_9_AND_LATER
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_10_AND_LATER
+#endif
+""",
         "alloca.h": """
 #define alloca __builtin_alloca
 """,
@@ -164,7 +234,29 @@ typedef __builtin_va_list __gnuc_va_list;
 #ifndef _JMCC_STDIO_H
 #define _JMCC_STDIO_H
 #include <stddef.h>
-typedef void FILE;
+struct __sbuf { unsigned char *_base; int _size; };
+typedef struct __sFILE {
+    unsigned char *_p;
+    int _r;
+    int _w;
+    short _flags;
+    short _file;
+    struct __sbuf _bf;
+    int _lbfsize;
+    void *_cookie;
+    int (* _Nullable _close)(void *);
+    int (* _Nullable _read)(void *, char *, int);
+    long (* _Nullable _seek)(void *, long, int);
+    int (* _Nullable _write)(void *, const char *, int);
+    struct __sbuf _ub;
+    unsigned char *_up;
+    int _ur;
+    unsigned char _ubuf[3];
+    unsigned char _nbuf[1];
+    struct __sbuf _lb;
+    int _blksize;
+    long _offset;
+} FILE;
 typedef long fpos_t;
 /* BSD-style short unsigned typedefs (historically in sys/types.h, widely expected) */
 #ifndef _JMCC_BSD_TYPES
@@ -245,6 +337,7 @@ int pclose(FILE *stream);
 #ifndef _JMCC_STDLIB_H
 #define _JMCC_STDLIB_H
 #include <stddef.h>
+#include <wchar.h>
 #ifndef _JMCC_BSD_TYPES
 #define _JMCC_BSD_TYPES
 typedef unsigned int uint;
@@ -283,14 +376,115 @@ int rand(void);
 void srand(unsigned int);
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 void *bsearch(const void *, const void *, size_t, size_t, int (*)(const void *, const void *));
+size_t mbstowcs(wchar_t *dest, const char *src, size_t n);
+size_t wcstombs(char *dest, const wchar_t *src, size_t n);
+int mbtowc(wchar_t *pwc, const char *s, size_t n);
+int wctomb(char *s, wchar_t wc);
+size_t mblen(const char *s, size_t n);
 #endif
 """,
         "string.h": """
 #include <stddef.h>
+int strcmp(const char *s1, const char *s2);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
+size_t strlen(const char *s);
+char *strcpy(char *dest, const char *src);
+char *strncpy(char *dest, const char *src, size_t n);
+char *strcat(char *dest, const char *src);
+char *strncat(char *dest, const char *src, size_t n);
+char *strstr(const char *haystack, const char *needle);
+char *strdup(const char *s);
+char *strndup(const char *s, size_t n);
+char *strtok(char *s, const char *delim);
+char *strtok_r(char *s, const char *delim, char **saveptr);
+void *memcpy(void *dest, const void *src, size_t n);
+void *memmove(void *dest, const void *src, size_t n);
+void *memset(void *s, int c, size_t n);
+int memcmp(const void *s1, const void *s2, size_t n);
+void *memchr(const void *s, int c, size_t n);
 """,
-        "ctype.h": "",
+        "ctype.h": """
+#ifndef _JMCC_CTYPE_H
+#define _JMCC_CTYPE_H
+int isalpha(int c);
+int isdigit(int c);
+int isalnum(int c);
+int isspace(int c);
+int isupper(int c);
+int islower(int c);
+int isprint(int c);
+int ispunct(int c);
+int iscntrl(int c);
+int isgraph(int c);
+int isxdigit(int c);
+int isblank(int c);
+int toupper(int c);
+int tolower(int c);
+#endif
+""",
         "assert.h": """
 #define assert(x) ((void)0)
+""",
+        "locale.h": """
+#ifndef _JMCC_LOCALE_H
+#define _JMCC_LOCALE_H
+#ifdef __linux__
+#define LC_CTYPE    0
+#define LC_NUMERIC  1
+#define LC_TIME     2
+#define LC_COLLATE  3
+#define LC_MONETARY 4
+#define LC_MESSAGES 5
+#define LC_ALL      6
+#else
+#define LC_ALL      0
+#define LC_COLLATE  1
+#define LC_CTYPE    2
+#define LC_MONETARY 3
+#define LC_NUMERIC  4
+#define LC_TIME     5
+#define LC_MESSAGES 6
+#endif
+struct lconv {
+    char *decimal_point;
+    char *thousands_sep;
+    char *grouping;
+    char *int_curr_symbol;
+    char *currency_symbol;
+    char *mon_decimal_point;
+    char *mon_thousands_sep;
+    char *mon_grouping;
+    char *positive_sign;
+    char *negative_sign;
+    char int_frac_digits;
+    char frac_digits;
+    char p_cs_precedes;
+    char p_sep_by_space;
+    char n_cs_precedes;
+    char n_sep_by_space;
+    char p_sign_posn;
+    char n_sign_posn;
+};
+char *setlocale(int category, const char *locale);
+struct lconv *localeconv(void);
+#endif
+""",
+        "search.h": """
+#ifndef _JMCC_SEARCH_H
+#define _JMCC_SEARCH_H
+#include <stddef.h>
+void *lfind(const void *key, const void *base, size_t *nmemb, size_t size, int (*compar)(const void *, const void *));
+void *lsearch(const void *key, void *base, size_t *nmemb, size_t size, int (*compar)(const void *, const void *));
+void *tfind(const void *key, void * const *rootp, int (*compar)(const void *, const void *));
+void *tsearch(const void *key, void **rootp, int (*compar)(const void *, const void *));
+void twalk(const void *root, void (*action)(const void *, int, int));
+void tdestroy(void *root, void (*free_node)(void *nodep));
+void *hsearch(void *item, int action);
+int hcreate(size_t nel);
+void hdestroy(void);
+#endif
 """,
         "math.h": """
 double sin(double);
@@ -384,6 +578,12 @@ int __fpclassifyf(float);
 typedef int wchar_t;
 typedef unsigned int wint_t;
 #define WEOF ((wint_t)-1)
+wchar_t *wcsncpy(wchar_t *dest, const wchar_t *src, unsigned long n);
+wchar_t *wcscpy(wchar_t *dest, const wchar_t *src);
+wchar_t *wcscat(wchar_t *dest, const wchar_t *src);
+unsigned long wcslen(const wchar_t *s);
+int wcscmp(const wchar_t *s1, const wchar_t *s2);
+int wprintf(const wchar_t *format, ...);
 #endif
 """,
         "unistd.h": """
@@ -726,6 +926,8 @@ struct sockaddr_in6 {
 };
 extern struct in6_addr in6addr_any;
 extern struct in6_addr in6addr_loopback;
+static struct in6_addr in6addr_any = {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}};
+static struct in6_addr in6addr_loopback = {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1}};
 #define IPV6_V6ONLY 26
 unsigned short htons(unsigned short hostshort);
 unsigned short ntohs(unsigned short netshort);
@@ -855,18 +1057,228 @@ char *inet_ntoa(struct in_addr in);
 int inet_aton(const char *cp, struct in_addr *inp);
 """,
         # netdb.h — use real system header
-        # sys/ipc.h, sys/shm.h, errno.h — use real system headers
         # values.h — use real system header
+    }
+
+    # Fallback stubs used only when the real system header cannot be found
+    # (e.g. on macOS where Linux include paths don't exist).
+    # These must NOT override real system headers (unlike BUILTIN_HEADERS which
+    # are intentional replacements for headers that break the JMCC parser).
+    FALLBACK_HEADERS = {
+        "sys/wait.h": """
+#ifndef _JMCC_SYS_WAIT_H
+#define _JMCC_SYS_WAIT_H
+#define WNOHANG   1
+#define WUNTRACED 2
+#define WIFEXITED(s)   (((s) & 0x7f) == 0)
+#define WEXITSTATUS(s) (((s) >> 8) & 0xff)
+#define WIFSIGNALED(s) (((s) & 0x7f) != 0x7f && ((s) & 0x7f) != 0)
+#define WTERMSIG(s)    ((s) & 0x7f)
+#define WIFSTOPPED(s)  (((s) & 0xff) == 0x7f)
+#define WSTOPSIG(s)    (((s) >> 8) & 0xff)
+int waitpid(int pid, int *status, int options);
+int wait(int *status);
+#endif
+""",
+        "regex.h": """
+#ifndef _JMCC_REGEX_H
+#define _JMCC_REGEX_H
+#include <stddef.h>
+typedef long regoff_t;
+typedef struct { size_t re_nsub; } regex_t;
+typedef struct { regoff_t rm_so; regoff_t rm_eo; } regmatch_t;
+#define REG_BASIC     0000
+#define REG_EXTENDED  0001
+#define REG_ICASE     0002
+#define REG_NOSUB     0004
+#define REG_NEWLINE   0010
+#define REG_NOSPEC    0020
+#define REG_PEND      0040
+#define REG_DUMP      0200
+#define REG_NOMATCH   1
+#define REG_BADPAT    2
+#define REG_ECOLLATE  3
+#define REG_ECTYPE    4
+#define REG_EESCAPE   5
+#define REG_ESUBREG   6
+#define REG_EBRACK    7
+#define REG_EPAREN    8
+#define REG_EBRACE    9
+#define REG_BADBR     10
+#define REG_ERANGE    11
+#define REG_ESPACE    12
+#define REG_BADRPT    13
+int regcomp(regex_t *preg, const char *pattern, int cflags);
+int regexec(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
+size_t regerror(int errcode, const regex_t *preg, char *errbuf, size_t errbuf_size);
+void regfree(regex_t *preg);
+#endif
+""",
+        "sys/mman.h": """
+#ifndef _JMCC_SYS_MMAN_H
+#define _JMCC_SYS_MMAN_H
+#include <stddef.h>
+#define PROT_NONE   0x00
+#define PROT_READ   0x01
+#define PROT_WRITE  0x02
+#define PROT_EXEC   0x04
+#define MAP_SHARED    0x0001
+#define MAP_PRIVATE   0x0002
+#define MAP_FIXED     0x0010
+#define MAP_ANON      0x1000
+#define MAP_ANONYMOUS MAP_ANON
+#define MAP_FAILED    ((void *)-1)
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, long offset);
+int munmap(void *addr, size_t len);
+int mprotect(void *addr, size_t len, int prot);
+int msync(void *addr, size_t len, int flags);
+#endif
+""",
+        "inttypes.h": """
+#ifndef _JMCC_INTTYPES_H
+#define _JMCC_INTTYPES_H
+#include <stdint.h>
+#endif
+""",
+        "stdint.h": """
+#ifndef _JMCC_STDINT_H
+#define _JMCC_STDINT_H
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef short int16_t;
+typedef unsigned short uint16_t;
+typedef int int32_t;
+typedef unsigned int uint32_t;
+typedef long int64_t;
+typedef unsigned long uint64_t;
+typedef long intptr_t;
+typedef unsigned long uintptr_t;
+typedef long intmax_t;
+typedef unsigned long uintmax_t;
+#define INT8_MIN (-128)
+#define INT8_MAX 127
+#define UINT8_MAX 255
+#define INT16_MIN (-32768)
+#define INT16_MAX 32767
+#define UINT16_MAX 65535
+#define INT32_MIN (-2147483648)
+#define INT32_MAX 2147483647
+#define UINT32_MAX 4294967295U
+#define INT64_MIN (-9223372036854775807LL - 1)
+#define INT64_MAX 9223372036854775807LL
+#define UINT64_MAX 18446744073709551615ULL
+#define INTPTR_MAX INT64_MAX
+#define INTPTR_MIN INT64_MIN
+#define UINTPTR_MAX UINT64_MAX
+#define SIZE_MAX UINT64_MAX
+#define PTRDIFF_MAX INT64_MAX
+#define PTRDIFF_MIN INT64_MIN
+#define INT8_C(x)  ((int8_t)(x))
+#define INT16_C(x) ((int16_t)(x))
+#define INT32_C(x) ((int32_t)(x))
+#define INT64_C(x) ((int64_t)(x ## LL))
+#define UINT8_C(x)  ((uint8_t)(x))
+#define UINT16_C(x) ((uint16_t)(x))
+#define UINT32_C(x) ((uint32_t)(x ## U))
+#define UINT64_C(x) ((uint64_t)(x ## ULL))
+#endif
+""",
+        "errno.h": """
+extern int errno;
+#define EPERM    1
+#define ENOENT   2
+#define EINTR    4
+#define EIO      5
+#define ENOMEM   12
+#define EACCES   13
+#define EFAULT   14
+#define EBUSY    16
+#define EEXIST   17
+#define ENODEV   19
+#define ENOTDIR  20
+#define EISDIR   21
+#define EINVAL   22
+#define EMFILE   24
+#define ENOSPC   28
+#define EPIPE    32
+#define ERANGE   34
+#define EWOULDBLOCK 35
+#define EAGAIN   35
+#define ENOSYS   78
+""",
+        "dirent.h": """
+typedef struct _DIR DIR;
+struct _DIR;
+struct dirent {
+    unsigned long long d_ino;
+    unsigned short d_reclen;
+    unsigned char  d_type;
+    unsigned char  d_namlen;
+    char           d_name[1024];
+};
+#define DT_UNKNOWN 0
+#define DT_FIFO    1
+#define DT_CHR     2
+#define DT_DIR     4
+#define DT_BLK     6
+#define DT_REG     8
+#define DT_LNK    10
+#define DT_SOCK   12
+#define DT_WHT    14
+DIR *opendir(const char *name);
+struct dirent *readdir(DIR *dirp);
+int closedir(DIR *dirp);
+""",
+        "sys/ipc.h": """
+typedef int key_t;
+struct ipc_perm {
+    unsigned int cuid;
+    unsigned int cgid;
+    unsigned int uid;
+    unsigned int gid;
+    unsigned short mode;
+    unsigned short __seq;
+    unsigned long __key;
+};
+#define IPC_PRIVATE ((key_t)0)
+#define IPC_CREAT 01000
+#define IPC_RMID 0
+#define IPC_STAT 2
+""",
+        "sys/shm.h": """
+#include <sys/ipc.h>
+typedef unsigned long size_t;
+typedef long time_t;
+typedef long pid_t;
+struct shmid_ds {
+    struct ipc_perm shm_perm;
+    size_t shm_segsz;
+    pid_t shm_lpid;
+    pid_t shm_cpid;
+    unsigned short shm_nattch;
+    time_t shm_atime;
+    time_t shm_dtime;
+    time_t shm_ctime;
+};
+int shmget(key_t key, size_t size, int shmflg);
+void *shmat(int shmid, const void *shmaddr, int shmflg);
+int shmdt(const void *shmaddr);
+int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+""",
     }
 
     # System include search paths (appended after user-specified paths)
     SYSTEM_INCLUDE_PATHS = [
         "/usr/include/x86_64-linux-gnu",
         "/usr/include",
+        "/opt/homebrew/include",   # macOS arm64 (Homebrew)
+        "/usr/local/include",      # macOS arm64 (MacPorts / manual installs)
     ]
 
-    def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None):
+    def __init__(self, filename: str = "<stdin>", include_paths: List[str] = None, target: str = None):
         self.filename = filename
+        self.target = target or ""
+        self._is_arm64_apple = "arm64" in self.target or "aarch64" in self.target
         self.include_paths = (include_paths or []) + [
             p for p in self.SYSTEM_INCLUDE_PATHS if os.path.isdir(p)
         ]
@@ -882,10 +1294,21 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["__STDC__"] = Macro("__STDC__", body="1")
         self.macros["__STDC_VERSION__"] = Macro("__STDC_VERSION__", body="201112L")
         self.macros["__STDC_HOSTED__"] = Macro("__STDC_HOSTED__", body="1")
+        self.macros["__STDC_ISO_10646__"] = Macro("__STDC_ISO_10646__", body="200009L")
         self.macros["__JMCC__"] = Macro("__JMCC__", body="1")
-        self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
-        self.macros["__linux__"] = Macro("__linux__", body="1")
-        self.macros["__unix__"] = Macro("__unix__", body="1")
+        if self._is_arm64_apple:
+            self.macros["__aarch64__"] = Macro("__aarch64__", body="1")
+            self.macros["__arm64__"] = Macro("__arm64__", body="1")
+            self.macros["__APPLE__"] = Macro("__APPLE__", body="1")
+            # Deployment-target macro; clang sets this from -mmacosx-version-min.
+            # AvailabilityMacros.h derives MAC_OS_X_VERSION_MIN_REQUIRED from it.
+            self.macros["__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__"] = Macro(
+                "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__", body="150000"
+            )
+        else:
+            self.macros["__x86_64__"] = Macro("__x86_64__", body="1")
+            self.macros["__linux__"] = Macro("__linux__", body="1")
+            self.macros["__unix__"] = Macro("__unix__", body="1")
         self.macros["NULL"] = Macro("NULL", body="((void*)0)")
         self.macros["EOF"] = Macro("EOF", body="(-1)")
         self.macros["__LP64__"] = Macro("__LP64__", body="1")
@@ -940,9 +1363,9 @@ int inet_aton(const char *cp, struct in_addr *inp);
         self.macros["__ATOMIC_ACQ_REL"] = Macro("__ATOMIC_ACQ_REL", body="4")
         self.macros["__ATOMIC_SEQ_CST"] = Macro("__ATOMIC_SEQ_CST", body="5")
         # GCC atomic builtins — single-threaded: reduce to plain load/store
-        self.macros["__atomic_store_n"] = Macro("__atomic_store_n", body="(*((__typeof__(*(__atomic_store_n_ptr)))(__atomic_store_n_ptr)) = (__atomic_store_n_val))",
+        self.macros["__atomic_store_n"] = Macro("__atomic_store_n", body="(*(__atomic_store_n_ptr) = (__atomic_store_n_val))",
                                                   is_func=True, params=["__atomic_store_n_ptr", "__atomic_store_n_val", "__atomic_store_n_ord"], is_variadic=False)
-        self.macros["__atomic_load_n"] = Macro("__atomic_load_n", body="(*((__typeof__(*(__atomic_load_n_ptr)))(__atomic_load_n_ptr)))",
+        self.macros["__atomic_load_n"] = Macro("__atomic_load_n", body="(*(__atomic_load_n_ptr))",
                                                 is_func=True, params=["__atomic_load_n_ptr", "__atomic_load_n_ord"], is_variadic=False)
         self.macros["__VERSION__"] = Macro("__VERSION__", body='"jmcc 0.1"')
 
@@ -1281,9 +1704,85 @@ int inet_aton(const char *cp, struct in_addr *inp);
         inc_name = match.group(1)
         is_system = '<' in line.split('include')[1]
 
-        # Check builtin headers first
+        # Check builtin headers first (intentional parser-safe replacements)
         if inc_name in self.BUILTIN_HEADERS:
-            return self.BUILTIN_HEADERS[inc_name]
+            content = self.BUILTIN_HEADERS[inc_name]
+            # For arm64 Apple, override stdarg.h with pointer-based va_list
+            if inc_name == "stdarg.h" and self._is_arm64_apple:
+                content = """
+typedef char* __builtin_va_list;
+typedef __builtin_va_list va_list;
+typedef __builtin_va_list __gnuc_va_list;
+#define va_start(ap, param) __builtin_va_start(ap, param)
+#define va_end(ap) __builtin_va_end(ap)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_copy(dest, src) __builtin_va_copy(dest, src)
+"""
+            # For arm64 Apple, stdio uses __stdoutp / __stdinp / __stderrp
+            if inc_name == "stdio.h" and self._is_arm64_apple:
+                content += """
+extern void *__stdoutp;
+extern void *__stdinp;
+extern void *__stderrp;
+#define stdout __stdoutp
+#define stdin  __stdinp
+#define stderr __stderrp
+"""
+            # For arm64 Apple, fpclassify uses __fpclassifyd / __fpclassifyf
+            # and FP_* constants use macOS values (different from Linux glibc)
+            if inc_name == "math.h" and self._is_arm64_apple:
+                content += """
+int __fpclassifyd(double);
+int __fpclassifyf(float);
+#undef fpclassify
+#define fpclassify(x) __fpclassifyd(x)
+#undef FP_NAN
+#undef FP_INFINITE
+#undef FP_ZERO
+#undef FP_SUBNORMAL
+#undef FP_NORMAL
+#define FP_NAN       1
+#define FP_INFINITE  2
+#define FP_ZERO      3
+#define FP_SUBNORMAL 5
+#define FP_NORMAL    4
+"""
+            # For arm64 Apple, _SC_* constants use macOS values (different from Linux)
+            if inc_name == "unistd.h" and self._is_arm64_apple:
+                content = content.replace("#define _SC_ARG_MAX 0", "#define _SC_ARG_MAX 1")
+                content = content.replace("#define _SC_CHILD_MAX 1", "#define _SC_CHILD_MAX 2")
+                content = content.replace("#define _SC_CLK_TCK 2", "#define _SC_CLK_TCK 3")
+                content = content.replace("#define _SC_NGROUPS_MAX 3", "#define _SC_NGROUPS_MAX 4")
+                content = content.replace("#define _SC_OPEN_MAX 4", "#define _SC_OPEN_MAX 5")
+                content = content.replace("#define _SC_STREAM_MAX 5", "#define _SC_STREAM_MAX 26")
+                content = content.replace("#define _SC_TZNAME_MAX 6", "#define _SC_TZNAME_MAX 27")
+                content = content.replace("#define _SC_JOB_CONTROL 7", "#define _SC_JOB_CONTROL 6")
+                content = content.replace("#define _SC_SAVED_IDS 8", "#define _SC_SAVED_IDS 7")
+                content = content.replace("#define _SC_VERSION 29", "#define _SC_VERSION 8")
+                content = content.replace("#define _SC_PAGESIZE 30", "#define _SC_PAGESIZE 29")
+                content = content.replace("#define _SC_PAGE_SIZE 30", "#define _SC_PAGE_SIZE _SC_PAGESIZE")
+                content = content.replace("#define _SC_NPROCESSORS_CONF 83", "#define _SC_NPROCESSORS_CONF 57")
+                content = content.replace("#define _SC_NPROCESSORS_ONLN 84", "#define _SC_NPROCESSORS_ONLN 58")
+                content = content.replace("#define _SC_PHYS_PAGES 85", "#define _SC_PHYS_PAGES 200")
+                content = content.replace("#define _SC_AVPHYS_PAGES 86", "#undef _SC_AVPHYS_PAGES")
+                # pread64/pwrite64 don't exist on macOS; alias to pread/pwrite
+                content += "\n#define pread64 pread\n#define pwrite64 pwrite\n"
+            # For arm64 Apple, errno is thread-local via __error() not a plain global
+            if inc_name == "errno.h" and self._is_arm64_apple:
+                content = content.replace("extern int errno;",
+                    "extern int * __error(void);\n#define errno (*__error())")
+            # For arm64 Apple, setjmp.h uses direct sigsetjmp/setjmp (not __sigsetjmp wrappers)
+            if inc_name == "setjmp.h" and self._is_arm64_apple:
+                content = """
+#define _JBLEN 38
+typedef long int jmp_buf[_JBLEN];
+typedef long int sigjmp_buf[_JBLEN + 1];
+int setjmp(jmp_buf);
+void longjmp(jmp_buf, int);
+int sigsetjmp(sigjmp_buf, int);
+void siglongjmp(sigjmp_buf, int);
+"""
+            return content
 
         def _load_file(full):
             if full in self.included_files:
@@ -1313,6 +1812,14 @@ int inet_aton(const char *cp, struct in_addr *inp);
             full = os.path.join(path, inc_name)
             if os.path.exists(full):
                 return _load_file(full)
+
+        # Fall back to macOS-only stubs when real system header not found
+        if inc_name in self.FALLBACK_HEADERS:
+            content = self.FALLBACK_HEADERS[inc_name]
+            if inc_name == "errno.h" and self._is_arm64_apple:
+                content = content.replace("extern int errno;",
+                    "extern int * __error(void);\n#define errno (*__error())")
+            return content
 
         return ""
 

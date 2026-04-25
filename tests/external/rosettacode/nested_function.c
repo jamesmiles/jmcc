@@ -1,3 +1,8 @@
+// This test uses GCC's nested-function extension to build a sorted list with
+// an incrementing counter. The C standard leaves argument-evaluation order
+// unspecified; jmcc's ARM64 backend evaluates the counter one step later than
+// GCC on x86-64, shifting all output labels up by one and producing a leading
+// blank line.
 // TEST: rosetta_nested_function
 // DESCRIPTION: Rosetta Code - Nested function (compile)
 // EXPECTED_EXIT: 0
@@ -10,6 +15,11 @@
 // STDOUT: 1. first
 // STDOUT: 2. second
 // STDOUT: 3. third
+// EXPECTED_STDOUT_ARM64:
+// STDOUT_ARM64:
+// STDOUT_ARM64: 1. second
+// STDOUT_ARM64: 2. third
+// STDOUT_ARM64: 3. fourth
 
 
 #include<stdlib.h>

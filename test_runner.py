@@ -25,16 +25,41 @@ from harness.run import (
 )
 
 
-def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=False, positive_only=False):
-    """Discover test files matching criteria."""
+def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=False,
+                   positive_only=False, target=None):
+    """Discover test files matching criteria.
+
+    Test file naming convention:
+      [name].c         — generic, runs on all platforms
+      [name]_arm64.c   — arm64-only
+      [name]_x86-64.c  — x86-64-only
+
+    When target contains 'arm64', generic + arm64 tests are included.
+    Otherwise, generic + x86-64 tests are included.
+    """
+    is_arm64 = target is not None and "arm64" in target
     tests = []
 
     if not negative_only:
         for phase_dir in sorted(Path(test_dir, "positive").glob("phase*")):
             for test_file in sorted(phase_dir.glob("*.c")):
+                name = test_file.name
+                is_arm64_test = name.endswith("_arm64.c")
+                is_x86_64_test = name.endswith("_x86-64.c")
+                if is_arm64:
+                    if is_x86_64_test:
+                        continue
+                    # include generic + _arm64
+                else:
+                    if is_arm64_test:
+                        continue
+                    # include generic + _x86-64
                 metadata = parse_test_metadata(test_file)
                 if not metadata["name"]:
-                    continue  # Skip helper files (no // TEST: header)
+                    if is_arm64_test or is_x86_64_test:
+                        metadata["name"] = test_file.stem
+                    else:
+                        continue  # Skip helper files (no // TEST: header)
                 if phase is not None and metadata["phase"] != phase:
                     continue
                 if filter_pattern and filter_pattern not in str(test_file):
@@ -68,7 +93,7 @@ def discover_tests(test_dir, phase=None, filter_pattern=None, negative_only=Fals
     return tests
 
 
-def run_all_tests(tests, compiler="jmcc", validate_references=False):
+def run_all_tests(tests, compiler="jmcc", validate_references=False, target=None):
     """Run all tests and return results."""
     results = []
 
@@ -84,7 +109,7 @@ def run_all_tests(tests, compiler="jmcc", validate_references=False):
                     print(f"  WARNING: {test_name} fails with {ref}: {ref_result['details']}")
 
         # Run with target compiler
-        result = run_test(test_file, compiler=compiler)
+        result = run_test(test_file, compiler=compiler, target=target)
         status = "PASS" if result["passed"] else "FAIL"
         print(f"  [{status}] {test_name}: {result['details']}")
         results.append(result)
@@ -149,6 +174,9 @@ def main():
                         help="Run only positive tests")
     parser.add_argument("--native", action="store_true",
                         help="Run without Docker (faster, uses host as/gcc)")
+    parser.add_argument("--target", default=None,
+                        help="JMCC compilation target — also selects platform-specific tests "
+                             "(e.g. arm64-apple-darwin includes _arm64.c tests)")
     args = parser.parse_args()
 
     if args.native:
@@ -163,6 +191,7 @@ def main():
         filter_pattern=args.filter,
         negative_only=args.negative_only,
         positive_only=args.positive_only,
+        target=args.target,
     )
 
     if not tests:
@@ -180,6 +209,7 @@ def main():
         tests,
         compiler=args.compiler,
         validate_references=args.validate,
+        target=args.target,
     )
 
     # Output

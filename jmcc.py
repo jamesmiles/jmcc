@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JMCC - A C11 compiler targeting x86-64 Linux."""
+"""JMCC - A C11 compiler with selectable backend targets."""
 
 import sys
 import os
@@ -10,10 +10,12 @@ from jmcc.parser import Parser
 from jmcc.codegen import CodeGen
 from jmcc.preprocessor import Preprocessor, Macro
 from jmcc.errors import JMCCError
+from jmcc.targets import DEFAULT_TARGET_TRIPLE, resolve_target, supported_target_names
 
 
-def compile_file(source_path: str, output_path: str, defines: list = None, include_paths: list = None) -> bool:
-    """Compile a C source file to x86-64 assembly."""
+def compile_file(source_path: str, output_path: str, defines: list = None,
+                 include_paths: list = None, target: str = DEFAULT_TARGET_TRIPLE) -> bool:
+    """Compile a C source file to target assembly."""
     try:
         with open(source_path, "r") as f:
             source = f.read()
@@ -22,6 +24,8 @@ def compile_file(source_path: str, output_path: str, defines: list = None, inclu
         return False
 
     try:
+        target_spec = resolve_target(target)
+
         # Preprocessing
         source_dir = os.path.dirname(os.path.abspath(source_path))
         inc_paths = [source_dir]
@@ -35,7 +39,7 @@ def compile_file(source_path: str, output_path: str, defines: list = None, inclu
             if abs_p not in inc_paths:
                 inc_paths.append(abs_p)
         include_paths = inc_paths
-        pp = Preprocessor(filename=source_path, include_paths=include_paths)
+        pp = Preprocessor(filename=source_path, include_paths=include_paths, target=target)
         # Apply -D defines
         for d in (defines or []):
             if '=' in d:
@@ -54,7 +58,7 @@ def compile_file(source_path: str, output_path: str, defines: list = None, inclu
         program = parser.parse_program()
 
         # Code generation
-        codegen = CodeGen()
+        codegen = CodeGen(target=target_spec)
         assembly = codegen.generate(program)
 
         # Write output
@@ -63,6 +67,9 @@ def compile_file(source_path: str, output_path: str, defines: list = None, inclu
 
         return True
 
+    except ValueError as e:
+        print(f"jmcc: error: {e}", file=sys.stderr)
+        return False
     except JMCCError as e:
         print(e.format(), file=sys.stderr)
         return False
@@ -77,10 +84,14 @@ def main():
                         help="Define preprocessor macro (-DNAME or -DNAME=VALUE)")
     parser.add_argument("-I", action="append", default=[], dest="include_paths",
                         help="Add directory to include search path")
+    parser.add_argument("--target", default=DEFAULT_TARGET_TRIPLE,
+                        help="Compilation target "
+                             f"(default: {DEFAULT_TARGET_TRIPLE}; supported: "
+                             f"{', '.join(supported_target_names())})")
     args = parser.parse_args()
 
     success = compile_file(args.input, args.output, defines=args.defines,
-                           include_paths=args.include_paths)
+                           include_paths=args.include_paths, target=args.target)
     sys.exit(0 if success else 1)
 
 

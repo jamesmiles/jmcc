@@ -15,6 +15,9 @@ class Parser:
         self.enum_defs: dict = {}   # name -> EnumDef
         self.enum_values: dict = {} # enumerator name -> int value
         self.typedefs: dict = {}    # typedef name -> TypeSpec
+        # Pre-define built-in GCC/Clang type names that are always available
+        self.typedefs["__builtin_va_list"] = TypeSpec(base="char", pointer_depth=1)
+        self.typedefs["__gnuc_va_list"] = TypeSpec(base="char", pointer_depth=1)
         self.declared_vars: set = set()  # variable names that shadow enum constants
         self.local_scope: set = set()   # param/variable names that shadow typedef names
         self._in_func_args = False
@@ -114,8 +117,9 @@ class Parser:
         # __typeof__ / typeof are type specifiers
         if self.current().type == TokenType.IDENTIFIER and self.current().value in ("__typeof__", "__typeof", "typeof"):
             return True
-        # __int128 is a type specifier
-        if self.current().type == TokenType.IDENTIFIER and self.current().value == "__int128":
+        # __int128 / __uint128_t / __int128_t are type specifiers
+        if self.current().type == TokenType.IDENTIFIER and self.current().value in (
+                "__int128", "__uint128_t", "__int128_t", "__uint128"):
             return True
         return False
 
@@ -171,6 +175,8 @@ class Parser:
                 # __thread / _Thread_local: thread-local storage (no-op for jmcc)
                 has_storage_class = True
                 self.advance()
+            elif t.type == TokenType.IDENTIFIER and t.value in ("_Nullable", "_Nonnull", "_Null_unspecified", "__nonnull", "__nullable"):
+                self.advance()  # nullability qualifier: accept and ignore
             elif t.type == TokenType.IDENTIFIER and t.value in ("__attribute__", "__attribute"):
                 self.skip_attribute()
                 continue
@@ -287,8 +293,10 @@ class Parser:
                     func_ptr_native_depth=resolved_fptr_depth,
                     array_sizes=td.array_sizes,
                 )
-            elif t.type == TokenType.IDENTIFIER and t.value == "__int128":
+            elif t.type == TokenType.IDENTIFIER and t.value in ("__int128", "__uint128_t", "__int128_t", "__uint128"):
                 base_parts.append("__int128")
+                if t.value in ("__uint128_t", "__uint128"):
+                    is_unsigned = True
                 self.advance()
             elif t.type in (TokenType.VOID, TokenType.CHAR, TokenType.SHORT,
                             TokenType.INT, TokenType.LONG, TokenType.FLOAT,
@@ -460,8 +468,10 @@ class Parser:
                 if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
                     self.advance()  # (
                     self.advance()  # *
-                    # Skip const/volatile qualifier after * (e.g., long (*const name)(args))
-                    while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                    # Skip const/volatile/restrict and nullability qualifiers after *
+                    # e.g. long (*const name)(args) or int (* _Nullable name)(args)
+                    while self.at(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT) or \
+                          (self.at(TokenType.IDENTIFIER) and self.current().value in ('_Nullable', '_Nonnull', '_Null_unspecified')):
                         self.advance()
                     # Multiple stars: void (**name)(params) — pointer to function pointer
                     member_extra_stars = 0
@@ -1487,15 +1497,34 @@ class Parser:
                 # Function pointer: (*fp)(params) or (*fp[4])(params)
                 self.advance()  # (
                 depth = 1
+                fp_comma_count = 0
+                fp_is_variadic = False
+                fp_has_params = False
                 while depth > 0 and not self.at(TokenType.EOF):
-                    if self.match(TokenType.LPAREN): depth += 1
-                    elif self.match(TokenType.RPAREN): depth -= 1
-                    else: self.advance()
+                    if self.match(TokenType.LPAREN):
+                        depth += 1
+                    elif self.match(TokenType.RPAREN):
+                        depth -= 1
+                    elif depth == 1 and self.match(TokenType.ELLIPSIS):
+                        fp_is_variadic = True
+                    elif depth == 1 and self.match(TokenType.COMMA):
+                        fp_comma_count += 1
+                    else:
+                        tok = self.current()
+                        if depth == 1 and tok.type == TokenType.IDENTIFIER:
+                            fp_has_params = True
+                        self.advance()
+                # fixed_param_count for variadic: commas before ... separate fixed params
+                # (last comma is between last fixed param and ...)
+                fp_param_count = (fp_comma_count if fp_is_variadic
+                                  else (fp_comma_count + 1 if fp_has_params else 0))
                 ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars,
                               is_unsigned=base_type.is_unsigned,
                               struct_def=base_type.struct_def,
                               is_ptr_array=bool(fptr_arr_sizes),
-                              array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
+                              array_sizes=fptr_arr_sizes if fptr_arr_sizes else None,
+                              func_ptr_is_variadic=fp_is_variadic,
+                              func_ptr_param_count=fp_param_count if fp_is_variadic else None)
             else:
                 ts = TypeSpec(base=base_type.base, pointer_depth=base_type.pointer_depth + extra_stars)
             init = None
@@ -1560,6 +1589,8 @@ class Parser:
             struct_def=base_type.struct_def,
             enum_def=base_type.enum_def,
             array_sizes=base_type.array_sizes,
+            is_func_ptr=base_type.is_func_ptr,
+            func_ptr_native_depth=base_type.func_ptr_native_depth,
         )
 
         # Array declaration
@@ -1814,17 +1845,34 @@ class Parser:
                     # Function pointer (possibly array): int (*name)(params) or int (*name[N])(params)
                     self.advance()  # (
                     depth = 1
+                    gfp_comma_count = 0
+                    gfp_is_variadic = False
+                    gfp_has_params = False
                     while depth > 0 and not self.at(TokenType.EOF):
-                        if self.match(TokenType.LPAREN): depth += 1
-                        elif self.match(TokenType.RPAREN): depth -= 1
-                        else: self.advance()
+                        if self.match(TokenType.LPAREN):
+                            depth += 1
+                        elif self.match(TokenType.RPAREN):
+                            depth -= 1
+                        elif depth == 1 and self.match(TokenType.ELLIPSIS):
+                            gfp_is_variadic = True
+                        elif depth == 1 and self.match(TokenType.COMMA):
+                            gfp_comma_count += 1
+                        else:
+                            tok = self.current()
+                            if depth == 1 and tok.type == TokenType.IDENTIFIER:
+                                gfp_has_params = True
+                            self.advance()
+                    gfp_param_count = (gfp_comma_count if gfp_is_variadic
+                                       else (gfp_comma_count + 1 if gfp_has_params else 0))
                     fptr_type = TypeSpec(base=type_spec.base,
                         pointer_depth=type_spec.pointer_depth + 1,
                         struct_def=type_spec.struct_def, enum_def=type_spec.enum_def,
                         is_unsigned=type_spec.is_unsigned,
                         is_extern=type_spec.is_extern, is_static=type_spec.is_static,
                         is_ptr_array=bool(fptr_arr_sizes),
-                        array_sizes=fptr_arr_sizes if fptr_arr_sizes else None)
+                        array_sizes=fptr_arr_sizes if fptr_arr_sizes else None,
+                        func_ptr_is_variadic=gfp_is_variadic,
+                        func_ptr_param_count=gfp_param_count if gfp_is_variadic else None)
                 else:
                     # Regular function pointer variable: int (*name) = init;
                     fptr_type = TypeSpec(base=type_spec.base,
@@ -2019,9 +2067,15 @@ class Parser:
             return TypedefDecl(type_spec=fn_type, name=name, line=t.line, col=t.col)
 
         # Function pointer typedef: typedef int (*name)(params);
-        if self.at(TokenType.LPAREN) and self.peek(1).type == TokenType.STAR:
+        # Also handles Apple block pointer typedef: typedef void (^name)(params);
+        if self.at(TokenType.LPAREN) and self.peek(1).type in (TokenType.STAR, TokenType.CARET):
             self.advance()  # (
-            self.advance()  # *
+            self.advance()  # * or ^
+            # Skip qualifiers and nullability annotations between * and name
+            while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                pass
+            while self.at(TokenType.IDENTIFIER) and self.current().value in ("_Nullable", "_Nonnull", "_Null_unspecified", "__nonnull", "__nullable"):
+                self.advance()
             name = self.expect(TokenType.IDENTIFIER, "typedef name").value
             # Skip array brackets in fptr array typedef: (*name[4])
             while self.match(TokenType.LBRACKET):

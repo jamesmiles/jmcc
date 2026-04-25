@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
+from .targets import resolve_target
 
 
 # Types
@@ -15,15 +16,15 @@ class StructDef:
     is_packed: bool = False
 
     @staticmethod
-    def _eval_dim(dim):
+    def _eval_dim(dim, target=None):
         """Evaluate an array dimension expression to an integer."""
         if dim is None:
             return None
         if isinstance(dim, IntLiteral):
             return dim.value
         if isinstance(dim, BinaryOp):
-            left = StructDef._eval_dim(dim.left)
-            right = StructDef._eval_dim(dim.right)
+            left = StructDef._eval_dim(dim.left, target)
+            right = StructDef._eval_dim(dim.right, target)
             if left is not None and right is not None:
                 ops = {'+': lambda a, b: a + b, '-': lambda a, b: a - b,
                        '*': lambda a, b: a * b, '/': lambda a, b: a // b if b else 0,
@@ -32,72 +33,74 @@ class StructDef:
                 if dim.op in ops:
                     return ops[dim.op](left, right)
         if isinstance(dim, UnaryOp) and dim.op == '-':
-            val = StructDef._eval_dim(dim.operand)
+            val = StructDef._eval_dim(dim.operand, target)
             return -val if val is not None else None
         if isinstance(dim, SizeofExpr):
             if dim.is_type:
                 ts = dim.operand
-                size = ts.size_bytes()
+                size = ts.size_bytes(target)
                 if ts.struct_def and not ts.is_pointer():
-                    size = ts.struct_def.size_bytes()
+                    size = ts.struct_def.size_bytes(target)
                 if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
                     for d in ts.array_sizes:
-                        dv = StructDef._eval_dim(d)
+                        dv = StructDef._eval_dim(d, target)
                         if dv is not None:
                             size *= dv
                 return size
             else:
-                return StructDef._eval_dim(dim.operand)
+                return StructDef._eval_dim(dim.operand, target)
         if isinstance(dim, CastExpr):
-            return StructDef._eval_dim(dim.operand)
+            return StructDef._eval_dim(dim.operand, target)
         if isinstance(dim, Identifier):
             # Try enum values via EnumDef lookup (not directly accessible here; return None)
             return None
         return None
 
-    def _member_total_size(self, ts):
+    def _member_total_size(self, ts, target=None):
         """Get total size of a type including all array dimensions."""
-        size = ts.size_bytes()
+        size = ts.size_bytes(target)
         if ts.struct_def and not ts.is_pointer():
-            size = ts.struct_def.size_bytes()
+            size = ts.struct_def.size_bytes(target)
         if (ts.is_array() or ts.is_ptr_array) and ts.array_sizes:
             for dim in ts.array_sizes:
                 if dim is None:
                     return 0  # Flexible array member: size 0
-                dv = self._eval_dim(dim)
+                dv = self._eval_dim(dim, target)
                 if dv is not None:
                     size *= dv
         return size
 
-    def _member_align(self, ts):
+    def _member_align(self, ts, target=None):
         """Get alignment of a type (element alignment for arrays, recursive for structs)."""
+        target_spec = resolve_target(target)
         if ts.is_pointer():
-            return 8
+            return target_spec.layout.pointer_size
         if ts.struct_def:
-            return ts.struct_def.alignment()
+            return ts.struct_def.alignment(target)
         # For arrays, alignment is element alignment
-        return min(ts.size_bytes(), 8) if ts.size_bytes() > 0 else 1
+        size = ts.size_bytes(target)
+        return min(size, target_spec.layout.max_scalar_align) if size > 0 else 1
 
-    def alignment(self):
+    def alignment(self, target=None):
         """Return the alignment of this struct/union."""
         if self.is_packed:
             return 1
         max_align = 1
         for m in self.members:
-            ma = self._member_align(m.type_spec)
+            ma = self._member_align(m.type_spec, target)
             if ma > max_align:
                 max_align = ma
         return max_align
 
-    def _layout_members(self):
+    def _layout_members(self, target=None):
         """Compute layout for each member, with bitfield packing.
         Returns list of tuples:
           (offset, size) for non-bitfields
           (unit_offset, unit_size, bit_start, bit_width) for bitfields
         And total struct size."""
         if self.is_union:
-            return [(0, self._member_total_size(m.type_spec)) for m in self.members], \
-                   max((self._member_total_size(m.type_spec) for m in self.members), default=0)
+            return [(0, self._member_total_size(m.type_spec, target)) for m in self.members], \
+                   max((self._member_total_size(m.type_spec, target) for m in self.members), default=0)
         result = []
         total = 0
         bf_bits_used = 0  # bits consumed in current bitfield unit
@@ -106,12 +109,12 @@ class StructDef:
         for m in self.members:
             if m.bit_width is not None:
                 # Bitfield member
-                unit_size = self._member_total_size(m.type_spec)  # e.g., 4 for unsigned int
+                unit_size = self._member_total_size(m.type_spec, target)  # e.g., 4 for unsigned int
                 unit_bits = unit_size * 8
                 if bf_unit_size == 0 or bf_bits_used + m.bit_width > unit_bits:
                     # Start new bitfield unit
                     total += bf_unit_size  # close previous unit if any
-                    align = self._member_align(m.type_spec)
+                    align = self._member_align(m.type_spec, target)
                     if align > 0:
                         total = (total + align - 1) & ~(align - 1)
                     bf_unit_start = total
@@ -128,8 +131,8 @@ class StructDef:
                 total += bf_unit_size
                 bf_unit_size = 0
                 bf_bits_used = 0
-                align = self._member_align(m.type_spec)
-                actual_size = self._member_total_size(m.type_spec)
+                align = self._member_align(m.type_spec, target)
+                actual_size = self._member_total_size(m.type_spec, target)
                 # Packed structs: no alignment padding between members
                 if align > 0 and not self.is_packed:
                     total = (total + align - 1) & ~(align - 1)
@@ -138,10 +141,10 @@ class StructDef:
         total += bf_unit_size  # close final bitfield unit
         return result, total
 
-    def bitfield_info(self, name):
+    def bitfield_info(self, name, target=None):
         """For a bitfield member, return (unit_offset, unit_size, bit_start, bit_width).
         For a non-bitfield or missing member, returns None."""
-        layout, _ = self._layout_members()
+        layout, _ = self._layout_members(target)
         for i, m in enumerate(self.members):
             if m.name == name:
                 entry = layout[i]
@@ -150,33 +153,33 @@ class StructDef:
                 return None
         return None
 
-    def size_bytes(self):
+    def size_bytes(self, target=None):
         if self.is_union:
-            raw = max((self._member_total_size(m.type_spec) for m in self.members), default=0)
+            raw = max((self._member_total_size(m.type_spec, target) for m in self.members), default=0)
             # Round up to alignment
-            a = self.alignment()
+            a = self.alignment(target)
             if a > 1 and raw > 0:
                 raw = (raw + a - 1) & ~(a - 1)
             return raw
-        _, total = self._layout_members()
+        _, total = self._layout_members(target)
         # Align total to struct alignment
-        max_align = self.alignment()
+        max_align = self.alignment(target)
         if total > 0 and max_align > 1:
             total = (total + max_align - 1) & ~(max_align - 1)
         return total
 
-    def member_offset(self, name):
+    def member_offset(self, name, target=None):
         if self.is_union:
             # Union: all members at offset 0, but also check anonymous sub-members
             for m in self.members:
                 if m.name == name:
                     return 0
                 if m.name == "" and m.type_spec.struct_def:
-                    sub_off = m.type_spec.struct_def.member_offset(name)
+                    sub_off = m.type_spec.struct_def.member_offset(name, target)
                     if sub_off is not None:
                         return sub_off
             return None
-        layout, _ = self._layout_members()
+        layout, _ = self._layout_members(target)
         for i, m in enumerate(self.members):
             entry = layout[i]
             off = entry[0]  # works for both 2-tuple and 4-tuple (bitfield)
@@ -184,7 +187,7 @@ class StructDef:
                 return off
             # Search anonymous struct/union members
             if m.name == "" and m.type_spec.struct_def:
-                sub_off = m.type_spec.struct_def.member_offset(name)
+                sub_off = m.type_spec.struct_def.member_offset(name, target)
                 if sub_off is not None:
                     return off + sub_off
         return None
@@ -235,6 +238,8 @@ class TypeSpec:
     is_func_ptr: bool = False  # True for function pointer typedefs
     func_ptr_native_depth: int = 0  # pointer_depth at which this type is callable (for func ptr typedefs)
     is_func_type: bool = False  # True for function-type typedefs: typedef void fn(params); — fn* is callable
+    func_ptr_is_variadic: bool = False  # True if the pointed-to function is variadic (has ...)
+    func_ptr_param_count: Optional[int] = None  # number of fixed named params for variadic func ptr types
     array_sizes: Optional[List[Optional['Expr']]] = None  # None = unsized, e.g. int[]
     struct_def: Optional[StructDef] = None  # populated for struct types
     enum_def: Optional[EnumDef] = None  # populated for enum types
@@ -257,14 +262,15 @@ class TypeSpec:
     def is_enum(self):
         return self.enum_def is not None
 
-    def size_bytes(self):
-        """Return size in bytes for basic types (x86-64)."""
+    def size_bytes(self, target=None):
+        """Return size in bytes for the selected target."""
+        target_spec = resolve_target(target)
         if self.pointer_depth > 0:
-            return 8
+            return target_spec.layout.pointer_size
         if self.struct_def:
-            return self.struct_def.size_bytes()
+            return self.struct_def.size_bytes(target)
         if self.enum_def:
-            return 4  # enums are int-sized
+            return target_spec.layout.enum_size
         sizes = {
             "_Bool": 1,
             "char": 1,
@@ -275,7 +281,7 @@ class TypeSpec:
             "__int128": 16,
             "float": 4,
             "double": 8,
-            "long double": 16,
+            "long double": target_spec.layout.long_double_size,
             "void": 0,
         }
         return sizes.get(self.base, 4)
