@@ -951,10 +951,12 @@ unsigned int ntohl(unsigned int netlong);
 #define AF_LOCAL AF_UNIX
 #define AF_INET 2
 #define AF_INET6 10
+#define AF_PACKET 17
 #define PF_UNSPEC 0
 #define PF_UNIX 1
 #define PF_INET 2
 #define PF_INET6 10
+#define PF_PACKET AF_PACKET
 #define SOL_SOCKET 1
 #define SO_DEBUG 1
 #define SO_REUSEADDR 2
@@ -995,6 +997,21 @@ int sendto(int sockfd, const void *buf, unsigned long len, int flags, const stru
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 int send(int sockfd, const void *buf, unsigned long len, int flags);
 int recv(int sockfd, void *buf, unsigned long len, int flags);
+""",
+        "netpacket/packet.h": """
+#ifndef _JMCC_NETPACKET_PACKET_H
+#define _JMCC_NETPACKET_PACKET_H
+#include <sys/socket.h>
+struct sockaddr_ll {
+    unsigned short sll_family;
+    unsigned short sll_protocol;
+    int sll_ifindex;
+    unsigned short sll_hatype;
+    unsigned char sll_pkttype;
+    unsigned char sll_halen;
+    unsigned char sll_addr[8];
+};
+#endif
 """,
         "sys/wait.h": """
 #ifndef _JMCC_SYS_WAIT_H
