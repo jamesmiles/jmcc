@@ -1106,6 +1106,12 @@ struct addrinfo {
 #define AI_ADDRCONFIG   0x0020
 #define NI_NUMERICHOST  0x01
 #define NI_NUMERICSERV  0x02
+#define HOST_NOT_FOUND  1
+#define TRY_AGAIN       2
+#define NO_RECOVERY     3
+#define NO_DATA         4
+#define NO_ADDRESS      NO_DATA
+static int h_errno;
 struct hostent *gethostbyname(const char *name);
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 void freeaddrinfo(struct addrinfo *res);
