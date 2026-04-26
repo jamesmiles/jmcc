@@ -1410,6 +1410,8 @@ class Parser:
         extra_ptrs = 0
         while self.match(TokenType.STAR):
             extra_ptrs += 1
+            while self.match(TokenType.CONST, TokenType.VOLATILE, TokenType.RESTRICT):
+                pass
 
         # Function pointer or pointer-to-array: (*name)(args) or (*name)[size]
         # Also handles const-qualified pointers: (* const name)
