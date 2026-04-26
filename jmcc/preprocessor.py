@@ -976,6 +976,7 @@ unsigned int ntohl(unsigned int netlong);
 #define SHUT_RD 0
 #define SHUT_WR 1
 #define SHUT_RDWR 2
+#define SOMAXCONN 128
 typedef unsigned int socklen_t;
 struct sockaddr { unsigned short sa_family; char sa_data[14]; };
 struct sockaddr_storage {
