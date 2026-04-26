@@ -941,6 +941,7 @@ unsigned int htonl(unsigned int hostlong);
 unsigned int ntohl(unsigned int netlong);
 """,
         "sys/socket.h": """
+#include <sys/uio.h>
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
 #define SOCK_RAW 3
@@ -984,6 +985,21 @@ struct sockaddr_storage {
     char __ss_padding[126];
     unsigned long __ss_align;
 };
+struct msghdr {
+    void *msg_name;
+    socklen_t msg_namelen;
+    struct iovec *msg_iov;
+    unsigned long msg_iovlen;
+    void *msg_control;
+    unsigned long msg_controllen;
+    int msg_flags;
+};
+struct cmsghdr {
+    unsigned long cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
+};
+#define SCM_RIGHTS 0x01
 int socket(int domain, int type, int protocol);
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
@@ -998,6 +1014,8 @@ int sendto(int sockfd, const void *buf, unsigned long len, int flags, const stru
 int recvfrom(int sockfd, void *buf, unsigned long len, int flags, struct sockaddr *src, socklen_t *addrlen);
 int send(int sockfd, const void *buf, unsigned long len, int flags);
 int recv(int sockfd, void *buf, unsigned long len, int flags);
+int sendmsg(int sockfd, const struct msghdr *msg, int flags);
+int recvmsg(int sockfd, struct msghdr *msg, int flags);
 """,
         "netpacket/packet.h": """
 #ifndef _JMCC_NETPACKET_PACKET_H
