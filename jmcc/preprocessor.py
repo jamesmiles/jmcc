@@ -1087,6 +1087,12 @@ struct hostent {
     int h_length;
     char **h_addr_list;
 };
+struct servent {
+    char *s_name;
+    char **s_aliases;
+    int s_port;
+    char *s_proto;
+};
 struct addrinfo {
     int ai_flags;
     int ai_family;
@@ -1113,6 +1119,8 @@ struct addrinfo {
 #define NO_ADDRESS      NO_DATA
 static int h_errno;
 struct hostent *gethostbyname(const char *name);
+struct servent *getservbyname(const char *name, const char *proto);
+struct servent *getservbyport(int port, const char *proto);
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 void freeaddrinfo(struct addrinfo *res);
 int getnameinfo(const struct sockaddr *sa, unsigned int salen, char *host, unsigned int hostlen, char *serv, unsigned int servlen, int flags);
