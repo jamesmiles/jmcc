@@ -867,6 +867,7 @@ int kill(int pid, int sig);
 #define SIGPROF 27
 #define SIGWINCH 28
 #define SIGIO 29
+#define _NSIG 65
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
@@ -910,6 +911,8 @@ typedef unsigned int in_addr_t;
 #define INADDR_ANY ((in_addr_t)0)
 #define INADDR_BROADCAST ((in_addr_t)0xffffffff)
 #define INADDR_LOOPBACK ((in_addr_t)0x7f000001)
+#define INET_ADDRSTRLEN 16
+#define INET6_ADDRSTRLEN 46
 struct in_addr { in_addr_t s_addr; };
 struct sockaddr_in {
     unsigned short sin_family;
