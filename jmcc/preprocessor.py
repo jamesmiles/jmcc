@@ -1093,6 +1093,11 @@ struct servent {
     int s_port;
     char *s_proto;
 };
+struct protoent {
+    char *p_name;
+    char **p_aliases;
+    int p_proto;
+};
 struct addrinfo {
     int ai_flags;
     int ai_family;
@@ -1121,6 +1126,8 @@ static int h_errno;
 struct hostent *gethostbyname(const char *name);
 struct servent *getservbyname(const char *name, const char *proto);
 struct servent *getservbyport(int port, const char *proto);
+struct protoent *getprotobyname(const char *name);
+struct protoent *getprotobynumber(int proto);
 int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);
 void freeaddrinfo(struct addrinfo *res);
 int getnameinfo(const struct sockaddr *sa, unsigned int salen, char *host, unsigned int hostlen, char *serv, unsigned int servlen, int flags);
