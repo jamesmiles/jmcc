@@ -1002,6 +1002,11 @@ int recv(int sockfd, void *buf, unsigned long len, int flags);
 #ifndef _JMCC_NETPACKET_PACKET_H
 #define _JMCC_NETPACKET_PACKET_H
 #include <sys/socket.h>
+#define PACKET_HOST 0
+#define PACKET_BROADCAST 1
+#define PACKET_MULTICAST 2
+#define PACKET_OTHERHOST 3
+#define PACKET_OUTGOING 4
 struct sockaddr_ll {
     unsigned short sll_family;
     unsigned short sll_protocol;
