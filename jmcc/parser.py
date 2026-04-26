@@ -66,6 +66,7 @@ class Parser:
         TokenType.UNSIGNED, TokenType.BOOL, TokenType.STRUCT, TokenType.UNION,
         TokenType.ENUM, TokenType.CONST, TokenType.VOLATILE, TokenType.STATIC,
         TokenType.EXTERN, TokenType.INLINE, TokenType.REGISTER, TokenType.ATOMIC,
+        TokenType.NORETURN,
         TokenType.AUTO, TokenType.THREAD_LOCAL,
     }
 
@@ -163,6 +164,8 @@ class Parser:
                 self.advance()
             elif t.type == TokenType.INLINE:
                 has_storage_class = True
+                self.advance()
+            elif t.type == TokenType.NORETURN:
                 self.advance()
             elif t.type == TokenType.REGISTER:
                 has_storage_class = True
@@ -2063,6 +2066,7 @@ class Parser:
                                 is_unsigned=type_spec.is_unsigned, is_func_type=True,
                                 func_ptr_native_depth=1)
             self.typedefs[name] = fn_type
+            self.skip_attribute()
             self.expect(TokenType.SEMICOLON, "';'")
             return TypedefDecl(type_spec=fn_type, name=name, line=t.line, col=t.col)
 
@@ -2097,6 +2101,7 @@ class Parser:
                                   is_unsigned=type_spec.is_unsigned, is_func_ptr=True,
                                   func_ptr_native_depth=type_spec.pointer_depth + 1)
             self.typedefs[name] = fptr_type
+            self.skip_attribute()
             return TypedefDecl(type_spec=fptr_type, name=name, line=t.line, col=t.col)
 
         name = self.expect(TokenType.IDENTIFIER, "typedef name").value
@@ -2114,6 +2119,7 @@ class Parser:
                                 is_unsigned=type_spec.is_unsigned, is_func_type=True,
                                 func_ptr_native_depth=1)
             self.typedefs[name] = fn_type
+            self.skip_attribute()
             self.expect(TokenType.SEMICOLON, "';'")
             return TypedefDecl(type_spec=fn_type, name=name, line=t.line, col=t.col)
 
@@ -2289,6 +2295,19 @@ class Parser:
         if self.at(TokenType.IDENTIFIER):
             name = self.advance().value
         self.skip_attribute()  # e.g. int x __attribute__((unused))
+        if self.at(TokenType.LPAREN):
+            depth = 0
+            while self.match(TokenType.LPAREN):
+                depth += 1
+            while depth > 0 and not self.at(TokenType.EOF):
+                if self.match(TokenType.LPAREN):
+                    depth += 1
+                elif self.match(TokenType.RPAREN):
+                    depth -= 1
+                else:
+                    self.advance()
+            type_spec.pointer_depth += 1  # function type decays to pointer in params
+            return Param(type_spec=type_spec, name=name)
         # Array parameter: int a[] or int a[100] or int a[const 5] — decays to pointer
         # Supports multidimensional: int a[][2], int a[n][m]
         if self.match(TokenType.LBRACKET):

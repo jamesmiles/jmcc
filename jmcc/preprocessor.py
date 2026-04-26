@@ -613,6 +613,8 @@ int wprintf(const wchar_t *format, ...);
 #define _SC_NPROCESSORS_ONLN 84
 #define _SC_PHYS_PAGES 85
 #define _SC_AVPHYS_PAGES 86
+#define _SC_GETGR_R_SIZE_MAX 69
+#define _SC_GETPW_R_SIZE_MAX 70
 typedef int ssize_t;
 int access(const char *path, int mode);
 int close(int fd);
@@ -940,6 +942,7 @@ unsigned int ntohl(unsigned int netlong);
 #define SOCK_DGRAM 2
 #define SOCK_RAW 3
 #define SOCK_NONBLOCK 00004000
+#define SOCK_CLOEXEC 02000000
 #define AF_UNSPEC 0
 #define AF_UNIX 1
 #define AF_LOCAL AF_UNIX
