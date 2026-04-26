@@ -1618,6 +1618,7 @@ class Parser:
         if parenthesized:
             self.expect(TokenType.RPAREN, "')'")
 
+        self.skip_attribute()  # e.g. int x __attribute__((aligned(8)));
         init = None
         if self.match(TokenType.ASSIGN):
             if self.at(TokenType.LBRACE):
