@@ -1000,6 +1000,12 @@ struct cmsghdr {
     int cmsg_type;
 };
 #define SCM_RIGHTS 0x01
+#define CMSG_ALIGN(len) (((len) + sizeof(unsigned long) - 1) & ~(sizeof(unsigned long) - 1))
+#define CMSG_SPACE(len) (CMSG_ALIGN(sizeof(struct cmsghdr)) + CMSG_ALIGN(len))
+#define CMSG_LEN(len) (CMSG_ALIGN(sizeof(struct cmsghdr)) + (len))
+#define CMSG_DATA(cmsg) ((unsigned char *)(cmsg) + CMSG_ALIGN(sizeof(struct cmsghdr)))
+#define CMSG_FIRSTHDR(msg) ((msg)->msg_controllen >= sizeof(struct cmsghdr) ? (struct cmsghdr *)(msg)->msg_control : (struct cmsghdr *)0)
+#define CMSG_NXTHDR(msg, cmsg) (((unsigned char *)(cmsg) + CMSG_ALIGN((cmsg)->cmsg_len) + CMSG_ALIGN(sizeof(struct cmsghdr)) > (unsigned char *)(msg)->msg_control + (msg)->msg_controllen) ? (struct cmsghdr *)0 : (struct cmsghdr *)((unsigned char *)(cmsg) + CMSG_ALIGN((cmsg)->cmsg_len)))
 int socket(int domain, int type, int protocol);
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
