@@ -1114,6 +1114,64 @@ size_t regerror(int errcode, const regex_t *preg, char *errbuf, size_t errbuf_si
 void regfree(regex_t *preg);
 #endif
 """,
+        "time.h": """
+#ifndef _JMCC_TIME_H
+#define _JMCC_TIME_H
+#include <stddef.h>
+typedef long time_t;
+typedef long clock_t;
+struct tm {
+    int tm_sec;
+    int tm_min;
+    int tm_hour;
+    int tm_mday;
+    int tm_mon;
+    int tm_year;
+    int tm_wday;
+    int tm_yday;
+    int tm_isdst;
+    long tm_gmtoff;
+    char *tm_zone;
+};
+struct timespec {
+    time_t tv_sec;
+    long   tv_nsec;
+};
+#define CLOCKS_PER_SEC 1000000
+#define CLOCK_REALTIME           0
+#define CLOCK_MONOTONIC          6
+#define CLOCK_PROCESS_CPUTIME_ID 12
+#define CLOCK_THREAD_CPUTIME_ID  16
+time_t time(time_t *t);
+double difftime(time_t end, time_t begin);
+clock_t clock(void);
+struct tm *gmtime(const time_t *t);
+struct tm *localtime(const time_t *t);
+time_t mktime(struct tm *tm);
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
+char *asctime(const struct tm *tm);
+char *ctime(const time_t *t);
+int clock_gettime(int clk_id, struct timespec *tp);
+int nanosleep(const struct timespec *req, struct timespec *rem);
+#endif
+""",
+        "dlfcn.h": """
+#ifndef _JMCC_DLFCN_H
+#define _JMCC_DLFCN_H
+#define RTLD_LAZY    0x1
+#define RTLD_NOW     0x2
+#define RTLD_LOCAL   0x4
+#define RTLD_GLOBAL  0x8
+#define RTLD_NOLOAD  0x10
+#define RTLD_NODELETE 0x80
+#define RTLD_DEFAULT ((void *)-2)
+#define RTLD_NEXT    ((void *)-1)
+void *dlopen(const char *path, int mode);
+int dlclose(void *handle);
+void *dlsym(void *handle, const char *symbol);
+char *dlerror(void);
+#endif
+""",
         "sys/types.h": """
 #ifndef _JMCC_SYS_TYPES_H
 #define _JMCC_SYS_TYPES_H
