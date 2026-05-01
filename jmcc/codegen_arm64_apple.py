@@ -1335,6 +1335,15 @@ class Arm64AppleCodeGen:
             label = self.string_label(value.value)
             self.emit(f"    .quad {label}")
             return
+        # (Cast)"string" — unwrap repeated casts to a string literal pointer init
+        if isinstance(value, CastExpr) and type_spec is not None and type_spec.is_pointer():
+            inner = value.operand
+            while isinstance(inner, CastExpr):
+                inner = inner.operand
+            if isinstance(inner, StringLiteral):
+                label = self.string_label(inner.value)
+                self.emit(f"    .quad {label}")
+                return
         if isinstance(value, Identifier) and value.name in self.functions:
             self.emit(f"    .quad {self.mangle(value.name)}")
             return
@@ -4427,7 +4436,13 @@ class Arm64AppleCodeGen:
                 self.gen_expr(expr.array)
         else:
             array_type = self.get_expr_type(expr.array)
-            if array_type is not None and (array_type.is_array() or array_type.is_ptr_array):
+            # Ternary/comma/cast that yields an array: evaluate as rvalue;
+            # the result IS the decayed pointer (each branch's gen_expr
+            # already returns the array's base address for array types).
+            non_lvalue_array = isinstance(expr.array, (TernaryOp, CommaExpr))
+            if non_lvalue_array:
+                self.gen_expr(expr.array)
+            elif array_type is not None and (array_type.is_array() or array_type.is_ptr_array):
                 self.gen_lvalue_addr(expr.array)
             else:
                 self.gen_expr(expr.array)

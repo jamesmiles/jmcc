@@ -1155,6 +1155,57 @@ int clock_gettime(int clk_id, struct timespec *tp);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 #endif
 """,
+        "sys/mount.h": """
+#ifndef _JMCC_SYS_MOUNT_H
+#define _JMCC_SYS_MOUNT_H
+#include <sys/types.h>
+#define MFSTYPENAMELEN 16
+#define MAXPATHLEN 1024
+struct statfs {
+    unsigned int   f_bsize;
+    int            f_iosize;
+    unsigned long long f_blocks;
+    unsigned long long f_bfree;
+    unsigned long long f_bavail;
+    unsigned long long f_files;
+    unsigned long long f_ffree;
+    int            f_fsid[2];
+    unsigned int   f_owner;
+    unsigned int   f_type;
+    unsigned int   f_flags;
+    unsigned int   f_fssubtype;
+    char           f_fstypename[MFSTYPENAMELEN];
+    char           f_mntonname[MAXPATHLEN];
+    char           f_mntfromname[MAXPATHLEN];
+    unsigned int   f_flags_ext;
+    unsigned int   f_reserved[7];
+};
+int statfs(const char *path, struct statfs *buf);
+int fstatfs(int fd, struct statfs *buf);
+#endif
+""",
+        "sys/statvfs.h": """
+#ifndef _JMCC_SYS_STATVFS_H
+#define _JMCC_SYS_STATVFS_H
+#include <sys/types.h>
+struct statvfs {
+    unsigned long f_bsize;
+    unsigned long f_frsize;
+    unsigned long long f_blocks;
+    unsigned long long f_bfree;
+    unsigned long long f_bavail;
+    unsigned long long f_files;
+    unsigned long long f_ffree;
+    unsigned long long f_favail;
+    unsigned long f_fsid;
+    unsigned long f_flag;
+    unsigned long f_namemax;
+    char f_basetype[16];
+};
+int statvfs(const char *path, struct statvfs *buf);
+int fstatvfs(int fd, struct statvfs *buf);
+#endif
+""",
         "dlfcn.h": """
 #ifndef _JMCC_DLFCN_H
 #define _JMCC_DLFCN_H
@@ -1273,24 +1324,91 @@ typedef unsigned long uintmax_t;
 extern int errno;
 #define EPERM    1
 #define ENOENT   2
+#define ESRCH    3
 #define EINTR    4
 #define EIO      5
+#define ENXIO    6
+#define ENOEXEC  8
+#define EBADF    9
+#define ECHILD   10
+#define EDEADLK  11
 #define ENOMEM   12
 #define EACCES   13
 #define EFAULT   14
+#define ENOTBLK  15
 #define EBUSY    16
 #define EEXIST   17
+#define EXDEV    18
 #define ENODEV   19
 #define ENOTDIR  20
 #define EISDIR   21
 #define EINVAL   22
+#define ENFILE   23
 #define EMFILE   24
+#define ENOTTY   25
+#define ETXTBSY  26
+#define EFBIG    27
 #define ENOSPC   28
+#define ESPIPE   29
+#define EROFS    30
+#define EMLINK   31
 #define EPIPE    32
+#define EDOM     33
 #define ERANGE   34
-#define EWOULDBLOCK 35
 #define EAGAIN   35
-#define ENOSYS   78
+#define EWOULDBLOCK EAGAIN
+#define EINPROGRESS 36
+#define EALREADY 37
+#define ENOTSOCK 38
+#define EDESTADDRREQ 39
+#define EMSGSIZE 40
+#define EPROTOTYPE 41
+#define ENOPROTOOPT 42
+#define EPROTONOSUPPORT 43
+#define ESOCKTNOSUPPORT 44
+#define ENOTSUP  45
+#define EOPNOTSUPP ENOTSUP
+#define EPFNOSUPPORT 46
+#define EAFNOSUPPORT 47
+#define EADDRINUSE 48
+#define EADDRNOTAVAIL 49
+#define ENETDOWN 50
+#define ENETUNREACH 51
+#define ENETRESET 52
+#define ECONNABORTED 53
+#define ECONNRESET 54
+#define ENOBUFS 55
+#define EISCONN 56
+#define ENOTCONN 57
+#define ESHUTDOWN 58
+#define ETOOMANYREFS 59
+#define ETIMEDOUT 60
+#define ECONNREFUSED 61
+#define ELOOP 62
+#define ENAMETOOLONG 63
+#define EHOSTDOWN 64
+#define EHOSTUNREACH 65
+#define ENOTEMPTY 66
+#define EUSERS 68
+#define EDQUOT 69
+#define ESTALE 70
+#define EREMOTE 71
+#define ENOLCK 77
+#define ENOSYS 78
+#define EFTYPE 79
+#define EAUTH 80
+#define EPWROFF 82
+#define EDEVERR 83
+#define EOVERFLOW 84
+#define ECANCELED 89
+#define EIDRM 90
+#define ENOMSG 91
+#define EILSEQ 92
+#define ENOATTR 93
+#define EBADMSG 94
+#define EMULTIHOP 95
+#define ENODATA 96
+#define ENOLINK 97
 """,
         "dirent.h": """
 typedef struct _DIR DIR;
