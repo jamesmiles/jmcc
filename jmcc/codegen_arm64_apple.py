@@ -1438,9 +1438,18 @@ class Arm64AppleCodeGen:
         self.error("arm64-apple-darwin backend does not yet support this global initializer value", line, col)
 
     def alloc_slot(self, name: str, type_spec=None):
+        new_size = self.slot_size(type_spec)
         if name in self.locals:
-            return
-        self.stack_size += self.slot_size(type_spec)
+            # Two declarations of `name` in disjoint scopes: keep the one with
+            # the largest slot so writes via the larger type can't run past
+            # the slot. Reallocate at a fresh offset; the old slot is leaked.
+            existing_offset = self.locals[name]
+            existing_type = self.local_types.get(name)
+            existing_size = self.slot_size(existing_type)
+            if new_size <= existing_size:
+                return
+            # Need bigger; fall through to allocate a new slot.
+        self.stack_size += new_size
         self.locals[name] = self.stack_size
         self.local_types[name] = type_spec
         if type_spec is not None and self.is_array_type(type_spec) and self._has_vla_dim(type_spec):
