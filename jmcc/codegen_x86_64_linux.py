@@ -3967,12 +3967,27 @@ class X86_64LinuxCodeGen:
                         self.emit(f"    shrq ${bit_start}, %rax")
                     else:
                         self.emit(f"    shrl ${bit_start}, %eax")
-                mask = (1 << bit_width) - 1
-                if unit_size == 8:
-                    self.emit(f"    movq ${mask}, %rcx")
-                    self.emit(f"    andq %rcx, %rax")
+                # Extract with correct sign handling
+                member_t = sdef.member_type(expr.member)
+                is_unsigned = (member_t is None or member_t.is_unsigned
+                               or member_t.base == "_Bool")
+                if not is_unsigned:
+                    # Sign-extend: shift field's sign bit to MSB, then arithmetic shift back
+                    if unit_size == 8:
+                        shift = 64 - bit_width
+                        self.emit(f"    shlq ${shift}, %rax")
+                        self.emit(f"    sarq ${shift}, %rax")
+                    else:
+                        shift = 32 - bit_width
+                        self.emit(f"    shll ${shift}, %eax")
+                        self.emit(f"    sarl ${shift}, %eax")
                 else:
-                    self.emit(f"    andl ${mask}, %eax")
+                    mask = (1 << bit_width) - 1
+                    if unit_size == 8:
+                        self.emit(f"    movq ${mask}, %rcx")
+                        self.emit(f"    andq %rcx, %rax")
+                    else:
+                        self.emit(f"    andl ${mask}, %eax")
                 return
 
         self.gen_member_addr(expr)

@@ -4586,10 +4586,15 @@ class Arm64AppleCodeGen:
                     self.emit("    ldr x0, [x0]")
                 else:
                     self.emit("    ldr w0, [x0]")
-                if bit_start > 0:
-                    self.emit(f"    lsr {'x0' if unit_size == 8 else 'w0'}, {'x0' if unit_size == 8 else 'w0'}, #{bit_start}")
-                mask = (1 << bit_width) - 1
-                self.emit(f"    and w0, w0, #{mask}")
+                # Use sbfx/ubfx to extract the field with correct sign handling.
+                member_t = sdef.member_type(expr.member)
+                is_unsigned = (member_t is None or member_t.is_unsigned
+                               or member_t.base == "_Bool")
+                reg = 'x0' if unit_size == 8 else 'w0'
+                if is_unsigned:
+                    self.emit(f"    ubfx {reg}, {reg}, #{bit_start}, #{bit_width}")
+                else:
+                    self.emit(f"    sbfx {reg}, {reg}, #{bit_start}, #{bit_width}")
                 return
         self.gen_member_addr(expr)
         member_type = self.get_expr_type(expr)
