@@ -3359,7 +3359,66 @@ class Arm64AppleCodeGen:
             if isinstance(expr.target, Identifier):
                 self.store_var(expr.target.name, line=expr.line, col=expr.col)
             else:
-                # Store result back via address
+                # Bitfield compound assignment: read-modify-write into storage unit
+                if isinstance(expr.target, MemberAccess):
+                    obj_type = self.get_expr_type(expr.target.obj)
+                    sdef = obj_type.struct_def if obj_type else None
+                    if sdef:
+                        bf = sdef.bitfield_info(expr.target.member, self.target)
+                        if bf:
+                            unit_off, unit_size, bit_start, bit_width = bf
+                            mask = (1 << bit_width) - 1
+                            member_type = sdef.member_type(expr.target.member)
+                            is_unsigned_bf = member_type.is_unsigned or member_type.base == "_Bool"
+                            self.push_x0()
+                            self.gen_member_addr(expr.target)
+                            self.emit("    mov x9, x0")  # x9 = storage unit addr
+                            if unit_size == 8:
+                                self.emit("    ldr x10, [x9]")
+                            elif unit_size == 2:
+                                self.emit("    ldrh w10, [x9]")
+                            elif unit_size == 1:
+                                self.emit("    ldrb w10, [x9]")
+                            else:
+                                self.emit("    ldr w10, [x9]")
+                            clear_mask = (~(mask << bit_start)) & ((1 << (unit_size * 8)) - 1)
+                            if unit_size == 8:
+                                self.emit_int_constant(clear_mask, "x11")
+                                self.emit("    and x10, x10, x11")
+                            else:
+                                self.emit_int_constant(clear_mask & 0xFFFFFFFF, "w11")
+                                self.emit("    and w10, w10, w11")
+                            self.pop_reg("x0")
+                            if unit_size == 8:
+                                self.emit(f"    and x0, x0, #{mask}")
+                                if bit_start > 0:
+                                    self.emit(f"    lsl x0, x0, #{bit_start}")
+                                self.emit("    orr x10, x10, x0")
+                                self.emit("    str x10, [x9]")
+                                reg = "x10"
+                            else:
+                                self.emit(f"    and w0, w0, #{mask}")
+                                if bit_start > 0:
+                                    self.emit(f"    lsl w0, w0, #{bit_start}")
+                                self.emit("    orr w10, w10, w0")
+                                if unit_size == 1:
+                                    self.emit("    strb w10, [x9]")
+                                elif unit_size == 2:
+                                    self.emit("    strh w10, [x9]")
+                                else:
+                                    self.emit("    str w10, [x9]")
+                                reg = "w10"
+                            # Return the canonical (sign/zero-extended) bitfield value
+                            if is_unsigned_bf:
+                                self.emit(f"    ubfx {reg}, {reg}, #{bit_start}, #{bit_width}")
+                            else:
+                                self.emit(f"    sbfx {reg}, {reg}, #{bit_start}, #{bit_width}")
+                            if unit_size == 8:
+                                self.emit("    mov x0, x10")
+                            else:
+                                self.emit("    mov x0, x10" if wide else "    mov w0, w10")
+                            return
+                # Plain store for non-bitfield targets
                 self.push_x0()
                 self.gen_lvalue_addr(expr.target)
                 self.pop_reg("x1")

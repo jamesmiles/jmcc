@@ -5100,6 +5100,136 @@ class X86_64LinuxCodeGen:
                 self._gen_i128_compound_assign(expr, op, target_type)
                 return
 
+            # Bitfield compound assignment: extract current field value, apply op,
+            # then read-modify-write the storage unit.
+            if isinstance(expr.target, MemberAccess):
+                obj_type = self.get_expr_type(expr.target.obj)
+                sdef = obj_type.struct_def if obj_type else None
+                if sdef:
+                    bf = sdef.bitfield_info(expr.target.member)
+                    if bf:
+                        unit_off, unit_size, bit_start, bit_width = bf
+                        mask = (1 << bit_width) - 1
+                        member_type = sdef.member_type(expr.target.member)
+                        is_unsigned_bf = member_type.is_unsigned or member_type.base == "_Bool"
+                        is_long_unit = unit_size == 8
+
+                        # Get storage unit address and save it
+                        self.gen_member_addr(expr.target)
+                        self.emit("    pushq %rax")   # save storage unit addr
+
+                        # Load storage unit, extract current bitfield value
+                        if is_long_unit:
+                            self.emit("    movq (%rax), %rax")
+                        elif unit_size == 2:
+                            self.emit("    movzwl (%rax), %eax")
+                        elif unit_size == 1:
+                            self.emit("    movzbl (%rax), %eax")
+                        else:
+                            self.emit("    movl (%rax), %eax")
+
+                        if bit_start > 0:
+                            if is_long_unit:
+                                self.emit(f"    shrq ${bit_start}, %rax")
+                            else:
+                                self.emit(f"    shrl ${bit_start}, %eax")
+
+                        if is_unsigned_bf:
+                            self.emit(f"    andl ${mask}, %eax")
+                        else:
+                            sign_shift = 32 - bit_width
+                            self.emit(f"    shll ${sign_shift}, %eax")
+                            self.emit(f"    sarl ${sign_shift}, %eax")
+
+                        # Save current bitfield value, evaluate RHS
+                        self.emit("    pushq %rax")
+                        self.gen_expr(expr.value)
+                        self.emit("    movl %eax, %ecx")   # ecx = rhs
+                        self.emit("    popq %rax")          # rax = current bitfield value
+
+                        # Apply op on extracted bitfield value (always fits in 32 bits)
+                        if op == "+":
+                            self.emit("    addl %ecx, %eax")
+                        elif op == "-":
+                            self.emit("    subl %ecx, %eax")
+                        elif op == "*":
+                            self.emit("    imull %ecx, %eax")
+                        elif op == "/":
+                            if is_unsigned_bf:
+                                self.emit("    xorl %edx, %edx")
+                                self.emit("    divl %ecx")
+                            else:
+                                self.emit("    cdq")
+                                self.emit("    idivl %ecx")
+                        elif op == "%":
+                            if is_unsigned_bf:
+                                self.emit("    xorl %edx, %edx")
+                                self.emit("    divl %ecx")
+                            else:
+                                self.emit("    cdq")
+                                self.emit("    idivl %ecx")
+                            self.emit("    movl %edx, %eax")
+                        elif op == "&":
+                            self.emit("    andl %ecx, %eax")
+                        elif op == "|":
+                            self.emit("    orl %ecx, %eax")
+                        elif op == "^":
+                            self.emit("    xorl %ecx, %eax")
+                        elif op == "<<":
+                            self.emit("    shll %cl, %eax")
+                        elif op == ">>":
+                            if is_unsigned_bf:
+                                self.emit("    shrl %cl, %eax")
+                            else:
+                                self.emit("    sarl %cl, %eax")
+
+                        # RMW: reload storage unit, clear field bits, merge new value, store
+                        self.emit("    popq %rcx")   # rcx = storage unit address
+                        clear_mask = (~(mask << bit_start)) & ((1 << (unit_size * 8)) - 1)
+                        if is_long_unit:
+                            self.emit("    movq (%rcx), %rdx")
+                            self.emit(f"    movabsq ${clear_mask}, %r11")
+                            self.emit(f"    andq %r11, %rdx")
+                            self.emit(f"    movabsq ${mask}, %r11")
+                            self.emit(f"    andq %r11, %rax")
+                            if bit_start > 0:
+                                self.emit(f"    shlq ${bit_start}, %rax")
+                            self.emit(f"    orq %rdx, %rax")
+                            self.emit(f"    movq %rax, (%rcx)")
+                            # Canonicalize return value
+                            if bit_start > 0:
+                                self.emit(f"    shrq ${bit_start}, %rax")
+                            if is_unsigned_bf:
+                                self.emit(f"    movabsq ${mask}, %r11")
+                                self.emit(f"    andq %r11, %rax")
+                            else:
+                                sign_shift = 64 - bit_width
+                                self.emit(f"    shlq ${sign_shift}, %rax")
+                                self.emit(f"    sarq ${sign_shift}, %rax")
+                        else:
+                            self.emit("    movl (%rcx), %edx")
+                            self.emit(f"    andl ${clear_mask & 0xFFFFFFFF}, %edx")
+                            self.emit(f"    andl ${mask}, %eax")
+                            if bit_start > 0:
+                                self.emit(f"    shll ${bit_start}, %eax")
+                            self.emit(f"    orl %edx, %eax")
+                            if unit_size == 4:
+                                self.emit(f"    movl %eax, (%rcx)")
+                            elif unit_size == 2:
+                                self.emit(f"    movw %ax, (%rcx)")
+                            else:
+                                self.emit(f"    movb %al, (%rcx)")
+                            # Canonicalize return value
+                            if bit_start > 0:
+                                self.emit(f"    shrl ${bit_start}, %eax")
+                            if is_unsigned_bf:
+                                self.emit(f"    andl ${mask}, %eax")
+                            else:
+                                sign_shift = 32 - bit_width
+                                self.emit(f"    shll ${sign_shift}, %eax")
+                                self.emit(f"    sarl ${sign_shift}, %eax")
+                        return
+
             if is_float_target and op in ("+", "-", "*", "/"):
                 # Float compound assignment: a += 1.0
                 is_float32 = target_type and target_type.base == "float"
