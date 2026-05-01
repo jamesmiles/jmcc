@@ -567,6 +567,20 @@ class Arm64AppleCodeGen:
                     return TypeSpec(base="int")
                 return left_type
             if expr.op in {"+", "-"}:
+                # Arrays decay to pointers in arithmetic context: T[N] → T*
+                def _decayed(t):
+                    if t is None:
+                        return t
+                    if t.is_array():
+                        # Drop one array dimension and add a pointer level
+                        new_sizes = t.array_sizes[1:] if len(t.array_sizes) > 1 else None
+                        return self.clone_type(t,
+                                               pointer_depth=t.pointer_depth + 1,
+                                               array_sizes=new_sizes,
+                                               is_ptr_array=False)
+                    return t
+                left_type = _decayed(left_type)
+                right_type = _decayed(right_type)
                 # ptr - ptr → ptrdiff_t (long = 64-bit signed on arm64)
                 if (expr.op == "-" and left_type is not None and left_type.is_pointer()
                         and right_type is not None and right_type.is_pointer()):
@@ -1801,6 +1815,16 @@ class Arm64AppleCodeGen:
         if isinstance(value, UnaryOp) and value.op == "-":
             inner = self._global_const_int(value.operand)
             return -inner if inner is not None else None
+        if isinstance(value, UnaryOp) and value.op == "+":
+            return self._global_const_int(value.operand)
+        if isinstance(value, UnaryOp) and value.op == "~":
+            inner = self._global_const_int(value.operand)
+            return ~inner if inner is not None else None
+        if isinstance(value, UnaryOp) and value.op == "!":
+            inner = self._global_const_int(value.operand)
+            if inner is None:
+                return None
+            return 0 if inner else 1
         if isinstance(value, BinaryOp):
             l = self._global_const_int(value.left)
             r = self._global_const_int(value.right)
