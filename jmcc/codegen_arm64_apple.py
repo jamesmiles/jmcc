@@ -1860,6 +1860,11 @@ class Arm64AppleCodeGen:
                     return self._sizeof_ts(ts)
             else:
                 operand = value.operand
+                # String literal: sizeof("abc") is char[N], not char*
+                if isinstance(operand, StringLiteral):
+                    if operand.wide:
+                        return (len(operand.value) + 1) * 4
+                    return len(operand.value) + 1
                 ts = self.get_expr_type(operand)
                 if ts is not None:
                     return self._sizeof_ts(ts)
@@ -4610,6 +4615,13 @@ class Arm64AppleCodeGen:
             self.emit("    ldr w0, [x0]")
 
     def sizeof_value(self, expr: SizeofExpr) -> int:
+        # String literal: sizeof("abc") is char[N], not char* (C standard)
+        if not expr.is_type and isinstance(expr.operand, StringLiteral):
+            sl = expr.operand
+            if sl.wide:
+                return (len(sl.value) + 1) * 4
+            return len(sl.value) + 1
+
         if expr.is_type:
             type_spec = expr.operand
         else:
